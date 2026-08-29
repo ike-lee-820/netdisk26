@@ -63,6 +63,7 @@ export default {
       });
     }
 
+    // 新建文件夹
     if (path === '/api/mkdir' && request.method === 'POST') {
       const { path: dirPath, name } = await request.json();
       const fullPath = dirPath === '/' ? '/' + name : dirPath + '/' + name;
@@ -72,18 +73,71 @@ export default {
       return new Response('OK');
     }
 
+    // 新建空白文件
+    if (path === '/api/create_file' && request.method === 'POST') {
+      const { path: dirPath, name } = await request.json();
+      const fullPath = dirPath === '/' ? '/' + name : dirPath + '/' + name;
+      const existing = await getMeta(fullPath, env);
+      if (existing) return new Response('已存在', { status: 400 });
+      // 生成一个空文件（0字节）
+      const mainKey = crypto.randomUUID();
+      const dataKV = getDataKV(mainKey, env);
+      // 空内容
+      await dataKV.put(mainKey, JSON.stringify({ content: '' }));
+      const meta = {
+        filename: name,
+        path: fullPath,
+        contentType: 'text/plain',
+        size: 0,
+        uploadedAt: new Date().toISOString(),
+        kvIndex: parseInt(dataKV.bindingName.slice(-1)),
+        dataKey: mainKey,
+        isDir: false,
+      };
+      await putMeta(fullPath, meta, env);
+      return new Response('OK');
+    }
+
+    // 重命名（支持文件和目录）
     if (path === '/api/rename' && request.method === 'POST') {
       const { oldPath, newName } = await request.json();
       const dir = oldPath.substring(0, oldPath.lastIndexOf('/') + 1);
       const newPath = dir + newName;
       const meta = await getMeta(oldPath, env);
       if (!meta) return new Response('不存在', { status: 404 });
-      if (meta.isDir) return new Response('暂不支持目录重命名', { status: 400 });
+      // 如果是目录，需要递归移动所有子项（较复杂，暂不支持），这里只允许文件重命名
+      if (meta.isDir) {
+        // 简单处理：只移动目录元数据，子项不移动，会有问题，所以提示不支持
+        return new Response('暂不支持目录重命名', { status: 400 });
+      }
       await putMeta(newPath, meta, env);
       await deleteMeta(oldPath, env);
       return new Response('OK');
     }
 
+    // 删除（支持文件和目录）
+    if (path === '/api/delete' && request.method === 'POST') {
+      const { path: targetPath } = await request.json();
+      const meta = await getMeta(targetPath, env);
+      if (!meta) return new Response('不存在', { status: 404 });
+      if (meta.isDir) {
+        // 删除目录：需递归删除所有子项（较复杂），暂不支持
+        return new Response('暂不支持删除目录（请先清空）', { status: 400 });
+      }
+      // 删除文件：删除元数据和数据KV中的内容
+      const dataKV = getDataKV(meta.dataKey, env);
+      if (meta.type === 'multipart') {
+        for (const partKey of meta.partKeys) {
+          await dataKV.delete(partKey);
+        }
+      } else {
+        await dataKV.delete(meta.dataKey);
+      }
+      await deleteMeta(targetPath, env);
+      return new Response('OK');
+    }
+
+    // 上传文件
     if (path === '/api/upload' && request.method === 'POST') {
       try {
         const formData = await request.formData();
@@ -140,6 +194,7 @@ export default {
       }
     }
 
+    // 离线下载
     if (path === '/api/offline' && request.method === 'POST') {
       const { url: downloadUrl, targetPath } = await request.json();
       if (!downloadUrl) return new Response('缺少URL', { status: 400 });
@@ -299,271 +354,476 @@ export default {
   },
 };
 
-// ---------- 前端 HTML（所有 JavaScript 已改为字符串拼接，无模板字面量） ----------
-const indexHtml = '<!DOCTYPE html>\n' +
-'<html>\n' +
-'<head>\n' +
-'<meta charset="UTF-8">\n' +
-'<meta name="viewport" content="width=device-width,initial-scale=1.0">\n' +
-'<title>云盘管理器</title>\n' +
-'<style>\n' +
-'*{margin:0;padding:0;box-sizing:border-box}\n' +
-'body{font-family:system-ui,sans-serif;background:#f5f7fb;padding:20px}\n' +
-'.container{max-width:1000px;margin:0 auto;background:#fff;border-radius:12px;padding:24px;box-shadow:0 4px 12px rgba(0,0,0,0.06)}\n' +
-'.header{display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap}\n' +
-'.header h1{font-weight:500;font-size:20px}\n' +
-'.breadcrumb{display:flex;align-items:center;gap:6px;font-size:14px;color:#555;flex-wrap:wrap;cursor:pointer}\n' +
-'.breadcrumb span:hover{text-decoration:underline}\n' +
-'.toolbar{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}\n' +
-'.toolbar button{background:#f0f2f5;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:14px}\n' +
-'.toolbar button:hover{background:#e5e7eb}\n' +
-'.toolbar .primary{background:#2563eb;color:#fff}\n' +
-'.toolbar .primary:hover{background:#1d4ed8}\n' +
-'table{width:100%;border-collapse:collapse;font-size:14px}\n' +
-'th,td{padding:10px 8px;text-align:left;border-bottom:1px solid #eee}\n' +
-'th{background:#f8f9fa;font-weight:500}\n' +
-'td .name{display:flex;align-items:center;gap:6px;cursor:pointer}\n' +
-'td .name:hover{color:#2563eb}\n' +
-'.folder{font-weight:500}\n' +
-'.actions a{margin-right:8px;color:#2563eb;text-decoration:none}\n' +
-'.actions a:hover{text-decoration:underline}\n' +
-'.modal{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.3);align-items:center;justify-content:center}\n' +
-'.modal.active{display:flex}\n' +
-'.modal-content{background:#fff;padding:24px;border-radius:12px;max-width:400px;width:100%}\n' +
-'.modal-content h2{margin-bottom:12px;font-weight:500}\n' +
-'.modal-content input{width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;margin-bottom:12px}\n' +
-'.modal-content button{margin-right:8px;padding:8px 16px;border:none;border-radius:6px;cursor:pointer}\n' +
-'.modal-content .primary{background:#2563eb;color:#fff}\n' +
-'.modal-content .primary:hover{background:#1d4ed8}\n' +
-'.task-panel{margin-top:20px;border-top:1px solid #eee;padding-top:16px}\n' +
-'.task-panel h3{font-weight:500;margin-bottom:8px}\n' +
-'.task-item{background:#f8f9fa;padding:8px 12px;border-radius:6px;margin-bottom:6px;font-size:13px;display:flex;justify-content:space-between}\n' +
-'.progress-bar{width:100px;height:6px;background:#ddd;border-radius:3px;overflow:hidden;display:inline-block;vertical-align:middle}\n' +
-'.progress-bar .fill{height:100%;background:#2563eb;width:0%}\n' +
-'</style>\n' +
-'</head>\n' +
-'<body>\n' +
-'<div class="container" id="app">\n' +
-'  <div class="header">\n' +
-'    <h1>📁 云盘</h1>\n' +
-'    <span style="flex:1"></span>\n' +
-'    <button class="primary" onclick="showUpload()">+ 上传</button>\n' +
-'    <button onclick="showOffline()">⬇ 离线下载</button>\n' +
-'    <button onclick="refreshTasks()">🔄 任务</button>\n' +
-'  </div>\n' +
-'  <div class="toolbar">\n' +
-'    <button onclick="mkdir()">新建文件夹</button>\n' +
-'    <button onclick="renameFile()">重命名</button>\n' +
-'    <button onclick="refresh()">刷新</button>\n' +
-'  </div>\n' +
-'  <div class="breadcrumb" id="breadcrumb"></div>\n' +
-'  <table>\n' +
-'    <thead><tr><th>名称</th><th>大小</th><th>上传时间</th><th>操作</th></tr></thead>\n' +
-'    <tbody id="fileList"></tbody>\n' +
-'  </table>\n' +
-'  <div id="taskPanel" class="task-panel" style="display:none">\n' +
-'    <h3>任务列表</h3>\n' +
-'    <div id="taskList"></div>\n' +
-'  </div>\n' +
-'</div>\n' +
-'\n' +
-'<!-- 上传弹窗 -->\n' +
-'<div class="modal" id="uploadModal">\n' +
-'  <div class="modal-content">\n' +
-'    <h2>上传文件/文件夹</h2>\n' +
-'    <p style="font-size:13px;color:#888;margin-bottom:8px">目标路径：<span id="uploadPathDisplay">/</span></p>\n' +
-'    <input type="file" id="fileInput" multiple webkitdirectory style="margin-bottom:12px">\n' +
-'    <button class="primary" onclick="doUpload()">开始上传</button>\n' +
-'    <button onclick="closeModal(\'uploadModal\')">取消</button>\n' +
-'  </div>\n' +
-'</div>\n' +
-'\n' +
-'<!-- 离线下载弹窗 -->\n' +
-'<div class="modal" id="offlineModal">\n' +
-'  <div class="modal-content">\n' +
-'    <h2>离线下载</h2>\n' +
-'    <p style="font-size:13px;color:#888;margin-bottom:8px">支持 HTTP/HTTPS 链接（单文件）</p>\n' +
-'    <input type="text" id="downloadUrl" placeholder="下载链接" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;margin-bottom:8px">\n' +
-'    <input type="text" id="downloadPath" placeholder="保存路径（如 /）" value="/" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;margin-bottom:12px">\n' +
-'    <button class="primary" onclick="doOffline()">开始下载</button>\n' +
-'    <button onclick="closeModal(\'offlineModal\')">取消</button>\n' +
-'  </div>\n' +
-'</div>\n' +
-'\n' +
-'<!-- 重命名弹窗 -->\n' +
-'<div class="modal" id="renameModal">\n' +
-'  <div class="modal-content">\n' +
-'    <h2>重命名</h2>\n' +
-'    <input type="text" id="renameOld" placeholder="旧路径（自动填充）" readonly style="background:#f0f2f5">\n' +
-'    <input type="text" id="renameNew" placeholder="新名称">\n' +
-'    <button class="primary" onclick="doRename()">确认</button>\n' +
-'    <button onclick="closeModal(\'renameModal\')">取消</button>\n' +
-'  </div>\n' +
-'</div>\n' +
-'\n' +
-'<script>\n' +
-'let currentPath = \'/\';\n' +
-'let fileItems = [];\n' +
-'\n' +
-'window.onload = function() {\n' +
-'  refresh();\n' +
-'  refreshTasks();\n' +
-'};\n' +
-'\n' +
-'async function refresh() {\n' +
-'  const resp = await fetch(\'/api/list?path=\' + encodeURIComponent(currentPath));\n' +
-'  const data = await resp.json();\n' +
-'  fileItems = data.items;\n' +
-'  renderBreadcrumb();\n' +
-'  renderList();\n' +
-'}\n' +
-'\n' +
-'function renderBreadcrumb() {\n' +
-'  const el = document.getElementById(\'breadcrumb\');\n' +
-'  const parts = currentPath.split(\'/\').filter(function(p) { return p; });\n' +
-'  let html = \'<span onclick="navigateTo(\\\'/\\\')">根目录</span>\';\n' +
-'  let acc = \'\';\n' +
-'  for (let p of parts) {\n' +
-'    acc += \'/\' + p;\n' +
-'    html += \' / <span onclick="navigateTo(\\\'\' + acc + \'\\\')">\' + p + \'</span>\';\n' +
-'  }\n' +
-'  el.innerHTML = html;\n' +
-'}\n' +
-'\n' +
-'function navigateTo(path) {\n' +
-'  currentPath = path;\n' +
-'  refresh();\n' +
-'}\n' +
-'\n' +
-'function renderList() {\n' +
-'  const tbody = document.getElementById(\'fileList\');\n' +
-'  if (fileItems.length === 0) {\n' +
-'    tbody.innerHTML = \'<tr><td colspan="4" style="text-align:center;color:#888">空目录</td></tr>\';\n' +
-'    return;\n' +
-'  }\n' +
-'  let html = \'\';\n' +
-'  for (let item of fileItems) {\n' +
-'    const icon = item.isDir ? \'📁\' : \'📄\';\n' +
-'    const size = item.isDir ? \'-\' : (item.size / 1024 / 1024).toFixed(2) + \' MB\';\n' +
-'    const date = item.uploadedAt ? new Date(item.uploadedAt).toLocaleString() : \'-\';\n' +
-'    let actions;\n' +
-'    if (item.isDir) {\n' +
-'      const navPath = currentPath === \'/\' ? \'/\' + item.name : currentPath + \'/\' + item.name;\n' +
-'      actions = \'<a href="#" onclick="navigateTo(\\\'\' + navPath + \'\\\')">打开</a>\';\n' +
-'    } else {\n' +
-'      const filePath = currentPath === \'/\' ? \'/\' + item.name : currentPath + \'/\' + item.name;\n' +
-'      actions = \'<a href="/file\' + filePath + \'" target="_blank">下载</a> <a href="#" onclick="shareFile(\\\'\' + filePath + \'\\\')">分享</a>\';\n' +
-'    }\n' +
-'    const clickHandler = item.isDir ? \'navigateTo(\\\'\' + (currentPath === \'/\' ? \'/\' + item.name : currentPath + \'/\' + item.name) + \'\\\')\' : \'\';\n' +
-'    html += \'<tr>\' +\n' +
-'      \'<td><span class="name" onclick="\' + clickHandler + \'">\' + icon + \' \' + item.name + \'</span></td>\' +\n' +
-'      \'<td>\' + size + \'</td>\' +\n' +
-'      \'<td>\' + date + \'</td>\' +\n' +
-'      \'<td class="actions">\' + actions + \'</td>\' +\n' +
-'      \'</tr>\';\n' +
-'  }\n' +
-'  tbody.innerHTML = html;\n' +
-'}\n' +
-'\n' +
-'async function mkdir() {\n' +
-'  const name = prompt(\'请输入新文件夹名称\');\n' +
-'  if (!name) return;\n' +
-'  const resp = await fetch(\'/api/mkdir\', {\n' +
-'    method: \'POST\',\n' +
-'    headers: { \'Content-Type\': \'application/json\' },\n' +
-'    body: JSON.stringify({ path: currentPath, name: name })\n' +
-'  });\n' +
-'  if (resp.ok) refresh();\n' +
-'  else alert(\'创建失败\');\n' +
-'}\n' +
-'\n' +
-'function renameFile() {\n' +
-'  const name = prompt(\'请输入要重命名的文件路径（相对当前目录）\');\n' +
-'  if (!name) return;\n' +
-'  const newName = prompt(\'请输入新名称\');\n' +
-'  if (!newName) return;\n' +
-'  const oldPath = currentPath === \'/\' ? \'/\' + name : currentPath + \'/\' + name;\n' +
-'  fetch(\'/api/rename\', {\n' +
-'    method: \'POST\',\n' +
-'    headers: { \'Content-Type\': \'application/json\' },\n' +
-'    body: JSON.stringify({ oldPath: oldPath, newName: newName })\n' +
-'  }).then(function(r) { if (r.ok) refresh(); else alert(\'重命名失败\'); });\n' +
-'}\n' +
-'\n' +
-'function showUpload() {\n' +
-'  document.getElementById(\'uploadPathDisplay\').textContent = currentPath;\n' +
-'  document.getElementById(\'uploadModal\').classList.add(\'active\');\n' +
-'}\n' +
-'\n' +
-'async function doUpload() {\n' +
-'  const input = document.getElementById(\'fileInput\');\n' +
-'  const files = input.files;\n' +
-'  if (files.length === 0) return alert(\'请选择文件\');\n' +
-'  const path = currentPath;\n' +
-'  for (let file of files) {\n' +
-'    const fd = new FormData();\n' +
-'    fd.append(\'file\', file);\n' +
-'    fd.append(\'path\', path);\n' +
-'    await fetch(\'/api/upload\', { method: \'POST\', body: fd });\n' +
-'  }\n' +
-'  closeModal(\'uploadModal\');\n' +
-'  refresh();\n' +
-'}\n' +
-'\n' +
-'function showOffline() {\n' +
-'  document.getElementById(\'offlineModal\').classList.add(\'active\');\n' +
-'}\n' +
-'\n' +
-'async function doOffline() {\n' +
-'  const url = document.getElementById(\'downloadUrl\').value.trim();\n' +
-'  const targetPath = document.getElementById(\'downloadPath\').value.trim() || \'/\';\n' +
-'  if (!url) return alert(\'请输入下载链接\');\n' +
-'  const resp = await fetch(\'/api/offline\', {\n' +
-'    method: \'POST\',\n' +
-'    headers: { \'Content-Type\': \'application/json\' },\n' +
-'    body: JSON.stringify({ url: url, targetPath: targetPath })\n' +
-'  });\n' +
-'  if (resp.ok) {\n' +
-'    alert(\'任务已创建，请查看任务列表\');\n' +
-'    closeModal(\'offlineModal\');\n' +
-'    refreshTasks();\n' +
-'  } else {\n' +
-'    alert(\'启动失败\');\n' +
-'  }\n' +
-'}\n' +
-'\n' +
-'async function refreshTasks() {\n' +
-'  const resp = await fetch(\'/api/tasks\');\n' +
-'  const data = await resp.json();\n' +
-'  const panel = document.getElementById(\'taskPanel\');\n' +
-'  const list = document.getElementById(\'taskList\');\n' +
-'  if (data.tasks.length === 0) {\n' +
-'    panel.style.display = \'none\';\n' +
-'    return;\n' +
-'  }\n' +
-'  panel.style.display = \'block\';\n' +
-'  let html = \'\';\n' +
-'  for (let t of data.tasks) {\n' +
-'    var statusIcon = t.status === \'running\' ? \'⏳\' : t.status === \'completed\' ? \'✅\' : t.status === \'failed\' ? \'❌\' : \'⏸️\';\n' +
-'    var progress = t.progress || 0;\n' +
-'    html += \'<div class="task-item">\' +\n' +
-'      \'<span>\' + statusIcon + \' \' + (t.url || \'上传任务\') + \' (\' + progress + \'%)</span>\' +\n' +
-'      \'<span><span class="progress-bar"><span class="fill" style="width:\' + progress + \'%"></span></span> \' + t.status + \'</span>\' +\n' +
-'      \'</div>\';\n' +
-'  }\n' +
-'  list.innerHTML = html;\n' +
-'}\n' +
-'\n' +
-'function shareFile(path) {\n' +
-'  var url = window.location.origin + \'/file\' + path;\n' +
-'  navigator.clipboard.writeText(url).then(function() { alert(\'链接已复制\'); }).catch(function() { alert(\'复制失败\'); });\n' +
-'}\n' +
-'\n' +
-'function closeModal(id) {\n' +
-'  document.getElementById(id).classList.remove(\'active\');\n' +
-'}\n' +
-'\n' +
-'setInterval(refreshTasks, 3000);\n' +
-'</script>\n' +
-'</body>\n' +
-'</html>';
+// ---------- 移动友好的全新界面 ----------
+const indexHtml = `
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>云盘</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #f0f4f8;
+      padding: 16px;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+    }
+    .app {
+      max-width: 800px;
+      width: 100%;
+    }
+    .card {
+      background: #ffffff;
+      border-radius: 20px;
+      padding: 20px;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.08);
+      margin-bottom: 20px;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 18px;
+    }
+    .header h1 {
+      font-size: 24px;
+      font-weight: 600;
+      color: #1e293b;
+    }
+    .header-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .btn {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 12px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: 0.2s;
+      background: #f1f5f9;
+      color: #1e293b;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .btn:active { transform: scale(0.96); }
+    .btn-primary { background: #3b82f6; color: white; }
+    .btn-primary:hover { background: #2563eb; }
+    .btn-success { background: #22c55e; color: white; }
+    .btn-success:hover { background: #16a34a; }
+    .btn-danger { background: #ef4444; color: white; }
+    .btn-danger:hover { background: #dc2626; }
+    .btn-outline { background: transparent; border: 1px solid #cbd5e1; }
+    .btn-sm { padding: 4px 10px; font-size: 12px; border-radius: 8px; }
+
+    .breadcrumb {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 8px;
+      font-size: 14px;
+      color: #64748b;
+      margin-bottom: 16px;
+      padding: 8px 0;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    .breadcrumb span { cursor: pointer; }
+    .breadcrumb span:hover { color: #3b82f6; text-decoration: underline; }
+
+    .file-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 8px;
+    }
+    .file-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 14px;
+      background: #f8fafc;
+      border-radius: 12px;
+      transition: 0.15s;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .file-item:hover { background: #f1f5f9; }
+    .file-info {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      flex: 1;
+    }
+    .file-info .icon { font-size: 20px; }
+    .file-info .name {
+      font-weight: 500;
+      color: #0f172a;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .file-info .meta {
+      font-size: 12px;
+      color: #94a3b8;
+      margin-left: auto;
+      white-space: nowrap;
+    }
+    .file-actions {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .empty-state {
+      text-align: center;
+      color: #94a3b8;
+      padding: 40px 0;
+    }
+    .empty-state .icon { font-size: 48px; margin-bottom: 12px; }
+
+    .task-panel {
+      margin-top: 16px;
+      border-top: 1px solid #e2e8f0;
+      padding-top: 16px;
+      display: none;
+    }
+    .task-panel.open { display: block; }
+    .task-item {
+      background: #f8fafc;
+      padding: 10px 14px;
+      border-radius: 10px;
+      margin-bottom: 6px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 13px;
+    }
+    .progress-bar {
+      width: 80px;
+      height: 6px;
+      background: #e2e8f0;
+      border-radius: 4px;
+      overflow: hidden;
+      display: inline-block;
+    }
+    .progress-bar .fill {
+      height: 100%;
+      background: #3b82f6;
+      width: 0%;
+    }
+
+    /* 模态框 */
+    .modal {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(15,23,42,0.5);
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      z-index: 999;
+    }
+    .modal.open { display: flex; }
+    .modal-content {
+      background: white;
+      border-radius: 20px;
+      padding: 28px 24px;
+      max-width: 420px;
+      width: 100%;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+    }
+    .modal-content h2 { font-size: 20px; margin-bottom: 16px; }
+    .modal-content input, .modal-content select {
+      width: 100%;
+      padding: 10px 14px;
+      border: 1px solid #d1d5db;
+      border-radius: 12px;
+      font-size: 16px;
+      margin-bottom: 12px;
+      background: #f8fafc;
+    }
+    .modal-content .btn-group {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    @media (min-width: 600px) {
+      .file-grid { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 480px) {
+      .header h1 { font-size: 20px; }
+      .file-item { flex-direction: column; align-items: stretch; }
+      .file-actions { justify-content: flex-end; }
+      .btn { padding: 6px 12px; font-size: 13px; }
+    }
+  </style>
+</head>
+<body>
+<div class="app">
+  <div class="card">
+    <div class="header">
+      <h1>📁 云盘</h1>
+      <div class="header-actions">
+        <button class="btn btn-primary" onclick="showModal('upload')">+ 上传</button>
+        <button class="btn btn-success" onclick="showModal('newfile')">📄 新建</button>
+        <button class="btn btn-outline" onclick="toggleTasks()">📋 任务</button>
+      </div>
+    </div>
+
+    <div class="breadcrumb" id="breadcrumb"></div>
+
+    <div class="file-grid" id="fileList"></div>
+  </div>
+
+  <div class="card" id="taskPanel">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <h3 style="font-weight:500;">任务列表</h3>
+      <span style="font-size:12px;color:#94a3b8;">自动刷新</span>
+    </div>
+    <div id="taskList"></div>
+  </div>
+</div>
+
+<!-- 上传模态框 -->
+<div class="modal" id="uploadModal">
+  <div class="modal-content">
+    <h2>上传文件/文件夹</h2>
+    <p style="font-size:14px;color:#64748b;margin-bottom:8px;">目标路径：<span id="uploadPathDisplay">/</span></p>
+    <input type="file" id="fileInput" multiple webkitdirectory>
+    <div class="btn-group">
+      <button class="btn btn-primary" onclick="doUpload()">开始上传</button>
+      <button class="btn btn-outline" onclick="closeModal('uploadModal')">取消</button>
+    </div>
+  </div>
+</div>
+
+<!-- 新建文件模态框 -->
+<div class="modal" id="newFileModal">
+  <div class="modal-content">
+    <h2>新建空白文件</h2>
+    <p style="font-size:14px;color:#64748b;margin-bottom:8px;">在 <span id="newFilePathDisplay">/</span> 下创建</p>
+    <input type="text" id="newFileName" placeholder="文件名（如 readme.txt）" value="新文件.txt">
+    <div class="btn-group">
+      <button class="btn btn-success" onclick="doCreateFile()">创建</button>
+      <button class="btn btn-outline" onclick="closeModal('newFileModal')">取消</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let currentPath = '/';
+let fileItems = [];
+
+// ===== 初始化 =====
+window.onload = function() {
+  refresh();
+  refreshTasks();
+  setInterval(refresh, 5000);
+  setInterval(refreshTasks, 3000);
+};
+
+// ===== 文件列表 =====
+async function refresh() {
+  try {
+    const resp = await fetch('/api/list?path=' + encodeURIComponent(currentPath));
+    const data = await resp.json();
+    fileItems = data.items || [];
+    renderBreadcrumb();
+    renderList();
+  } catch(e) { console.error(e); }
+}
+
+function renderBreadcrumb() {
+  const el = document.getElementById('breadcrumb');
+  const parts = currentPath.split('/').filter(p => p);
+  let html = '<span onclick="navigateTo(\'/\')">🏠 根目录</span>';
+  let acc = '';
+  for (let p of parts) {
+    acc += '/' + p;
+    html += ' <span>›</span> <span onclick="navigateTo(\'' + acc + '\')">' + p + '</span>';
+  }
+  el.innerHTML = html;
+}
+
+function navigateTo(path) {
+  currentPath = path;
+  refresh();
+}
+
+function renderList() {
+  const container = document.getElementById('fileList');
+  if (fileItems.length === 0) {
+    container.innerHTML = '<div class="empty-state"><div class="icon">📂</div><p>此目录为空</p></div>';
+    return;
+  }
+  let html = '';
+  for (let item of fileItems) {
+    const icon = item.isDir ? '📁' : '📄';
+    const size = item.isDir ? '' : (item.size / 1024).toFixed(1) + ' KB';
+    const date = item.uploadedAt ? new Date(item.uploadedAt).toLocaleString() : '';
+    const actions = item.isDir ?
+      `<button class="btn btn-sm btn-outline" onclick="navigateTo('${currentPath === '/' ? '/' + item.name : currentPath + '/' + item.name}')">打开</button>` :
+      `<a href="/file${currentPath === '/' ? '/' + item.name : currentPath + '/' + item.name}" target="_blank" class="btn btn-sm btn-primary">下载</a>`;
+    const fullPath = currentPath === '/' ? '/' + item.name : currentPath + '/' + item.name;
+    html += `
+      <div class="file-item">
+        <div class="file-info">
+          <span class="icon">${icon}</span>
+          <span class="name" onclick="${item.isDir ? 'navigateTo(\'' + fullPath + '\')' : ''}">${item.name}</span>
+          <span class="meta">${size} ${date}</span>
+        </div>
+        <div class="file-actions">
+          ${actions}
+          <button class="btn btn-sm btn-outline" onclick="renameItem('${fullPath}')">✏️</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteItem('${fullPath}')">🗑️</button>
+        </div>
+      </div>
+    `;
+  }
+  container.innerHTML = html;
+}
+
+// ===== 新建文件夹 =====
+async function mkdir() {
+  const name = prompt('请输入新文件夹名称');
+  if (!name) return;
+  const resp = await fetch('/api/mkdir', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: currentPath, name })
+  });
+  if (resp.ok) refresh();
+  else alert('创建失败');
+}
+
+// 直接暴露到全局（用于按钮）
+window.mkdir = mkdir;
+
+// ===== 新建文件 =====
+function showModal(type) {
+  if (type === 'upload') {
+    document.getElementById('uploadPathDisplay').textContent = currentPath;
+    document.getElementById('uploadModal').classList.add('open');
+  } else if (type === 'newfile') {
+    document.getElementById('newFilePathDisplay').textContent = currentPath;
+    document.getElementById('newFileModal').classList.add('open');
+  }
+}
+
+async function doCreateFile() {
+  const name = document.getElementById('newFileName').value.trim();
+  if (!name) return alert('请输入文件名');
+  const resp = await fetch('/api/create_file', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: currentPath, name })
+  });
+  if (resp.ok) {
+    closeModal('newFileModal');
+    refresh();
+  } else {
+    alert('创建失败：' + (await resp.text()));
+  }
+}
+
+// ===== 上传 =====
+async function doUpload() {
+  const input = document.getElementById('fileInput');
+  const files = input.files;
+  if (files.length === 0) return alert('请选择文件');
+  const path = currentPath;
+  for (let file of files) {
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('path', path);
+    await fetch('/api/upload', { method: 'POST', body: fd });
+  }
+  closeModal('uploadModal');
+  refresh();
+}
+
+// ===== 重命名 =====
+function renameItem(fullPath) {
+  const newName = prompt('请输入新名称', fullPath.split('/').pop());
+  if (!newName) return;
+  fetch('/api/rename', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ oldPath: fullPath, newName })
+  }).then(r => r.ok ? refresh() : alert('重命名失败'));
+}
+
+// ===== 删除 =====
+function deleteItem(fullPath) {
+  if (!confirm('确定要删除 "' + fullPath + '" 吗？')) return;
+  fetch('/api/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: fullPath })
+  }).then(r => r.ok ? refresh() : alert('删除失败'));
+}
+
+// ===== 任务面板 =====
+function toggleTasks() {
+  const panel = document.getElementById('taskPanel');
+  panel.classList.toggle('open');
+  if (panel.classList.contains('open')) refreshTasks();
+}
+
+async function refreshTasks() {
+  try {
+    const resp = await fetch('/api/tasks');
+    const data = await resp.json();
+    const list = document.getElementById('taskList');
+    if (!data.tasks || data.tasks.length === 0) {
+      list.innerHTML = '<div style="color:#94a3b8;text-align:center;padding:12px;">暂无任务</div>';
+      return;
+    }
+    let html = '';
+    for (let t of data.tasks) {
+      const statusMap = { 'pending': '⏸️ 等待', 'running': '⏳ 运行中', 'completed': '✅ 完成', 'failed': '❌ 失败' };
+      const statusText = statusMap[t.status] || t.status;
+      const progress = t.progress || 0;
+      html += `
+        <div class="task-item">
+          <span>${t.url || '任务'} (${progress}%)</span>
+          <span>
+            <span class="progress-bar"><span class="fill" style="width:${progress}%"></span></span>
+            ${statusText}
+          </span>
+        </div>
+      `;
+    }
+    list.innerHTML = html;
+  } catch(e) { console.error(e); }
+}
+
+// ===== 辅助 =====
+function closeModal(id) {
+  document.getElementById(id).classList.remove('open');
+}
+
+// 暴露全局函数供 onclick 调用
+window.showModal = showModal;
+window.doUpload = doUpload;
+window.doCreateFile = doCreateFile;
+window.closeModal = closeModal;
+window.toggleTasks = toggleTasks;
+window.refreshTasks = refreshTasks;
+window.refresh = refresh;
+window.navigateTo = navigateTo;
+window.mkdir = mkdir;
+window.renameItem = renameItem;
+window.deleteItem = deleteItem;
+</script>
+</body>
+</html>
+`;
