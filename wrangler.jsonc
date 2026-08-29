@@ -3,7 +3,8 @@
   "main": "worker.js",
   "compatibility_date": "2024-01-01",
   "vars": {
-    "CLOUD_PASSWORD": "liyikui917"
+    "CLOUD_PASSWORD": "liyikui917",
+    "GITHUB_TOKEN": "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"
   },
   "kv_namespaces": [
     {
