@@ -1,36 +1,28 @@
 {
-  // 项目名称（可自定义）
-  "name": "netdisk",
-  // 主入口文件
+  "name": "cloud-kv-drive",
   "main": "worker.js",
-  // 兼容日期（使用最新稳定特性）
   "compatibility_date": "2024-12-18",
-  // KV 命名空间绑定
   "kv_namespaces": [
-    {
-      "binding": "MY_KV",
-      "id": "e8b818d9fc4c4291ada38a186807a1b0"
-    }
+    { "binding": "FILE_INDEX", "id": "e8b818d9fc4c4291ada38a186807a1b0" },
+    { "binding": "DATA_KV_0", "id": "218a3b4ba14042699c2c4c15a3437b7a" },
+    { "binding": "DATA_KV_1", "id": "d2b5d09ec6f7414a9bd88b7ddeca7df7" },
+    { "binding": "DATA_KV_2", "id": "d8e79a9ddfd84106abebc659151c8cfe" },
+    { "binding": "DATA_KV_3", "id": "fb713528d18d4c5fad8f6e7f802d689c" },
+    { "binding": "DATA_KV_4", "id": "e93a98748c824b84a55f64f28dee98be" }
   ],
-  // 生产环境（可选）
   "env": {
     "production": {
       "kv_namespaces": [
-        {
-          "binding": "MY_KV",
-          "id": "e8b818d9fc4c4291ada38a186807a1b0"
-        }
+        { "binding": "FILE_INDEX", "id": "e8b818d9fc4c4291ada38a186807a1b0" },
+        { "binding": "DATA_KV_0", "id": "218a3b4ba14042699c2c4c15a3437b7a" },
+        { "binding": "DATA_KV_1", "id": "d2b5d09ec6f7414a9bd88b7ddeca7df7" },
+        { "binding": "DATA_KV_2", "id": "d8e79a9ddfd84106abebc659151c8cfe" },
+        { "binding": "DATA_KV_3", "id": "fb713528d18d4c5fad8f6e7f802d689c" },
+        { "binding": "DATA_KV_4", "id": "e93a98748c824b84a55f64f28dee98be" }
       ]
     }
   },
-  // 是否在部署时自动上传 source map（可选）
   "upload_source_maps": false,
-  // 日志级别（可选）
   "logpush": true,
-  // 最小请求数（可选）
-  "minify": false,
-  // 观察模式配置（开发用）
-  "watch": {
-    "directory": "."
-  }
+  "minify": false
 }
