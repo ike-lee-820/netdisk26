@@ -8,7 +8,8 @@
     { "binding": "DATA_KV_1", "id": "d2b5d09ec6f7414a9bd88b7ddeca7df7" },
     { "binding": "DATA_KV_2", "id": "d8e79a9ddfd84106abebc659151c8cfe" },
     { "binding": "DATA_KV_3", "id": "fb713528d18d4c5fad8f6e7f802d689c" },
-    { "binding": "DATA_KV_4", "id": "e93a98748c824b84a55f64f28dee98be" }
+    { "binding": "DATA_KV_4", "id": "e93a98748c824b84a55f64f28dee98be" },
+    { "binding": "TASK_KV", "id": "29b0b9abec754957aaefd16d01df2966" }
   ],
   "env": {
     "production": {
@@ -18,7 +19,8 @@
         { "binding": "DATA_KV_1", "id": "d2b5d09ec6f7414a9bd88b7ddeca7df7" },
         { "binding": "DATA_KV_2", "id": "d8e79a9ddfd84106abebc659151c8cfe" },
         { "binding": "DATA_KV_3", "id": "fb713528d18d4c5fad8f6e7f802d689c" },
-        { "binding": "DATA_KV_4", "id": "e93a98748c824b84a55f64f28dee98be" }
+        { "binding": "DATA_KV_4", "id": "e93a98748c824b84a55f64f28dee98be" },
+        { "binding": "TASK_KV", "id": "29b0b9abec754957aaefd16d01df2966" }
       ]
     }
   },
