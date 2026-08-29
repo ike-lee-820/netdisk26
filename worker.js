@@ -516,7 +516,7 @@ const HTML = `
     function extractZip(fileId) {
       var item = findItemInTree(fileTree, fileId);
       if (!item) return;
-      if (!confirm("确定要解压 " + item.name + " 吗？\n将解压到当前目录")) return;
+      if (!confirm("确定要解压 " + item.name + " 吗？将解压到当前目录")) return;
       showToast("正在读取压缩包...", 3000);
       fetch("/api/download?fileId=" + encodeURIComponent(fileId)).then(function(res) { return res.blob(); }).then(function(blob) {
         if (typeof JSZip === "undefined") { showToast("JSZip 库未加载"); return; }
