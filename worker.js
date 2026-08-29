@@ -5,7 +5,6 @@ export default {
     const path = url.pathname;
 
     // ---------- 辅助函数 ----------
-    // 根据 key 的哈希值决定存储到哪个数据 KV (0-4)
     function getDataKV(key, env) {
       let hash = 0;
       for (let i = 0; i < key.length; i++) {
@@ -15,7 +14,6 @@ export default {
       return env[`DATA_KV_${idx}`];
     }
 
-    // 文件索引操作
     async function getFileList(env) {
       const raw = await env.FILE_INDEX.get('_filelist');
       return raw ? JSON.parse(raw) : [];
@@ -34,7 +32,7 @@ export default {
       });
     }
 
-    // ---------- 上传文件 ----------
+    // ---------- 上传 ----------
     if (path === '/upload' && request.method === 'POST') {
       try {
         const formData = await request.formData();
@@ -51,7 +49,7 @@ export default {
         const mainKey = crypto.randomUUID();
         const CHUNK_SIZE = 10 * 1024 * 1024;
         const fileSize = file.size;
-        const dataKV = getDataKV(mainKey, env); // 选择数据 KV
+        const dataKV = getDataKV(mainKey, env);
 
         let meta = {
           filename: file.name,
@@ -59,8 +57,8 @@ export default {
           contentType: file.type || 'application/octet-stream',
           size: fileSize,
           uploadedAt: new Date().toISOString(),
-          kvIndex: parseInt(dataKV.bindingName.slice(-1)), // 记录存储到哪个 KV
-          dataKey: mainKey, // 数据 KV 中的 Key
+          kvIndex: parseInt(dataKV.bindingName.slice(-1)),
+          dataKey: mainKey,
         };
 
         if (fileSize > 20 * 1024 * 1024) {
@@ -86,10 +84,7 @@ export default {
           await dataKV.put(mainKey, JSON.stringify({ content: base64 }));
         }
 
-        // 存储元数据到文件索引 KV
         await env.FILE_INDEX.put(mainKey, JSON.stringify(meta));
-
-        // 添加至文件列表
         await addFileToList({
           key: mainKey,
           filename: meta.filename,
@@ -113,7 +108,6 @@ export default {
     // ---------- 直链下载 ----------
     if (path.startsWith('/file/')) {
       const key = path.slice(6);
-      // 从文件索引读取元数据
       const metaRaw = await env.FILE_INDEX.get(key);
       if (!metaRaw) return new Response('文件不存在', { status: 404 });
       const meta = JSON.parse(metaRaw);
@@ -145,7 +139,6 @@ export default {
         });
       }
 
-      // 单文件
       const dataRaw = await dataKV.get(meta.dataKey);
       if (!dataRaw) return new Response('文件内容丢失', { status: 404 });
       const data = JSON.parse(dataRaw);
@@ -251,7 +244,7 @@ export default {
   },
 };
 
-// ---------- 极简首页（保持不变） ----------
+// ---------- 极简首页（已转义所有 ${} 为 \${}） ----------
 const html = `<!DOCTYPE html>
 <html>
 <head>
@@ -306,7 +299,6 @@ const countSpan = document.getElementById('upload-count');
 
 let selectedFiles = [];
 
-// 拖拽事件
 drop.addEventListener('dragover', e => { e.preventDefault(); drop.style.borderColor='#2563eb'; });
 drop.addEventListener('dragleave', () => { drop.style.borderColor='transparent'; });
 drop.addEventListener('drop', e => {
@@ -357,7 +349,7 @@ input.addEventListener('change', updateFileList);
 
 function updateFileList() {
   selectedFiles = Array.from(input.files);
-  fileListDiv.innerHTML = selectedFiles.map(f => `<div>${f.webkitRelativePath || f.name} (${(f.size/1024/1024).toFixed(2)} MB)</div>`).join('');
+  fileListDiv.innerHTML = selectedFiles.map(f => \`<div>\${f.webkitRelativePath || f.name} (\${(f.size/1024/1024).toFixed(2)} MB)</div>\`).join('');
   if (selectedFiles.length === 0) fileListDiv.innerHTML = '<div style="color:#888">未选择文件</div>';
 }
 
