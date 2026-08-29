@@ -1,114 +1,6 @@
-// worker.js - 优化版
-const HTML = [
-  '<!DOCTYPE html>',
-  '<html lang="zh-CN">',
-  '<head>',
-  '  <meta charset="UTF-8">',
-  '  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">',
-  '  <title>云盘</title>',
-  '  <link rel="stylesheet" href="https://unpkg.com/@wangeditor/editor@latest/dist/css/style.css">',
-  '  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mui-player@latest/dist/mui-player.min.css">',
-  '  <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.5/dist/jsmediatags.min.js"><\/script>',
-  '  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"><\/script>',
-  '  <style>',
-  '    :root { --bg:#f5f7fa; --card:#fff; --text:#1a1a2e; --text-secondary:#6b7280; --accent:#4f6ef7; --accent-light:#eef1ff; --danger:#ef4444; --success:#10b981; --border:#e5e7eb; --shadow:0 2px 8px rgba(0,0,0,0.06); --radius:12px; --radius-sm:8px; }',
-  '    * { margin:0; padding:0; box-sizing:border-box; }',
-  '    body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--text); min-height:100vh; padding-bottom:80px; -webkit-tap-highlight-color:transparent; }',
-  '    .header { position:sticky; top:0; background:var(--card); padding:0 16px; height:52px; display:flex; align-items:center; z-index:100; box-shadow:0 1px 3px rgba(0,0,0,0.05); border-bottom:1px solid var(--border); }',
-  '    .header h1 { font-size:18px; font-weight:700; flex-shrink:0; margin-right:12px; color:var(--accent); }',
-  '    .refresh-btn { background:none; border:none; font-size:20px; cursor:pointer; padding:4px 8px; color:var(--text-secondary); flex-shrink:0; }',
-  '    .breadcrumb { display:flex; align-items:center; flex-wrap:nowrap; overflow-x:auto; gap:4px; font-size:13px; -webkit-overflow-scrolling:touch; flex:1; }',
-  '    .breadcrumb span { white-space:nowrap; padding:4px 6px; border-radius:4px; cursor:pointer; color:var(--text-secondary); flex-shrink:0; }',
-  '    .breadcrumb span:hover, .breadcrumb span.current { color:var(--accent); background:var(--accent-light); }',
-  '    .breadcrumb .sep { color:#ccc; cursor:default; padding:0 2px; }',
-  '    .file-list { padding:12px 16px; max-width:800px; margin:0 auto; }',
-  '    .file-item { background:var(--card); border-radius:var(--radius); padding:12px 14px; margin-bottom:8px; display:flex; align-items:flex-start; gap:12px; box-shadow:var(--shadow); border:1px solid var(--border); cursor:pointer; }',
-  '    .file-icon { width:40px; height:40px; border-radius:var(--radius-sm); display:flex; align-items:center; justify-content:center; font-size:20px; flex-shrink:0; background:var(--accent-light); margin-top:4px; }',
-  '    .file-icon.folder { background:#fef3c7; }',
-  '    .file-info { flex:1; min-width:0; display:flex; flex-direction:column; gap:4px; }',
-  '    .file-name { font-size:14px; font-weight:600; word-break:break-all; }',
-  '    .file-meta { font-size:11px; color:var(--text-secondary); display:flex; gap:8px; flex-wrap:wrap; }',
-  '    .file-actions { display:flex; flex-wrap:wrap; gap:6px; margin-top:4px; }',
-  '    .btn-text { padding:4px 10px; font-size:12px; border:1px solid var(--border); background:#f9fafb; border-radius:6px; cursor:pointer; color:var(--text-secondary); }',
-  '    .btn-text:hover { background:var(--accent-light); color:var(--accent); }',
-  '    .btn-text.danger:hover { background:#fee2e2; color:var(--danger); }',
-  '    .fab { position:fixed; bottom:24px; right:24px; width:56px; height:56px; border-radius:50%; background:var(--accent); color:#fff; border:none; font-size:28px; cursor:pointer; box-shadow:0 4px 16px rgba(79,110,247,0.4); z-index:200; display:flex; align-items:center; justify-content:center; }',
-  '    .task-fab { position:fixed; bottom:24px; right:92px; width:48px; height:48px; border-radius:50%; background:#fff; color:var(--accent); border:1px solid var(--border); font-size:20px; cursor:pointer; box-shadow:var(--shadow); z-index:200; display:flex; align-items:center; justify-content:center; }',
-  '    .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:300; display:flex; align-items:center; justify-content:center; }',
-  '    .modal { background:var(--card); border-radius:16px; padding:20px; width:90%; max-width:420px; max-height:85vh; overflow-y:auto; box-shadow:0 20px 60px rgba(0,0,0,0.15); }',
-  '    .modal h2 { font-size:17px; margin-bottom:16px; font-weight:700; }',
-  '    .modal input[type="text"], .modal input[type="url"] { width:100%; padding:10px 14px; border:1.5px solid var(--border); border-radius:var(--radius-sm); font-size:14px; outline:none; margin-bottom:12px; background:#fafbfc; }',
-  '    .modal .btn-row { display:flex; gap:8px; margin-top:8px; }',
-  '    .btn { padding:10px 16px; border-radius:var(--radius-sm); border:none; font-size:14px; font-weight:600; cursor:pointer; flex:1; text-align:center; }',
-  '    .btn-primary { background:var(--accent); color:#fff; }',
-  '    .btn-secondary { background:#f3f4f6; color:var(--text); }',
-  '    .btn-danger { background:var(--danger); color:#fff; }',
-  '    .empty-state { text-align:center; padding:60px 20px; color:var(--text-secondary); }',
-  '    .empty-state .icon { font-size:48px; margin-bottom:12px; }',
-  '    .toast { position:fixed; bottom:90px; left:50%; transform:translateX(-50%); background:#1f2937; color:#fff; padding:10px 20px; border-radius:8px; font-size:13px; z-index:500; pointer-events:none; max-width:90vw; }',
-  '    .share-link-box { background:#f9fafb; border:1px solid var(--border); border-radius:8px; padding:10px; font-size:12px; word-break:break-all; margin:8px 0; user-select:all; }',
-  '    .task-panel { position:fixed; top:0; right:0; bottom:0; width:320px; max-width:90vw; background:var(--card); z-index:250; box-shadow:-4px 0 20px rgba(0,0,0,0.1); transform:translateX(100%); transition:transform 0.3s ease; overflow-y:auto; padding:16px; }',
-  '    .task-panel.open { transform:translateX(0); }',
-  '    .task-panel-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }',
-  '    .task-item { padding:10px; border-radius:var(--radius-sm); background:#f9fafb; margin-bottom:8px; border:1px solid var(--border); }',
-  '    .task-name { font-size:13px; font-weight:600; word-break:break-all; }',
-  '    .task-status { font-size:11px; color:var(--text-secondary); margin-top:4px; }',
-  '    .progress-bar { height:4px; background:#e5e7eb; border-radius:2px; margin-top:6px; overflow:hidden; }',
-  '    .progress-fill { height:100%; background:var(--accent); transition:width 0.3s ease; }',
-  '    .progress-fill.completed { background:var(--success); }',
-  '    .progress-fill.failed { background:var(--danger); }',
-  '    .progress-fill.cancelled { background:#9ca3af; }',
-  '    .task-backdrop { position:fixed; inset:0; background:rgba(0,0,0,0.3); z-index:240; opacity:0; pointer-events:none; transition:opacity 0.3s; }',
-  '    .task-backdrop.open { opacity:1; pointer-events:auto; }',
-  '    .detail-page { max-width:800px; margin:0 auto; padding:16px; }',
-  '    .detail-card { background:var(--card); border-radius:var(--radius); padding:16px; box-shadow:var(--shadow); border:1px solid var(--border); }',
-  '    .detail-header { display:flex; align-items:center; gap:12px; margin-bottom:16px; }',
-  '    .detail-title { font-size:18px; font-weight:700; word-break:break-all; }',
-  '    .detail-meta { font-size:13px; color:var(--text-secondary); margin-bottom:16px; }',
-  '    .detail-actions { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px; }',
-  '    .preview-container { margin-top:16px; }',
-  '    .preview-container img { max-width:100%; border-radius:8px; }',
-  '    .preview-container video, .preview-container audio { width:100%; border-radius:8px; }',
-  '    .text-preview { white-space:pre-wrap; word-break:break-all; font-family:monospace; background:#f9fafb; padding:12px; border-radius:8px; max-height:400px; overflow-y:auto; }',
-  '    .editor-wrapper { border:1px solid #ccc; z-index:100; }',
-  '    .toolbar-container { border-bottom:1px solid #ccc; }',
-  '    .editor-container { height:400px; }',
-  '    .hidden { display:none !important; }',
-  '    .music-player { display:flex; flex-direction:column; gap:12px; padding:12px; background:#f9fafb; border-radius:8px; }',
-  '    .music-cover { width:120px; height:120px; border-radius:8px; object-fit:cover; background:#e5e7eb; margin:0 auto; }',
-  '    .music-info { text-align:center; }',
-  '    .music-title { font-size:16px; font-weight:700; }',
-  '    .music-artist { font-size:13px; color:var(--text-secondary); }',
-  '    .music-album { font-size:12px; color:var(--text-secondary); }',
-  '    .lyrics-container { max-height:200px; overflow-y:auto; text-align:center; font-size:13px; line-height:1.8; padding:8px; background:#fff; border-radius:8px; }',
-  '    .lyric-line { transition:all 0.3s; cursor:default; }',
-  '    .lyric-line.active { color:var(--accent); font-weight:700; transform:scale(1.05); }',
-  '    .zip-tree { background:#f9fafb; border-radius:8px; padding:12px; max-height:300px; overflow-y:auto; font-family:monospace; font-size:13px; line-height:1.6; }',
-  '    .zip-tree-item { padding-left:16px; }',
-  '    .zip-tree-folder { color:var(--accent); font-weight:600; }',
-  '    .share-readonly-badge { display:inline-block; background:var(--accent-light); color:var(--accent); padding:2px 8px; border-radius:4px; font-size:12px; margin-left:8px; }',
-  '    .task-actions { display:flex; gap:6px; margin-top:8px; }',
-  '    .task-actions .btn-text { font-size:11px; padding:3px 8px; }',
-  '    .upload-progress-overlay { position:fixed; bottom:0; left:0; right:0; background:var(--card); padding:12px 16px; box-shadow:0 -2px 10px rgba(0,0,0,0.08); z-index:180; transform:translateY(100%); transition:transform 0.3s ease; }',
-  '    .upload-progress-overlay.show { transform:translateY(0); }',
-  '    .upload-progress-bar { height:6px; background:#e5e7eb; border-radius:3px; overflow:hidden; margin-top:8px; }',
-  '    .upload-progress-fill { height:100%; background:var(--accent); transition:width 0.2s ease; }',
-  '    .upload-progress-info { display:flex; justify-content:space-between; font-size:13px; color:var(--text-secondary); }',
-  '    @media (max-width:480px) { .file-item { padding:10px 12px; } .btn-text { padding:3px 8px; font-size:11px; } }',
-  '  </style>',
-  '</head>',
-  '<body>',
-  '  <div class="header"><h1>云盘</h1><button class="refresh-btn" id="refreshBtn">⟳</button><div class="breadcrumb" id="breadcrumb"></div></div>',
-  '  <div id="mainView"><div class="file-list" id="fileList"></div><button class="fab" id="fabBtn">+</button><button class="task-fab" id="taskFabBtn" title="任务列表">📋</button></div>',
-  '  <div id="detailView" class="hidden"><div class="detail-page"><button class="btn btn-secondary" id="backBtn" style="margin-bottom:12px;">返回</button><div class="detail-card" id="detailCard"></div></div></div>',
-  '  <div class="task-backdrop" id="taskBackdrop"></div><div class="task-panel" id="taskPanel"><div class="task-panel-header"><h3>任务列表</h3><button class="btn-text" id="closeTaskBtn">关闭</button></div><div id="taskList"></div></div>',
-  '  <div id="modalContainer"></div><div id="toastContainer"></div>',
-  '  <div class="upload-progress-overlay" id="uploadProgressOverlay"><div class="upload-progress-info"><span id="uploadProgressText">准备上传...</span><span id="uploadProgressPercent">0%</span></div><div class="upload-progress-bar"><div class="upload-progress-fill" id="uploadProgressFill" style="width:0%"></div></div><div class="btn-row" style="margin-top:10px;"><button class="btn btn-danger" id="cancelUploadBtn" style="flex:0 0 auto;padding:6px 12px;font-size:12px;">取消上传</button></div></div>',
-  '  <script src="https://unpkg.com/@wangeditor/editor@latest/dist/index.js"><\/script>',
-  '  <script src="https://cdn.jsdelivr.net/npm/mui-player@latest/dist/mui-player.min.js"><\/script>',
-  '  <script>',
+const HTML_HEAD = `<!DOCTYPE html>\\n<html lang="zh-CN">\\n<head>\\n  <meta charset="UTF-8">\\n  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">\\n  <title>云盘</title>\\n  <link rel="stylesheet" href="https://unpkg.com/@wangeditor/editor@latest/dist/css/style.css">\\n  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mui-player@latest/dist/mui-player.min.css">\\n  <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.5/dist/jsmediatags.min.js"><\\\\/script>\\n  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"><\\\\/script>\\n  <style>\\n    :root { --bg:#f5f7fa; --card:#fff; --text:#1a1a2e; --text-secondary:#6b7280; --accent:#4f6ef7; --accent-light:#eef1ff; --danger:#ef4444; --success:#10b981; --border:#e5e7eb; --shadow:0 2px 8px rgba(0,0,0,0.06); --radius:12px; --radius-sm:8px; }\\n    * { margin:0; padding:0; box-sizing:border-box; }\\n    body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--text); min-height:100vh; padding-bottom:80px; -webkit-tap-highlight-color:transparent; }\\n    .header { position:sticky; top:0; background:var(--card); padding:0 16px; height:52px; display:flex; align-items:center; z-index:100; box-shadow:0 1px 3px rgba(0,0,0,0.05); border-bottom:1px solid var(--border); }\\n    .header h1 { font-size:18px; font-weight:700; flex-shrink:0; margin-right:12px; color:var(--accent); }\\n    .refresh-btn { background:none; border:none; font-size:20px; cursor:pointer; padding:4px 8px; color:var(--text-secondary); flex-shrink:0; }\\n    .breadcrumb { display:flex; align-items:center; flex-wrap:nowrap; overflow-x:auto; gap:4px; font-size:13px; -webkit-overflow-scrolling:touch; flex:1; }\\n    .breadcrumb span { white-space:nowrap; padding:4px 6px; border-radius:4px; cursor:pointer; color:var(--text-secondary); flex-shrink:0; }\\n    .breadcrumb span:hover, .breadcrumb span.current { color:var(--accent); background:var(--accent-light); }\\n    .breadcrumb .sep { color:#ccc; cursor:default; padding:0 2px; }\\n    .file-list { padding:12px 16px; max-width:800px; margin:0 auto; }\\n    .file-item { background:var(--card); border-radius:var(--radius); padding:12px 14px; margin-bottom:8px; display:flex; align-items:flex-start; gap:12px; box-shadow:var(--shadow); border:1px solid var(--border); cursor:pointer; }\\n    .file-icon { width:40px; height:40px; border-radius:var(--radius-sm); display:flex; align-items:center; justify-content:center; font-size:20px; flex-shrink:0; background:var(--accent-light); margin-top:4px; }\\n    .file-icon.folder { background:#fef3c7; }\\n    .file-info { flex:1; min-width:0; display:flex; flex-direction:column; gap:4px; }\\n    .file-name { font-size:14px; font-weight:600; word-break:break-all; }\\n    .file-meta { font-size:11px; color:var(--text-secondary); display:flex; gap:8px; flex-wrap:wrap; }\\n    .file-actions { display:flex; flex-wrap:wrap; gap:6px; margin-top:4px; }\\n    .btn-text { padding:4px 10px; font-size:12px; border:1px solid var(--border); background:#f9fafb; border-radius:6px; cursor:pointer; color:var(--text-secondary); }\\n    .btn-text:hover { background:var(--accent-light); color:var(--accent); }\\n    .btn-text.danger:hover { background:#fee2e2; color:var(--danger); }\\n    .fab { position:fixed; bottom:24px; right:24px; width:56px; height:56px; border-radius:50%; background:var(--accent); color:#fff; border:none; font-size:28px; cursor:pointer; box-shadow:0 4px 16px rgba(79,110,247,0.4); z-index:200; display:flex; align-items:center; justify-content:center; }\\n    .task-fab { position:fixed; bottom:24px; right:92px; width:48px; height:48px; border-radius:50%; background:#fff; color:var(--accent); border:1px solid var(--border); font-size:20px; cursor:pointer; box-shadow:var(--shadow); z-index:200; display:flex; align-items:center; justify-content:center; }\\n    .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:300; display:flex; align-items:center; justify-content:center; }\\n    .modal { background:var(--card); border-radius:16px; padding:20px; width:90%; max-width:420px; max-height:85vh; overflow-y:auto; box-shadow:0 20px 60px rgba(0,0,0,0.15); }\\n    .modal h2 { font-size:17px; margin-bottom:16px; font-weight:700; }\\n    .modal input[type="text"], .modal input[type="url"] { width:100%; padding:10px 14px; border:1.5px solid var(--border); border-radius:var(--radius-sm); font-size:14px; outline:none; margin-bottom:12px; background:#fafbfc; }\\n    .modal .btn-row { display:flex; gap:8px; margin-top:8px; }\\n    .btn { padding:10px 16px; border-radius:var(--radius-sm); border:none; font-size:14px; font-weight:600; cursor:pointer; flex:1; text-align:center; }\\n    .btn-primary { background:var(--accent); color:#fff; }\\n    .btn-secondary { background:#f3f4f6; color:var(--text); }\\n    .btn-danger { background:var(--danger); color:#fff; }\\n    .empty-state { text-align:center; padding:60px 20px; color:var(--text-secondary); }\\n    .empty-state .icon { font-size:48px; margin-bottom:12px; }\\n    .toast { position:fixed; bottom:90px; left:50%; transform:translateX(-50%); background:#1f2937; color:#fff; padding:10px 20px; border-radius:8px; font-size:13px; z-index:500; pointer-events:none; max-width:90vw; }\\n    .share-link-box { background:#f9fafb; border:1px solid var(--border); border-radius:8px; padding:10px; font-size:12px; word-break:break-all; margin:8px 0; user-select:all; }\\n    .task-panel { position:fixed; top:0; right:0; bottom:0; width:320px; max-width:90vw; background:var(--card); z-index:250; box-shadow:-4px 0 20px rgba(0,0,0,0.1); transform:translateX(100%); transition:transform 0.3s ease; overflow-y:auto; padding:16px; }\\n    .task-panel.open { transform:translateX(0); }\\n    .task-panel-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }\\n    .task-item { padding:10px; border-radius:var(--radius-sm); background:#f9fafb; margin-bottom:8px; border:1px solid var(--border); }\\n    .task-name { font-size:13px; font-weight:600; word-break:break-all; }\\n    .task-status { font-size:11px; color:var(--text-secondary); margin-top:4px; }\\n    .progress-bar { height:4px; background:#e5e7eb; border-radius:2px; margin-top:6px; overflow:hidden; }\\n    .progress-fill { height:100%; background:var(--accent); transition:width 0.3s ease; }\\n    .progress-fill.completed { background:var(--success); }\\n    .progress-fill.failed { background:var(--danger); }\\n    .progress-fill.cancelled { background:#9ca3af; }\\n    .task-backdrop { position:fixed; inset:0; background:rgba(0,0,0,0.3); z-index:240; opacity:0; pointer-events:none; transition:opacity 0.3s; }\\n    .task-backdrop.open { opacity:1; pointer-events:auto; }\\n    .detail-page { max-width:800px; margin:0 auto; padding:16px; }\\n    .detail-card { background:var(--card); border-radius:var(--radius); padding:16px; box-shadow:var(--shadow); border:1px solid var(--border); }\\n    .detail-header { display:flex; align-items:center; gap:12px; margin-bottom:16px; }\\n    .detail-title { font-size:18px; font-weight:700; word-break:break-all; }\\n    .detail-meta { font-size:13px; color:var(--text-secondary); margin-bottom:16px; }\\n    .detail-actions { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px; }\\n    .preview-container { margin-top:16px; }\\n    .preview-container img { max-width:100%; border-radius:8px; }\\n    .preview-container video, .preview-container audio { width:100%; border-radius:8px; }\\n    .text-preview { white-space:pre-wrap; word-break:break-all; font-family:monospace; background:#f9fafb; padding:12px; border-radius:8px; max-height:400px; overflow-y:auto; }\\n    .editor-wrapper { border:1px solid #ccc; z-index:100; }\\n    .toolbar-container { border-bottom:1px solid #ccc; }\\n    .editor-container { height:400px; }\\n    .hidden { display:none !important; }\\n    .music-player { display:flex; flex-direction:column; gap:12px; padding:12px; background:#f9fafb; border-radius:8px; }\\n    .music-cover { width:120px; height:120px; border-radius:8px; object-fit:cover; background:#e5e7eb; margin:0 auto; }\\n    .music-info { text-align:center; }\\n    .music-title { font-size:16px; font-weight:700; }\\n    .music-artist { font-size:13px; color:var(--text-secondary); }\\n    .music-album { font-size:12px; color:var(--text-secondary); }\\n    .lyrics-container { max-height:200px; overflow-y:auto; text-align:center; font-size:13px; line-height:1.8; padding:8px; background:#fff; border-radius:8px; }\\n    .lyric-line { transition:all 0.3s; cursor:default; }\\n    .lyric-line.active { color:var(--accent); font-weight:700; transform:scale(1.05); }\\n    .zip-tree { background:#f9fafb; border-radius:8px; padding:12px; max-height:300px; overflow-y:auto; font-family:monospace; font-size:13px; line-height:1.6; }\\n    .zip-tree-item { padding-left:16px; }\\n    .zip-tree-folder { color:var(--accent); font-weight:600; }\\n    .share-readonly-badge { display:inline-block; background:var(--accent-light); color:var(--accent); padding:2px 8px; border-radius:4px; font-size:12px; margin-left:8px; }\\n    .task-actions { display:flex; gap:6px; margin-top:8px; }\\n    .task-actions .btn-text { font-size:11px; padding:3px 8px; }\\n    .upload-progress-overlay { position:fixed; bottom:0; left:0; right:0; background:var(--card); padding:12px 16px; box-shadow:0 -2px 10px rgba(0,0,0,0.08); z-index:180; transform:translateY(100%); transition:transform 0.3s ease; }\\n    .upload-progress-overlay.show { transform:translateY(0); }\\n    .upload-progress-bar { height:6px; background:#e5e7eb; border-radius:3px; overflow:hidden; margin-top:8px; }\\n    .upload-progress-fill { height:100%; background:var(--accent); transition:width 0.2s ease; }\\n    .upload-progress-info { display:flex; justify-content:space-between; font-size:13px; color:var(--text-secondary); }\\n    @media (max-width:480px) { .file-item { padding:10px 12px; } .btn-text { padding:3px 8px; font-size:11px; } }\\n  </style>\\n</head>\\n<body>\\n  <div class="header"><h1>云盘</h1><button class="refresh-btn" id="refreshBtn">⟳</button><div class="breadcrumb" id="breadcrumb"></div></div>\\n  <div id="mainView"><div class="file-list" id="fileList"></div><button class="fab" id="fabBtn">+</button><button class="task-fab" id="taskFabBtn" title="任务列表">📋</button></div>\\n  <div id="detailView" class="hidden"><div class="detail-page"><button class="btn btn-secondary" id="backBtn" style="margin-bottom:12px;">返回</button><div class="detail-card" id="detailCard"></div></div></div>\\n  <div class="task-backdrop" id="taskBackdrop"></div><div class="task-panel" id="taskPanel"><div class="task-panel-header"><h3>任务列表</h3><button class="btn-text" id="closeTaskBtn">关闭</button></div><div id="taskList"></div></div>\\n  <div id="modalContainer"></div><div id="toastContainer"></div>\\n  <div class="upload-progress-overlay" id="uploadProgressOverlay"><div class="upload-progress-info"><span id="uploadProgressText">准备上传...</span><span id="uploadProgressPercent">0%</span></div><div class="upload-progress-bar"><div class="upload-progress-fill" id="uploadProgressFill" style="width:0%"></div></div><div class="btn-row" style="margin-top:10px;"><button class="btn btn-danger" id="cancelUploadBtn" style="flex:0 0 auto;padding:6px 12px;font-size:12px;">取消上传</button></div></div>\\n  <script src="https://unpkg.com/@wangeditor/editor@latest/dist/index.js"><\\\\/script>\\n  <script src="https://cdn.jsdelivr.net/npm/mui-player@latest/dist/mui-player.min.js"><\\\\/script>\\n`;
 
-    // ==================== 全局变量 ====================
+const INLINE_JS = `    // ==================== 全局变量 ====================
     var API_BASE = "";
     var currentPath = "/";
     var fileTree = null;
@@ -119,8 +11,7 @@ const HTML = [
     var currentAudio = null;
     var lyricLines = [];
     var isShareReadonly = false;
-    var activeUploads = {}; // taskId -> { cancelled: false }
-    var uploadProgressOverlay = null;
+    var activeUploads = {};
 
     // ==================== 工具函数 ====================
     function showToast(msg, duration) {
@@ -173,7 +64,6 @@ const HTML = [
       return "f_" + Date.now() + "_" + Math.random().toString(36).substr(2, 8);
     }
 
-    // 分块读取 File/Blob 为 base64，避免大文件内存溢出
     function readChunkAsBase64(blob) {
       return new Promise(function(resolve, reject) {
         var reader = new FileReader();
@@ -244,7 +134,6 @@ const HTML = [
 
     function escapeHtml(text) { var div = document.createElement("div"); div.textContent = text; return div.innerHTML; }
 
-    // ==================== 渲染 ====================
     function renderBreadcrumb() {
       var container = document.getElementById("breadcrumb");
       container.innerHTML = "";
@@ -313,7 +202,6 @@ const HTML = [
 
     function refreshFileList() { loadTree().then(function() { if (currentView === "list") { renderFileList(); renderBreadcrumb(); } }); }
 
-    // ==================== 事件委托 ====================
     document.addEventListener("click", function(e) {
       var target = e.target;
       var btn = target.closest(".btn-text");
@@ -339,11 +227,9 @@ const HTML = [
       }
     });
 
-    // ==================== 模态框 ====================
     function showModal(html) { var container = document.getElementById("modalContainer"); container.innerHTML = '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">' + html + '</div></div>'; }
     function closeModal() { document.getElementById("modalContainer").innerHTML = ""; }
 
-    // ==================== 文件操作 ====================
     function showNewFolderModal() { showModal('<h2>新建文件夹</h2><input type="text" id="newFolderName" placeholder="文件夹名称"><div class="btn-row"><button class="btn btn-secondary" id="cancelBtn">取消</button><button class="btn btn-primary" id="confirmBtn">创建</button></div>'); document.getElementById("cancelBtn").onclick = closeModal; document.getElementById("confirmBtn").onclick = createFolder; }
     function createFolder() {
       var name = document.getElementById("newFolderName").value.trim();
@@ -372,7 +258,6 @@ const HTML = [
 
     function deleteItem(itemId) { var item = findItemInTree(fileTree, itemId); if (!item) return; if (!confirm("确定要删除 " + item.name + " 吗？")) return; if (item.type === "file" && item.chunks > 0) { api("/api/delete-content", { method:"POST", body: { fileId: item.id, chunks: item.chunks } }).catch(function(){}); } removeItemFromTree(fileTree, itemId); saveTree().then(function() { renderFileList(); showToast("已删除"); if (currentView === "detail" && currentDetailItem && currentDetailItem.id === itemId) closeDetail(); }); }
 
-    // ==================== 上传（支持文件夹，分块 base64，可取消） ====================
     function showUploadModal() { showModal('<h2>上传文件</h2><input type="file" id="fileInput" multiple webkitdirectory directory><div style="font-size:12px;color:var(--text-secondary);margin-bottom:12px;">提示：可选择文件夹上传整个目录</div><div class="btn-row"><button class="btn btn-secondary" id="cancelBtn">取消</button><button class="btn btn-primary" id="uploadBtn">开始上传</button></div>'); document.getElementById("cancelBtn").onclick = closeModal; document.getElementById("uploadBtn").onclick = startUpload; }
 
     function showUploadProgress(text, percent) {
@@ -401,7 +286,7 @@ const HTML = [
         var pathParts = relativePath.split("/");
         var fileName = pathParts.pop();
         var folderPath = pathParts.length > 0 ? uploadPath + "/" + pathParts.join("/") : uploadPath;
-        folderPath = folderPath.replace(/\/+/g, "/");
+        folderPath = folderPath.replace(/\\/+/g, "/");
         fileList.push({ file: f, name: fileName, folderPath: folderPath, size: f.size });
       }
       var totalSize = fileList.reduce(function(sum, e) { return sum + e.size; }, 0);
@@ -410,7 +295,6 @@ const HTML = [
         var taskId = taskData.taskId;
         activeUploads[taskId] = { cancelled: false };
         showUploadProgress("准备上传 " + fileList.length + " 个文件...", 0);
-        // 绑定取消按钮
         var cancelBtn = document.getElementById("cancelUploadBtn");
         cancelBtn.onclick = function() {
           activeUploads[taskId].cancelled = true;
@@ -461,7 +345,6 @@ const HTML = [
       });
     }
 
-    // 优化版：分块读取 base64，避免大文件内存问题，支持进度回调和取消检查
     function uploadSingleFileOptimized(file, fileName, uploadPath, taskId, onProgress) {
       var fileId = generateId();
       var CHUNK_THRESHOLD = 15 * 1024 * 1024;
@@ -469,7 +352,6 @@ const HTML = [
       var ctrl = activeUploads[taskId];
 
       if (file.size <= CHUNK_THRESHOLD) {
-        // 小文件：直接分块读取
         onProgress(0.1);
         return readChunkAsBase64(file).then(function(base64) {
           if (ctrl && ctrl.cancelled) throw new Error("用户取消");
@@ -479,7 +361,6 @@ const HTML = [
           onProgress(1);
         });
       } else {
-        // 大文件：分片上传，每片单独读取 base64
         var chunks = Math.ceil(file.size / CHUNK_SIZE);
         onProgress(0.05);
         return api("/api/upload/init", { method:"POST", body: { fileId: fileId, fileName: fileName, uploadPath: uploadPath, chunks: chunks, chunkSize: CHUNK_SIZE, mimeType: file.type || "application/octet-stream", size: file.size } }).then(function() {
@@ -508,15 +389,13 @@ const HTML = [
       }
     }
 
-    // ==================== 下载/分享 ====================
     function downloadFile(fileId) { window.location.href = "/api/download?fileId=" + encodeURIComponent(fileId); }
     function shareFile(fileId) { api("/api/share", { method:"POST", body: { fileId: fileId } }).then(function(data) { var link = location.origin + "/s/" + data.shareId; showModal('<h2>分享链接</h2><div class="share-link-box">' + link + '</div><button class="btn btn-primary" onclick="closeModal()">关闭</button>'); }); }
 
-    // ==================== 在线解压 ====================
     function extractZip(fileId) {
       var item = findItemInTree(fileTree, fileId);
       if (!item) return;
-      if (!confirm("确定要解压 " + item.name + " 吗？\n将解压到当前目录")) return;
+      if (!confirm("确定要解压 " + item.name + " 吗？\\n将解压到当前目录")) return;
       showToast("正在读取压缩包...", 3000);
       fetch("/api/download?fileId=" + encodeURIComponent(fileId)).then(function(res) { return res.blob(); }).then(function(blob) {
         if (typeof JSZip === "undefined") { showToast("JSZip 库未加载"); return; }
@@ -540,7 +419,7 @@ const HTML = [
                   var pathParts = entry.path.split("/");
                   var fileName = pathParts.pop();
                   var folderPath = currentPath + (pathParts.length > 0 ? "/" + pathParts.join("/") : "");
-                  folderPath = folderPath.replace(/\/+/g, "/");
+                  folderPath = folderPath.replace(/\\/+/g, "/");
                   return uploadSingleFileOptimized(new File([blob], fileName), fileName, folderPath, taskId, function(){});
                 }).then(function() {
                   done++;
@@ -558,11 +437,9 @@ const HTML = [
       }).catch(function(e) { showToast("解压失败: " + e.message); });
     }
 
-    // ==================== 离线下载 ====================
     function showOfflineDownloadModal() { showModal('<h2>离线下载</h2><input type="url" id="offlineUrl" placeholder="https://example.com/file.zip"><div class="btn-row"><button class="btn btn-secondary" id="cancelBtn">取消</button><button class="btn btn-primary" id="offlineBtn">开始下载</button></div>'); document.getElementById("cancelBtn").onclick = closeModal; document.getElementById("offlineBtn").onclick = startOfflineDownload; }
     function startOfflineDownload() { var url = document.getElementById("offlineUrl").value.trim(); if (!url) { showToast("请输入下载链接"); return; } closeModal(); api("/api/offline", { method:"POST", body: { url: url, savePath: currentPath } }).then(function() { showToast("离线下载任务已创建"); loadTasks(); }).catch(function(e) { showToast("创建任务失败: " + e.message); }); }
 
-    // ==================== 任务（支持取消和删除） ====================
     function loadTasks() { return api("/api/tasks").then(function(data) { tasks = data.tasks || []; renderTasks(); }); }
     function renderTasks() {
       var container = document.getElementById("taskList");
@@ -584,7 +461,6 @@ const HTML = [
         div.innerHTML = '<div class="task-name">' + (task.type === "upload" ? "上传" : task.type === "extract" ? "解压" : "下载") + " " + (task.name || task.url || "未知") + '</div><div class="task-status">' + statusText + (task.progress ? " · " + Math.round(task.progress) + "%" : "") + '</div><div class="progress-bar"><div class="progress-fill ' + statusClass + '" style="width:' + (task.progress || 0) + '%"></div></div>' + (actionsHtml ? '<div class="task-actions">' + actionsHtml + '</div>' : '');
         container.appendChild(div);
       }
-      // 绑定任务操作按钮
       container.querySelectorAll('[data-task-action]').forEach(function(btn) {
         btn.onclick = function() {
           var action = this.getAttribute("data-task-action");
@@ -613,7 +489,6 @@ const HTML = [
       }).catch(function(e) { showToast("删除失败: " + e.message); });
     }
 
-    // ==================== 详情页 ====================
     function openDetail(item, updateUrl) { if (updateUrl !== false) { history.pushState({ fileId: item.id }, "", "/detail?file=" + item.id); } currentDetailItem = item; currentView = "detail"; document.getElementById("mainView").classList.add("hidden"); document.getElementById("detailView").classList.remove("hidden"); renderDetail(); }
     function closeDetail() { history.pushState({}, "", currentPath === "/" ? "/" : currentPath); currentView = "list"; currentDetailItem = null; document.getElementById("detailView").classList.add("hidden"); document.getElementById("mainView").classList.remove("hidden"); refreshFileList(); }
     function renderDetail() {
@@ -665,15 +540,14 @@ const HTML = [
       else container.innerHTML = "<p>该文件类型不支持预览，请下载后查看。</p>";
     }
 
-    function loadLrcFromFile(item) { var lrcName = item.name.replace(/\.[^.]+$/, "") + ".lrc"; var items = getCurrentFolderItems(); var lrcItem = null; for (var i = 0; i < items.length; i++) { if (items[i].name === lrcName) { lrcItem = items[i]; break; } } if (lrcItem) api("/api/file-content?path=" + encodeURIComponent(joinPath(currentPath, lrcItem.name))).then(function(data) { if (data.base64) displayLyrics(atob(data.base64)); else document.getElementById("lyricsContainer").style.display = "none"; }); else document.getElementById("lyricsContainer").style.display = "none"; }
-    function displayLyrics(lyrics) { var container = document.getElementById("lyricsContainer"); container.style.display = "block"; container.innerHTML = ""; var hasTimestamps = /\[\d{2}:\d{2}(\.\d+)?\]/.test(lyrics); if (hasTimestamps) { lyricLines = []; var lines = lyrics.split("\n"); for (var i = 0; i < lines.length; i++) { var line = lines[i].trim(); var timeMatch = line.match(/\[(\d{2}):(\d{2})(\.\d+)?\]/); if (timeMatch) { var minutes = parseInt(timeMatch[1]); var seconds = parseFloat(timeMatch[2] + (timeMatch[3] || "")); var text = line.replace(/\[.*?\]/g, "").trim(); if (text) lyricLines.push({ time: minutes * 60 + seconds, text: text }); } } lyricLines.sort(function(a,b){return a.time-b.time}); for (var j = 0; j < lyricLines.length; j++) { var div = document.createElement("div"); div.className = "lyric-line"; div.setAttribute("data-time", lyricLines[j].time); div.textContent = lyricLines[j].text; container.appendChild(div); } } else { container.textContent = lyrics; container.style.whiteSpace = "pre-wrap"; } }
+    function loadLrcFromFile(item) { var lrcName = item.name.replace(/\\.[^.]+$/, "") + ".lrc"; var items = getCurrentFolderItems(); var lrcItem = null; for (var i = 0; i < items.length; i++) { if (items[i].name === lrcName) { lrcItem = items[i]; break; } } if (lrcItem) api("/api/file-content?path=" + encodeURIComponent(joinPath(currentPath, lrcItem.name))).then(function(data) { if (data.base64) displayLyrics(atob(data.base64)); else document.getElementById("lyricsContainer").style.display = "none"; }); else document.getElementById("lyricsContainer").style.display = "none"; }
+    function displayLyrics(lyrics) { var container = document.getElementById("lyricsContainer"); container.style.display = "block"; container.innerHTML = ""; var hasTimestamps = /\\[\\d{2}:\\d{2}(\\.\\d+)?\\]/.test(lyrics); if (hasTimestamps) { lyricLines = []; var lines = lyrics.split("\\n"); for (var i = 0; i < lines.length; i++) { var line = lines[i].trim(); var timeMatch = line.match(/\\[(\\d{2}):(\\d{2})(\\.\\d+)?\\]/); if (timeMatch) { var minutes = parseInt(timeMatch[1]); var seconds = parseFloat(timeMatch[2] + (timeMatch[3] || "")); var text = line.replace(/\\[.*?\\]/g, "").trim(); if (text) lyricLines.push({ time: minutes * 60 + seconds, text: text }); } } lyricLines.sort(function(a,b){return a.time-b.time}); for (var j = 0; j < lyricLines.length; j++) { var div = document.createElement("div"); div.className = "lyric-line"; div.setAttribute("data-time", lyricLines[j].time); div.textContent = lyricLines[j].text; container.appendChild(div); } } else { container.textContent = lyrics; container.style.whiteSpace = "pre-wrap"; } }
     function highlightLyric(currentTime) { if (!lyricLines || lyricLines.length === 0) return; var lines = document.querySelectorAll(".lyric-line"); var activeIndex = -1; for (var i = 0; i < lyricLines.length; i++) { if (currentTime >= lyricLines[i].time) activeIndex = i; else break; } for (var j = 0; j < lines.length; j++) { if (j === activeIndex) { lines[j].classList.add("active"); lines[j].scrollIntoView({ block: "center", behavior: "smooth" }); } else lines[j].classList.remove("active"); } }
 
     function editFile(fileId) { var item = findItemInTree(fileTree, fileId); if (item) { openDetail(item); editDetailText(); } }
     function editDetailText() { var item = currentDetailItem; if (!item) return; showModal('<h2>编辑文本</h2><div id="editor-wrapper"><div id="toolbar-container"></div><div id="editor-container"></div></div><div class="btn-row"><button class="btn btn-secondary" id="cancelEdit">取消</button><button class="btn btn-primary" id="saveEdit">保存</button></div>'); document.getElementById("cancelEdit").onclick = closeModal; document.getElementById("saveEdit").onclick = saveDetailText; if (typeof window.wangEditor !== "undefined") { var createEditor = window.wangEditor.createEditor; var createToolbar = window.wangEditor.createToolbar; var editorConfig = { placeholder: "请输入内容..." }; var editor = createEditor({ selector: "#editor-container", html: "<p><br></p>", config: editorConfig, mode: "default" }); createToolbar({ editor: editor, selector: "#toolbar-container", config: {}, mode: "default" }); api("/api/file-content?path=" + encodeURIComponent(joinPath(currentPath, item.name))).then(function(data) { if (data.base64) editor.setHtml(atob(data.base64)); }); window._editor = editor; } else showToast("编辑器未加载"); }
     function saveDetailText() { var editor = window._editor; if (!editor) return; var html = editor.getHtml(); var base64 = btoa(unescape(encodeURIComponent(html))); var item = currentDetailItem; if (item) api("/api/save-content", { method:"POST", body: { path: joinPath(currentPath, item.name), base64: base64, fileId: item.id } }).then(function() { closeModal(); loadTree(); showToast("保存成功"); renderDetail(); }).catch(function(e) { showToast("保存失败: " + e.message); }); }
 
-    // ==================== 初始化 ====================
     function init() {
       loadTree(); loadTasks();
       document.getElementById("refreshBtn").onclick = refreshFileList;
@@ -687,10 +561,16 @@ const HTML = [
       setInterval(function() { var oldTasks = JSON.stringify(tasks); loadTasks().then(function() { var newTasks = JSON.stringify(tasks); if (oldTasks !== newTasks) { var hasCompleted = tasks.some(function(t) { return t.status === "completed" || t.status === "failed" || t.status === "cancelled"; }); if (hasCompleted) refreshFileList(); } }); }, 5000);
     }
     init();
-  <\/script>
+`;
+
+const HTML_TAIL = `
+  </script>
 </body>
-</html>'
-].join('\n');
+</html>`;
+
+const HTML = HTML_HEAD + "<script>\n" + INLINE_JS + "\n  </script>\n</body>\n</html>";
+
+
 
 // ==================== 后端逻辑 ====================
 const FILE_KV_BINDINGS = [
