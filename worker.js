@@ -98,7 +98,7 @@ const HTML = `
   </style>
 </head>
 <body>
-  <div class="header"><h1>云盘</h1><button class="refresh-btn" id="refreshBtn">⟳</button><div class="breadcrumb" id="breadcrumb"></div></div>
+  <div class="header"><h1>云盘</h1><button class="refresh-btn" id="refreshBtn">⟳</button><div class="breadcrumb" id="breadcrumb"></div><button class="refresh-btn" id="logoutBtn" title="退出登录" style="font-size:16px;">🔓</button></div>
   <div id="mainView"><div class="file-list" id="fileList"></div><button class="fab" id="fabBtn">+</button><button class="task-fab" id="taskFabBtn" title="任务列表">📋</button></div>
   <div id="detailView" class="hidden"><div class="detail-page"><button class="btn btn-secondary" id="backBtn" style="margin-bottom:12px;">返回</button><div class="detail-card" id="detailCard"></div></div></div>
   <div class="task-backdrop" id="taskBackdrop"></div><div class="task-panel" id="taskPanel"><div class="task-panel-header"><h3>任务列表</h3><button class="btn-text" id="closeTaskBtn">关闭</button></div><div id="taskList"></div></div>
@@ -189,8 +189,20 @@ const HTML = `
     function api(path, options) {
       options = options || {};
       var fetchOptions = { method: options.method || "GET", headers: { "Content-Type": "application/json" } };
+      // 自动携带认证 token
+      var token = localStorage.getItem(AUTH_TOKEN_KEY);
+      if (token) {
+        fetchOptions.headers["X-Auth-Token"] = token;
+        if (options.body) options.body.token = token;
+      }
       if (options.body) fetchOptions.body = JSON.stringify(options.body);
       return fetch(API_BASE + path, fetchOptions).then(function(res) {
+        // 如果返回 401，跳转到密码验证
+        if (res.status === 401) {
+          localStorage.removeItem(AUTH_TOKEN_KEY);
+          showAuthModal();
+          return Promise.reject(new Error("需要重新登录"));
+        }
         return res.json().then(function(data) {
           if (!res.ok && data.error) throw new Error(data.error);
           return data;
@@ -765,10 +777,72 @@ const HTML = `
     function editDetailText() { var item = currentDetailItem; if (!item) return; showModal('<h2>编辑文本</h2><div id="editor-wrapper"><div id="toolbar-container"></div><div id="editor-container"></div></div><div class="btn-row"><button class="btn btn-secondary" id="cancelEdit">取消</button><button class="btn btn-primary" id="saveEdit">保存</button></div>'); document.getElementById("cancelEdit").onclick = closeModal; document.getElementById("saveEdit").onclick = saveDetailText; if (typeof window.wangEditor !== "undefined") { var createEditor = window.wangEditor.createEditor; var createToolbar = window.wangEditor.createToolbar; var editorConfig = { placeholder: "请输入内容..." }; var editor = createEditor({ selector: "#editor-container", html: "<p><br></p>", config: editorConfig, mode: "default" }); createToolbar({ editor: editor, selector: "#toolbar-container", config: {}, mode: "default" }); api("/api/file-content?path=" + encodeURIComponent(joinPath(currentPath, item.name))).then(function(data) { if (data.base64) editor.setHtml(atob(data.base64)); }); window._editor = editor; } else showToast("编辑器未加载"); }
     function saveDetailText() { var editor = window._editor; if (!editor) return; var html = editor.getHtml(); var base64 = btoa(unescape(encodeURIComponent(html))); var item = currentDetailItem; if (item) api("/api/save-content", { method:"POST", body: { path: joinPath(currentPath, item.name), base64: base64, fileId: item.id } }).then(function() { closeModal(); loadTree(); showToast("保存成功"); renderDetail(); }).catch(function(e) { showToast("保存失败: " + e.message); }); }
 
+
+    // ==================== 密码验证 ====================
+    var AUTH_TOKEN_KEY = "cloud_auth_token";
+    var AUTH_API = "/api/auth";
+
+    function checkAuth() {
+      var token = localStorage.getItem(AUTH_TOKEN_KEY);
+      if (!token) {
+        showAuthModal();
+        return false;
+      }
+      // 验证 token 有效性
+      api("/api/auth/verify", { method: "POST", body: { token: token } })
+        .then(function(data) {
+          if (!data.valid) {
+            localStorage.removeItem(AUTH_TOKEN_KEY);
+            showAuthModal();
+          }
+        })
+        .catch(function() {
+          showAuthModal();
+        });
+      return true;
+    }
+
+    function showAuthModal() {
+      var container = document.getElementById("modalContainer");
+      container.innerHTML = '<div class="modal-overlay" style="z-index:1000;"><div class="modal"><h2>🔒 需要密码</h2><p style="color:var(--text-secondary);margin-bottom:12px;font-size:13px;">请输入访问密码以继续使用云盘</p><input type="password" id="authPassword" placeholder="密码" style="margin-bottom:12px;"><div id="authError" style="color:var(--danger);font-size:12px;margin-bottom:8px;display:none;">密码错误</div><div class="btn-row"><button class="btn btn-primary" id="authSubmit">进入</button></div></div></div>';
+      document.getElementById("authSubmit").onclick = doAuth;
+      document.getElementById("authPassword").addEventListener("keypress", function(e) {
+        if (e.key === "Enter") doAuth();
+      });
+      document.getElementById("authPassword").focus();
+    }
+
+    function doAuth() {
+      var password = document.getElementById("authPassword").value.trim();
+      if (!password) return;
+      api("/api/auth", { method: "POST", body: { password: password } })
+        .then(function(data) {
+          if (data.token) {
+            localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+            document.getElementById("modalContainer").innerHTML = "";
+            initApp();
+          } else {
+            document.getElementById("authError").style.display = "block";
+            document.getElementById("authPassword").value = "";
+            document.getElementById("authPassword").focus();
+          }
+        })
+        .catch(function(e) {
+          document.getElementById("authError").textContent = "验证失败: " + e.message;
+          document.getElementById("authError").style.display = "block";
+        });
+    }
+
+    function logout() {
+      localStorage.removeItem(AUTH_TOKEN_KEY);
+      window.location.reload();
+    }
+
     // ==================== 初始化 ====================
-    function init() {
+    function initApp() {
       loadTree(); loadTasks();
       document.getElementById("refreshBtn").onclick = refreshFileList;
+      document.getElementById("logoutBtn").onclick = logout;
       document.getElementById("backBtn").onclick = closeDetail;
       document.getElementById("fabBtn").onclick = function() { 
         showModal('<h2>添加</h2><div style="display:flex;flex-direction:column;gap:8px;"><button class="btn btn-primary" id="menuUpload">上传文件</button><button class="btn btn-primary" id="menuUploadFolder">上传文件夹</button><button class="btn btn-secondary" id="menuNewFolder">新建文件夹</button><button class="btn btn-secondary" id="menuNewFile">新建文本文件</button><button class="btn btn-secondary" id="menuOffline">离线下载</button></div>'); 
@@ -785,7 +859,11 @@ const HTML = `
       var params = new URLSearchParams(window.location.search); var fileId = params.get("file"); if (fileId) { loadTree().then(function() { var item = findItemInTree(fileTree, fileId); if (item && item.type !== "folder") openDetail(item, false); }); }
       setInterval(function() { var oldTasks = JSON.stringify(tasks); loadTasks().then(function() { var newTasks = JSON.stringify(tasks); if (oldTasks !== newTasks) { var hasCompleted = tasks.some(function(t) { return t.status === "completed" || t.status === "failed" || t.status === "cancelled"; }); if (hasCompleted) refreshFileList(); } }); }, 5000);
     }
-    init();
+    if (!checkAuth()) {
+      // 等待密码验证通过后再初始化
+      return;
+    }
+    initApp();
   </script>
 </body>
 </html>
@@ -860,7 +938,7 @@ const SHARE_HTML = `
       <div class="preview-container" id="previewContainer"></div>
     </div>
     <div class="footer">
-      <p>由 <a href="/">云盘</a> 提供分享服务</p>
+      <p></p>
     </div>
   </div>
   <script src="https://cdn.jsdelivr.net/npm/mui-player@latest/dist/mui-player.min.js"><\/script>
@@ -983,12 +1061,33 @@ const SHARE_HTML = `
 
 // ==================== 后端逻辑 ====================
 const FILE_KV_BINDINGS = [
-  'FILE_KV_1',
-  'FILE_KV_2',
-  'FILE_KV_3',
-  'FILE_KV_4',
-  'FILE_KV_5'
+  'FILE_KV_1',   // 67519f416f114d1dbf883a88a8e0c916
+  'FILE_KV_2',   // da2510c5259b4fe7b540976e60531433
+  'FILE_KV_3',   // 53cac170bfe04444b1e89091a18eb6af
+  'FILE_KV_4',   // 4a308b54fc384b53bcb1013c23f8405e
+  'FILE_KV_5',   // cbbd9f1364244d42a2db53a2d7d53daa
+  'FILE_KV_6',   // 18c11dbaad7348cdbc7ea0b1a6d8c7f3
+  'FILE_KV_7',   // 1e9c20f7512740b6a486ec18bfd2f65a
+  'FILE_KV_8',   // 49634a2b619d49a0a610d9d164d73102
+  'FILE_KV_9',   // a9764913087b4b7ebe2f69b1ad5210dd
+  'FILE_KV_10',  // 7702c3214f9d4e71af5a71d70b179510
+  'FILE_KV_11',  // 1c87f7013c0f4cc5863c9374f338d609
+  'FILE_KV_12',  // 46d03cabe6914229a2dc9dc6449aedba
+  'FILE_KV_13',  // cbf8d07e45134f12a0a66ecba30360c2
+  'FILE_KV_14',  // 8ba21c5e43b54806b542360a3e597dd5
+  'FILE_KV_15',  // 1cdbcd88664d478ab55c7bffd52887f8
+  'FILE_KV_16',  // 6d90fca508fa43ed8983001529fb1c99
+  'FILE_KV_17',  // 04b3bc41c39843e89d9b8a9875e59c1d
+  'FILE_KV_18',  // 63997068114048c4ac5dd24bacd9dfe1
+  'FILE_KV_19',  // 2466a70fffc74a7ba683a7887d7f9048
+  'FILE_KV_20',  // 36a509744d8e4cdb922f1fb256006a2f
+  'FILE_KV_21',
+  'FILE_KV_22',
+  'FILE_KV_23',
+  'FILE_KV_24',
+  'FILE_KV_25'
 ];
+const KV_COUNT = FILE_KV_BINDINGS.length;
 
 function jsonResponse(data, headers = {}, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -1019,14 +1118,18 @@ function arrayBufferToBase64(arrayBuffer) {
   return btoa(binary);
 }
 
-function getKvIndex(fileId, chunkIndex = null) {
+function getKvIndex(fileId, chunkIndex = null, preferDistribute = false) {
   let hash = 0;
   const str = chunkIndex !== null ? fileId + ':' + chunkIndex : fileId;
   for (let i = 0; i < str.length; i++) {
     hash = (hash << 5) - hash + str.charCodeAt(i);
     hash |= 0;
   }
-  return Math.abs(hash) % 5;
+  // 多分片文件优先分散到不同KV（基于chunkIndex取模）
+  if (preferDistribute && chunkIndex !== null) {
+    return chunkIndex % KV_COUNT;
+  }
+  return Math.abs(hash) % KV_COUNT;
 }
 
 async function getTree(env) {
@@ -1084,33 +1187,93 @@ async function addFileToTree(env, uploadPath, fileName, fileId, size, mimeType, 
 
 async function storeSingleFile(env, fileId, base64) {
   const arrayBuffer = base64ToArrayBuffer(base64);
-  const kvIndex = getKvIndex(fileId);
-  const kv = env[FILE_KV_BINDINGS[kvIndex]];
-  await kv.put('f:' + fileId, arrayBuffer);
+  const startIndex = getKvIndex(fileId);
+  let lastError = null;
+  // 从计算的KV开始，依次尝试所有KV直到成功
+  for (let i = 0; i < KV_COUNT; i++) {
+    const kvIndex = (startIndex + i) % KV_COUNT;
+    const kv = env[FILE_KV_BINDINGS[kvIndex]];
+    try {
+      await kv.put('f:' + fileId, arrayBuffer);
+      // 记录实际存储的KV索引到元数据
+      await env.FILE_STRUCTURE_KV.put('kvmap:' + fileId, JSON.stringify({ kvIndex, type: 'single' }));
+      return;
+    } catch (e) {
+      lastError = e;
+      console.error('KV ' + kvIndex + ' store failed, trying next...', e.message);
+      continue;
+    }
+  }
+  throw new Error('All KV stores failed for single file: ' + (lastError ? lastError.message : 'unknown'));
 }
 
 async function storeChunk(env, fileId, chunkIndex, base64) {
   const arrayBuffer = base64ToArrayBuffer(base64);
-  const kvIndex = getKvIndex(fileId, chunkIndex);
-  const kv = env[FILE_KV_BINDINGS[kvIndex]];
-  await kv.put('f:' + fileId + ':chunk:' + chunkIndex, arrayBuffer);
+  // 多分片优先分散存储：基于chunkIndex取模，确保不同分片尽量在不同KV
+  const startIndex = getKvIndex(fileId, chunkIndex, true);
+  let lastError = null;
+  for (let i = 0; i < KV_COUNT; i++) {
+    const kvIndex = (startIndex + i) % KV_COUNT;
+    const kv = env[FILE_KV_BINDINGS[kvIndex]];
+    try {
+      await kv.put('f:' + fileId + ':chunk:' + chunkIndex, arrayBuffer);
+      // 记录每个分片实际存储的KV索引
+      const kvMap = await env.FILE_STRUCTURE_KV.get('kvmap:' + fileId, 'json') || { chunks: {} };
+      if (!kvMap.chunks) kvMap.chunks = {};
+      kvMap.chunks[chunkIndex] = kvIndex;
+      await env.FILE_STRUCTURE_KV.put('kvmap:' + fileId, JSON.stringify(kvMap));
+      return;
+    } catch (e) {
+      lastError = e;
+      console.error('KV ' + kvIndex + ' chunk ' + chunkIndex + ' store failed, trying next...', e.message);
+      continue;
+    }
+  }
+  throw new Error('All KV stores failed for chunk ' + chunkIndex + ': ' + (lastError ? lastError.message : 'unknown'));
 }
 
 async function getFileArrayBuffer(env, item) {
+  // 读取kvmap获取实际存储位置
+  const kvMap = await env.FILE_STRUCTURE_KV.get('kvmap:' + item.id, 'json');
+
   if (item.chunks <= 1) {
-    const kvIndex = getKvIndex(item.id);
-    const kv = env[FILE_KV_BINDINGS[kvIndex]];
-    return await kv.get('f:' + item.id, 'arrayBuffer');
+    // 单文件：优先使用kvmap记录的KV，失败则遍历所有KV
+    const storedIndex = kvMap && kvMap.kvIndex !== undefined ? kvMap.kvIndex : getKvIndex(item.id);
+    const kv = env[FILE_KV_BINDINGS[storedIndex]];
+    let buffer = await kv.get('f:' + item.id, 'arrayBuffer');
+    if (buffer) return buffer;
+    // 如果没找到，可能是迁移过，遍历所有KV
+    for (let i = 0; i < KV_COUNT; i++) {
+      if (i === storedIndex) continue;
+      const fallbackKv = env[FILE_KV_BINDINGS[i]];
+      buffer = await fallbackKv.get('f:' + item.id, 'arrayBuffer');
+      if (buffer) return buffer;
+    }
+    throw new Error('File not found in any KV: ' + item.id);
   }
+
+  // 多分片文件
   const chunks = item.chunks;
   const totalLength = item.size;
   const result = new Uint8Array(totalLength);
   let offset = 0;
   for (let i = 0; i < chunks; i++) {
-    const kvIndex = getKvIndex(item.id, i);
-    const kv = env[FILE_KV_BINDINGS[kvIndex]];
-    const chunkBuffer = await kv.get('f:' + item.id + ':chunk:' + i, 'arrayBuffer');
-    if (!chunkBuffer) throw new Error('Missing chunk ' + i);
+    // 优先使用kvmap中记录的分片KV位置
+    const storedIndex = kvMap && kvMap.chunks && kvMap.chunks[i] !== undefined 
+      ? kvMap.chunks[i] 
+      : getKvIndex(item.id, i, true);
+    const kv = env[FILE_KV_BINDINGS[storedIndex]];
+    let chunkBuffer = await kv.get('f:' + item.id + ':chunk:' + i, 'arrayBuffer');
+    if (!chunkBuffer) {
+      // 如果没找到，遍历所有KV查找该分片
+      for (let j = 0; j < KV_COUNT; j++) {
+        if (j === storedIndex) continue;
+        const fallbackKv = env[FILE_KV_BINDINGS[j]];
+        chunkBuffer = await fallbackKv.get('f:' + item.id + ':chunk:' + i, 'arrayBuffer');
+        if (chunkBuffer) break;
+      }
+    }
+    if (!chunkBuffer) throw new Error('Missing chunk ' + i + ' for file ' + item.id);
     const chunkBytes = new Uint8Array(chunkBuffer);
     result.set(chunkBytes, offset);
     offset += chunkBytes.length;
@@ -1119,17 +1282,32 @@ async function getFileArrayBuffer(env, item) {
 }
 
 async function deleteFileContent(env, fileId, chunks) {
+  const kvMap = await env.FILE_STRUCTURE_KV.get('kvmap:' + fileId, 'json');
   if (chunks <= 1) {
-    const kvIndex = getKvIndex(fileId);
-    const kv = env[FILE_KV_BINDINGS[kvIndex]];
+    const storedIndex = kvMap && kvMap.kvIndex !== undefined ? kvMap.kvIndex : getKvIndex(fileId);
+    const kv = env[FILE_KV_BINDINGS[storedIndex]];
     await kv.delete('f:' + fileId);
+    // 同时清理可能存在的冗余副本
+    for (let i = 0; i < KV_COUNT; i++) {
+      if (i === storedIndex) continue;
+      try { await env[FILE_KV_BINDINGS[i]].delete('f:' + fileId); } catch(e) {}
+    }
   } else {
     for (let i = 0; i < chunks; i++) {
-      const kvIndex = getKvIndex(fileId, i);
-      const kv = env[FILE_KV_BINDINGS[kvIndex]];
+      const storedIndex = kvMap && kvMap.chunks && kvMap.chunks[i] !== undefined 
+        ? kvMap.chunks[i] 
+        : getKvIndex(fileId, i, true);
+      const kv = env[FILE_KV_BINDINGS[storedIndex]];
       await kv.delete('f:' + fileId + ':chunk:' + i);
+      // 同时清理可能存在的冗余副本
+      for (let j = 0; j < KV_COUNT; j++) {
+        if (j === storedIndex) continue;
+        try { await env[FILE_KV_BINDINGS[j]].delete('f:' + fileId + ':chunk:' + i); } catch(e) {}
+      }
     }
   }
+  // 清理kvmap
+  await env.FILE_STRUCTURE_KV.delete('kvmap:' + fileId);
 }
 
 async function addTask(env, type, name, status, progress) {
@@ -1174,15 +1352,63 @@ async function handleOfflineDownload(env, url, savePath, taskId) {
       if (parts.length > 0 && parts[parts.length - 1]) fileName = decodeURIComponent(parts[parts.length - 1]);
     }
     const fileId = 'f_' + Date.now() + '_' + Math.random().toString(36).substr(2,8);
-    const kvIndex = getKvIndex(fileId);
-    const kv = env[FILE_KV_BINDINGS[kvIndex]];
-    await kv.put('f:' + fileId, arrayBuffer);
+    const startIndex = getKvIndex(fileId);
+    let stored = false;
+    for (let i = 0; i < KV_COUNT; i++) {
+      const kvIndex = (startIndex + i) % KV_COUNT;
+      const kv = env[FILE_KV_BINDINGS[kvIndex]];
+      try {
+        await kv.put('f:' + fileId, arrayBuffer);
+        await env.FILE_STRUCTURE_KV.put('kvmap:' + fileId, JSON.stringify({ kvIndex, type: 'single' }));
+        stored = true;
+        break;
+      } catch (e) { continue; }
+    }
+    if (!stored) throw new Error('All KV stores failed for offline download');
     const mimeType = response.headers.get('content-type') || 'application/octet-stream';
     await addFileToTree(env, savePath, fileName, fileId, arrayBuffer.byteLength, mimeType, 1, 0);
     await updateTask(env, taskId, { status:'completed', progress:100 });
   } catch (e) {
     await updateTask(env, taskId, { status:'failed', error: e.message });
   }
+}
+
+
+// ==================== 密码验证 ====================
+// 从环境变量读取密码，支持多个密码（用逗号分隔）
+function getValidPasswords(env) {
+  const pwd = env.CLOUD_PASSWORD || '';
+  if (!pwd) return [];
+  return pwd.split(',').map(p => p.trim()).filter(p => p.length > 0);
+}
+
+function verifyPassword(env, inputPassword) {
+  const validPasswords = getValidPasswords(env);
+  if (validPasswords.length === 0) return true; // 未设置密码则免验证
+  return validPasswords.includes(inputPassword);
+}
+
+function generateToken() {
+  return crypto.randomUUID();
+}
+
+async function storeToken(env, token) {
+  const tokens = await env.FILE_STRUCTURE_KV.get('auth_tokens', 'json') || [];
+  tokens.push({ token, createdAt: Date.now() });
+  // 清理过期 token（30天）
+  const now = Date.now();
+  const validTokens = tokens.filter(t => now - t.createdAt < 30 * 24 * 60 * 60 * 1000);
+  await env.FILE_STRUCTURE_KV.put('auth_tokens', JSON.stringify(validTokens));
+}
+
+async function verifyToken(env, token) {
+  const tokens = await env.FILE_STRUCTURE_KV.get('auth_tokens', 'json') || [];
+  const found = tokens.find(t => t.token === token);
+  if (!found) return false;
+  // 检查是否过期
+  const now = Date.now();
+  if (now - found.createdAt > 30 * 24 * 60 * 60 * 1000) return false;
+  return true;
 }
 
 export default {
