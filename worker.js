@@ -8,8 +8,8 @@ const HTML = `
   <title>云盘</title>
   <link rel="stylesheet" href="https://unpkg.com/@wangeditor/editor@latest/dist/css/style.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mui-player@latest/dist/mui-player.min.css">
-  <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.5/dist/jsmediatags.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.5/dist/jsmediatags.min.js"><\/script>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"><\/script>
   <style>
     :root { --bg:#f5f7fa; --card:#fff; --text:#1a1a2e; --text-secondary:#6b7280; --accent:#4f6ef7; --accent-light:#eef1ff; --danger:#ef4444; --success:#10b981; --border:#e5e7eb; --shadow:0 2px 8px rgba(0,0,0,0.06); --radius:12px; --radius-sm:8px; }
     * { margin:0; padding:0; box-sizing:border-box; }
@@ -104,8 +104,8 @@ const HTML = `
   <div class="task-backdrop" id="taskBackdrop"></div><div class="task-panel" id="taskPanel"><div class="task-panel-header"><h3>任务列表</h3><button class="btn-text" id="closeTaskBtn">关闭</button></div><div id="taskList"></div></div>
   <div id="modalContainer"></div><div id="toastContainer"></div>
   <div class="upload-progress-overlay" id="uploadProgressOverlay"><div class="upload-progress-info"><span id="uploadProgressText">准备上传...</span><span id="uploadProgressPercent">0%</span></div><div class="upload-progress-bar"><div class="upload-progress-fill" id="uploadProgressFill" style="width:0%"></div></div><div class="btn-row" style="margin-top:10px;"><button class="btn btn-danger" id="cancelUploadBtn" style="flex:0 0 auto;padding:6px 12px;font-size:12px;">取消上传</button></div></div>
-  <script src="https://unpkg.com/@wangeditor/editor@latest/dist/index.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/mui-player@latest/dist/mui-player.min.js"></script>
+  <script src="https://unpkg.com/@wangeditor/editor@latest/dist/index.js"><\/script>
+  <script src="https://cdn.jsdelivr.net/npm/mui-player@latest/dist/mui-player.min.js"><\/script>
   <script>
 
     // ==================== 全局变量 ====================
@@ -119,7 +119,7 @@ const HTML = `
     var currentAudio = null;
     var lyricLines = [];
     var isShareReadonly = false;
-    var activeUploads = {}; // taskId -> { cancelled: false }
+    var activeUploads = {};
     var uploadProgressOverlay = null;
 
     // ==================== 工具函数 ====================
@@ -152,7 +152,7 @@ const HTML = `
       if (item.type === "folder") return "📁";
       var ext = (item.name.split(".").pop() || "").toLowerCase();
       if (["jpg","jpeg","png","gif","webp","svg","bmp","ico"].indexOf(ext) !== -1) return "🖼️";
-      if (["mp4","webm","avi","mov","mkv","flv"].indexOf(ext) !== -1) return "🎬";
+      if (["mp4","webm","avi","mov","mkv","flv","a3v8"].indexOf(ext) !== -1) return "🎬";
       if (["mp3","wav","ogg","flac","m4a"].indexOf(ext) !== -1) return "🎵";
       if (["txt","md","json","js","ts","css","html","xml","yml","yaml","log"].indexOf(ext) !== -1) return "📄";
       if (["zip","rar","7z","tar","gz","bz2"].indexOf(ext) !== -1) return "📦";
@@ -164,7 +164,7 @@ const HTML = `
       if (item.type === "folder") return "folder";
       var ext = (item.name.split(".").pop() || "").toLowerCase();
       if (["jpg","jpeg","png","gif","webp","svg","bmp","ico"].indexOf(ext) !== -1) return "image";
-      if (["mp4","webm","avi","mov","mkv","flv"].indexOf(ext) !== -1) return "video";
+      if (["mp4","webm","avi","mov","mkv","flv","a3v8"].indexOf(ext) !== -1) return "video";
       if (["txt","md","json","js","ts","css","html","xml"].indexOf(ext) !== -1) return "text";
       return "";
     }
@@ -173,7 +173,6 @@ const HTML = `
       return "f_" + Date.now() + "_" + Math.random().toString(36).substr(2, 8);
     }
 
-    // 分块读取 File/Blob 为 base64，避免大文件内存溢出
     function readChunkAsBase64(blob) {
       return new Promise(function(resolve, reject) {
         var reader = new FileReader();
@@ -372,8 +371,18 @@ const HTML = `
 
     function deleteItem(itemId) { var item = findItemInTree(fileTree, itemId); if (!item) return; if (!confirm("确定要删除 " + item.name + " 吗？")) return; if (item.type === "file" && item.chunks > 0) { api("/api/delete-content", { method:"POST", body: { fileId: item.id, chunks: item.chunks } }).catch(function(){}); } removeItemFromTree(fileTree, itemId); saveTree().then(function() { renderFileList(); showToast("已删除"); if (currentView === "detail" && currentDetailItem && currentDetailItem.id === itemId) closeDetail(); }); }
 
-    // ==================== 上传（支持文件夹，分块 base64，可取消） ====================
-    function showUploadModal() { showModal('<h2>上传文件</h2><input type="file" id="fileInput" multiple webkitdirectory directory><div style="font-size:12px;color:var(--text-secondary);margin-bottom:12px;">提示：可选择文件夹上传整个目录</div><div class="btn-row"><button class="btn btn-secondary" id="cancelBtn">取消</button><button class="btn btn-primary" id="uploadBtn">开始上传</button></div>'); document.getElementById("cancelBtn").onclick = closeModal; document.getElementById("uploadBtn").onclick = startUpload; }
+    // ==================== 上传（文件和文件夹分开，确保成功上传） ====================
+    function showUploadModal() { 
+      showModal('<h2>上传文件</h2><input type="file" id="fileInput" multiple><div class="btn-row"><button class="btn btn-secondary" id="cancelBtn">取消</button><button class="btn btn-primary" id="uploadBtn">开始上传</button></div>'); 
+      document.getElementById("cancelBtn").onclick = closeModal; 
+      document.getElementById("uploadBtn").onclick = startUploadFiles; 
+    }
+
+    function showFolderUploadModal() { 
+      showModal('<h2>上传文件夹</h2><input type="file" id="folderInput" webkitdirectory directory multiple><div style="font-size:12px;color:var(--text-secondary);margin-bottom:12px;">提示：选择文件夹上传整个目录</div><div class="btn-row"><button class="btn btn-secondary" id="cancelBtn">取消</button><button class="btn btn-primary" id="uploadBtn">开始上传</button></div>'); 
+      document.getElementById("cancelBtn").onclick = closeModal; 
+      document.getElementById("uploadBtn").onclick = startUploadFolder; 
+    }
 
     function showUploadProgress(text, percent) {
       var overlay = document.getElementById("uploadProgressOverlay");
@@ -391,9 +400,87 @@ const HTML = `
       document.getElementById("uploadProgressPercent").textContent = "0%";
     }
 
-    function startUpload() {
-      var input = document.getElementById("fileInput"); if (!input.files || input.files.length === 0) { showToast("请选择文件"); return; }
-      var files = Array.from(input.files); var uploadPath = currentPath; closeModal();
+    // 文件上传（普通文件，不含文件夹结构）
+    function startUploadFiles() {
+      var input = document.getElementById("fileInput"); 
+      if (!input.files || input.files.length === 0) { showToast("请选择文件"); return; }
+      var files = Array.from(input.files); 
+      var uploadPath = currentPath; 
+      closeModal();
+
+      var fileList = [];
+      for (var i = 0; i < files.length; i++) {
+        var f = files[i];
+        fileList.push({ file: f, name: f.name, folderPath: uploadPath, size: f.size });
+      }
+
+      var totalSize = fileList.reduce(function(sum, e) { return sum + e.size; }, 0);
+      var uploadedSize = 0;
+
+      api("/api/task/create", { method:"POST", body: { type:"upload", name:"上传 " + fileList.length + " 个文件" } }).then(function(taskData) {
+        var taskId = taskData.taskId;
+        activeUploads[taskId] = { cancelled: false };
+        showUploadProgress("准备上传 " + fileList.length + " 个文件...", 0);
+
+        var cancelBtn = document.getElementById("cancelUploadBtn");
+        cancelBtn.onclick = function() {
+          activeUploads[taskId].cancelled = true;
+          showUploadProgress("正在取消...", document.getElementById("uploadProgressFill").style.width.replace("%",""));
+        };
+
+        var queue = Promise.resolve();
+        var completed = 0;
+        for (var i = 0; i < fileList.length; i++) {
+          (function(entry, index) {
+            queue = queue.then(function() {
+              if (activeUploads[taskId].cancelled) return Promise.reject(new Error("用户取消"));
+              return uploadSingleFileOptimized(entry.file, entry.name, entry.folderPath, taskId, function(fileProgress) {
+                var currentUploaded = uploadedSize + entry.size * fileProgress;
+                var overall = (currentUploaded / totalSize) * 100;
+                showUploadProgress("上传中 " + (index + 1) + "/" + fileList.length + " - " + entry.name, overall);
+              }).then(function() {
+                uploadedSize += entry.size;
+                completed++;
+                var overall = (uploadedSize / totalSize) * 100;
+                showUploadProgress("上传中 " + completed + "/" + fileList.length, overall);
+                return api("/api/task/update", { method:"POST", body: { taskId: taskId, progress: Math.round(overall) } });
+              });
+            });
+          })(fileList[i], i);
+        }
+        queue.then(function() {
+          if (activeUploads[taskId].cancelled) {
+            api("/api/task/update", { method:"POST", body: { taskId: taskId, status:"cancelled", progress: Math.round((uploadedSize / totalSize) * 100) } });
+            showToast("上传已取消");
+          } else {
+            api("/api/task/update", { method:"POST", body: { taskId: taskId, progress: 100, status:"completed" } });
+            showToast("上传完成");
+          }
+          hideUploadProgress();
+          delete activeUploads[taskId];
+          loadTree(); loadTasks();
+        }).catch(function(e) {
+          if (e.message === "用户取消") {
+            api("/api/task/update", { method:"POST", body: { taskId: taskId, status:"cancelled", progress: Math.round((uploadedSize / totalSize) * 100) } });
+            showToast("上传已取消");
+          } else {
+            api("/api/task/update", { method:"POST", body: { taskId: taskId, status:"failed", error: e.message } });
+            showToast("上传失败: " + e.message);
+          }
+          hideUploadProgress();
+          delete activeUploads[taskId];
+        });
+      });
+    }
+
+    // 文件夹上传（保留文件夹结构）
+    function startUploadFolder() {
+      var input = document.getElementById("folderInput"); 
+      if (!input.files || input.files.length === 0) { showToast("请选择文件夹"); return; }
+      var files = Array.from(input.files); 
+      var uploadPath = currentPath; 
+      closeModal();
+
       var fileList = [];
       for (var i = 0; i < files.length; i++) {
         var f = files[i];
@@ -404,18 +491,21 @@ const HTML = `
         folderPath = folderPath.replace(/\\/+/g, "/");
         fileList.push({ file: f, name: fileName, folderPath: folderPath, size: f.size });
       }
+
       var totalSize = fileList.reduce(function(sum, e) { return sum + e.size; }, 0);
       var uploadedSize = 0;
-      api("/api/task/create", { method:"POST", body: { type:"upload", name:"上传 " + fileList.length + " 个文件" } }).then(function(taskData) {
+
+      api("/api/task/create", { method:"POST", body: { type:"upload", name:"上传文件夹 " + (files[0].webkitRelativePath ? files[0].webkitRelativePath.split("/")[0] : "") } }).then(function(taskData) {
         var taskId = taskData.taskId;
         activeUploads[taskId] = { cancelled: false };
-        showUploadProgress("准备上传 " + fileList.length + " 个文件...", 0);
-        // 绑定取消按钮
+        showUploadProgress("准备上传文件夹...", 0);
+
         var cancelBtn = document.getElementById("cancelUploadBtn");
         cancelBtn.onclick = function() {
           activeUploads[taskId].cancelled = true;
           showUploadProgress("正在取消...", document.getElementById("uploadProgressFill").style.width.replace("%",""));
         };
+
         var queue = Promise.resolve();
         var completed = 0;
         for (var i = 0; i < fileList.length; i++) {
@@ -469,7 +559,6 @@ const HTML = `
       var ctrl = activeUploads[taskId];
 
       if (file.size <= CHUNK_THRESHOLD) {
-        // 小文件：直接分块读取
         onProgress(0.1);
         return readChunkAsBase64(file).then(function(base64) {
           if (ctrl && ctrl.cancelled) throw new Error("用户取消");
@@ -479,7 +568,6 @@ const HTML = `
           onProgress(1);
         });
       } else {
-        // 大文件：分片上传，每片单独读取 base64
         var chunks = Math.ceil(file.size / CHUNK_SIZE);
         onProgress(0.05);
         return api("/api/upload/init", { method:"POST", body: { fileId: fileId, fileName: fileName, uploadPath: uploadPath, chunks: chunks, chunkSize: CHUNK_SIZE, mimeType: file.type || "application/octet-stream", size: file.size } }).then(function() {
@@ -584,7 +672,6 @@ const HTML = `
         div.innerHTML = '<div class="task-name">' + (task.type === "upload" ? "上传" : task.type === "extract" ? "解压" : "下载") + " " + (task.name || task.url || "未知") + '</div><div class="task-status">' + statusText + (task.progress ? " · " + Math.round(task.progress) + "%" : "") + '</div><div class="progress-bar"><div class="progress-fill ' + statusClass + '" style="width:' + (task.progress || 0) + '%"></div></div>' + (actionsHtml ? '<div class="task-actions">' + actionsHtml + '</div>' : '');
         container.appendChild(div);
       }
-      // 绑定任务操作按钮
       container.querySelectorAll('[data-task-action]').forEach(function(btn) {
         btn.onclick = function() {
           var action = this.getAttribute("data-task-action");
@@ -646,7 +733,12 @@ const HTML = `
 
     function loadPreview(item) {
       var container = document.getElementById("previewContainer"); var ext = (item.name.split(".").pop() || "").toLowerCase();
-      var textExts = ["txt","md","json","js","ts","css","html","xml","log"]; var imageExts = ["jpg","jpeg","png","gif","webp","svg","bmp","ico"]; var videoExts = ["mp4","webm","ogg","mov"]; var audioExts = ["mp3","wav","ogg","flac","m4a"]; var zipExts = ["zip"];
+      var textExts = ["txt","md","json","js","ts","css","html","xml","log"]; 
+      var imageExts = ["jpg","jpeg","png","gif","webp","svg","bmp","ico"]; 
+      var videoExts = ["mp4","webm","ogg","mov","a3v8"]; 
+      var audioExts = ["mp3","wav","ogg","flac","m4a"]; 
+      var zipExts = ["zip"];
+
       if (imageExts.indexOf(ext) !== -1) { container.innerHTML = '<img src="/api/preview-image?fileId=' + item.id + '" alt="预览">'; }
       else if (videoExts.indexOf(ext) !== -1) { container.innerHTML = '<div id="video-player"></div>'; if (typeof MuiPlayer !== "undefined") new MuiPlayer({ container: "#video-player", title: item.name, src: "/api/download?fileId=" + item.id, autoplay: false, width: "100%", height: "auto" }); else container.innerHTML = '<video controls src="/api/download?fileId=' + item.id + '" style="width:100%;"></video>'; }
       else if (audioExts.indexOf(ext) !== -1) {
@@ -666,7 +758,7 @@ const HTML = `
     }
 
     function loadLrcFromFile(item) { var lrcName = item.name.replace(/\.[^.]+$/, "") + ".lrc"; var items = getCurrentFolderItems(); var lrcItem = null; for (var i = 0; i < items.length; i++) { if (items[i].name === lrcName) { lrcItem = items[i]; break; } } if (lrcItem) api("/api/file-content?path=" + encodeURIComponent(joinPath(currentPath, lrcItem.name))).then(function(data) { if (data.base64) displayLyrics(atob(data.base64)); else document.getElementById("lyricsContainer").style.display = "none"; }); else document.getElementById("lyricsContainer").style.display = "none"; }
-    function displayLyrics(lyrics) { var container = document.getElementById("lyricsContainer"); container.style.display = "block"; container.innerHTML = ""; var hasTimestamps = /\[\d{2}:\d{2}(\.\d+)?\]/.test(lyrics); if (hasTimestamps) { lyricLines = []; var lines = lyrics.split(""); for (var i = 0; i < lines.length; i++) { var line = lines[i].trim(); var timeMatch = line.match(/\[(\d{2}):(\d{2})(\.\d+)?\]/); if (timeMatch) { var minutes = parseInt(timeMatch[1]); var seconds = parseFloat(timeMatch[2] + (timeMatch[3] || "")); var text = line.replace(/\[.*?\]/g, "").trim(); if (text) lyricLines.push({ time: minutes * 60 + seconds, text: text }); } } lyricLines.sort(function(a,b){return a.time-b.time}); for (var j = 0; j < lyricLines.length; j++) { var div = document.createElement("div"); div.className = "lyric-line"; div.setAttribute("data-time", lyricLines[j].time); div.textContent = lyricLines[j].text; container.appendChild(div); } } else { container.textContent = lyrics; container.style.whiteSpace = "pre-wrap"; } }
+    function displayLyrics(lyrics) { var container = document.getElementById("lyricsContainer"); container.style.display = "block"; container.innerHTML = ""; var hasTimestamps = /\[\d{2}:\d{2}(\.\d+)?\]/.test(lyrics); if (hasTimestamps) { lyricLines = []; var lines = lyrics.split("\n"); for (var i = 0; i < lines.length; i++) { var line = lines[i].trim(); var timeMatch = line.match(/\[(\d{2}):(\d{2})(\.\d+)?\]/); if (timeMatch) { var minutes = parseInt(timeMatch[1]); var seconds = parseFloat(timeMatch[2] + (timeMatch[3] || "")); var text = line.replace(/\[.*?\]/g, "").trim(); if (text) lyricLines.push({ time: minutes * 60 + seconds, text: text }); } } lyricLines.sort(function(a,b){return a.time-b.time}); for (var j = 0; j < lyricLines.length; j++) { var div = document.createElement("div"); div.className = "lyric-line"; div.setAttribute("data-time", lyricLines[j].time); div.textContent = lyricLines[j].text; container.appendChild(div); } } else { container.textContent = lyrics; container.style.whiteSpace = "pre-wrap"; } }
     function highlightLyric(currentTime) { if (!lyricLines || lyricLines.length === 0) return; var lines = document.querySelectorAll(".lyric-line"); var activeIndex = -1; for (var i = 0; i < lyricLines.length; i++) { if (currentTime >= lyricLines[i].time) activeIndex = i; else break; } for (var j = 0; j < lines.length; j++) { if (j === activeIndex) { lines[j].classList.add("active"); lines[j].scrollIntoView({ block: "center", behavior: "smooth" }); } else lines[j].classList.remove("active"); } }
 
     function editFile(fileId) { var item = findItemInTree(fileTree, fileId); if (item) { openDetail(item); editDetailText(); } }
@@ -678,7 +770,14 @@ const HTML = `
       loadTree(); loadTasks();
       document.getElementById("refreshBtn").onclick = refreshFileList;
       document.getElementById("backBtn").onclick = closeDetail;
-      document.getElementById("fabBtn").onclick = function() { showModal('<h2>添加</h2><div style="display:flex;flex-direction:column;gap:8px;"><button class="btn btn-primary" id="menuUpload">上传文件/文件夹</button><button class="btn btn-secondary" id="menuNewFolder">新建文件夹</button><button class="btn btn-secondary" id="menuNewFile">新建文本文件</button><button class="btn btn-secondary" id="menuOffline">离线下载</button></div>'); document.getElementById("menuUpload").onclick = function() { closeModal(); showUploadModal(); }; document.getElementById("menuNewFolder").onclick = function() { closeModal(); showNewFolderModal(); }; document.getElementById("menuNewFile").onclick = function() { closeModal(); showNewFileModal(); }; document.getElementById("menuOffline").onclick = function() { closeModal(); showOfflineDownloadModal(); }; };
+      document.getElementById("fabBtn").onclick = function() { 
+        showModal('<h2>添加</h2><div style="display:flex;flex-direction:column;gap:8px;"><button class="btn btn-primary" id="menuUpload">上传文件</button><button class="btn btn-primary" id="menuUploadFolder">上传文件夹</button><button class="btn btn-secondary" id="menuNewFolder">新建文件夹</button><button class="btn btn-secondary" id="menuNewFile">新建文本文件</button><button class="btn btn-secondary" id="menuOffline">离线下载</button></div>'); 
+        document.getElementById("menuUpload").onclick = function() { closeModal(); showUploadModal(); }; 
+        document.getElementById("menuUploadFolder").onclick = function() { closeModal(); showFolderUploadModal(); };
+        document.getElementById("menuNewFolder").onclick = function() { closeModal(); showNewFolderModal(); }; 
+        document.getElementById("menuNewFile").onclick = function() { closeModal(); showNewFileModal(); }; 
+        document.getElementById("menuOffline").onclick = function() { closeModal(); showOfflineDownloadModal(); }; 
+      };
       document.getElementById("taskFabBtn").onclick = openTaskPanel;
       document.getElementById("closeTaskBtn").onclick = closeTaskPanel;
       document.getElementById("taskBackdrop").onclick = closeTaskPanel;
@@ -687,6 +786,196 @@ const HTML = `
       setInterval(function() { var oldTasks = JSON.stringify(tasks); loadTasks().then(function() { var newTasks = JSON.stringify(tasks); if (oldTasks !== newTasks) { var hasCompleted = tasks.some(function(t) { return t.status === "completed" || t.status === "failed" || t.status === "cancelled"; }); if (hasCompleted) refreshFileList(); } }); }, 5000);
     }
     init();
+  </script>
+</body>
+</html>
+`;
+
+// 分享页面专用 HTML 模板
+const SHARE_HTML = `
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>文件分享</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mui-player@latest/dist/mui-player.min.css">
+  <style>
+    :root { --bg:#f5f7fa; --card:#fff; --text:#1a1a2e; --text-secondary:#6b7280; --accent:#4f6ef7; --accent-light:#eef1ff; --danger:#ef4444; --success:#10b981; --border:#e5e7eb; --shadow:0 2px 8px rgba(0,0,0,0.06); --radius:12px; --radius-sm:8px; }
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--text); min-height:100vh; padding:16px; }
+    .share-container { max-width:800px; margin:0 auto; }
+    .share-header { text-align:center; padding:20px 0; }
+    .share-header h1 { font-size:24px; font-weight:700; color:var(--accent); }
+    .share-header p { color:var(--text-secondary); margin-top:8px; }
+    .share-card { background:var(--card); border-radius:var(--radius); padding:24px; box-shadow:var(--shadow); border:1px solid var(--border); margin-top:16px; }
+    .detail-header { display:flex; align-items:center; gap:12px; margin-bottom:16px; }
+    .file-icon { width:48px; height:48px; border-radius:var(--radius-sm); display:flex; align-items:center; justify-content:center; font-size:24px; flex-shrink:0; background:var(--accent-light); }
+    .file-icon.folder { background:#fef3c7; }
+    .file-icon.image { background:#e0f2fe; }
+    .file-icon.video { background:#fce7f3; }
+    .file-icon.audio { background:#dcfce7; }
+    .file-icon.text { background:#f3f4f6; }
+    .detail-title { font-size:18px; font-weight:700; word-break:break-all; }
+    .detail-meta { font-size:13px; color:var(--text-secondary); margin-bottom:16px; }
+    .detail-actions { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px; }
+    .btn { padding:10px 16px; border-radius:var(--radius-sm); border:none; font-size:14px; font-weight:600; cursor:pointer; text-align:center; text-decoration:none; display:inline-block; }
+    .btn-primary { background:var(--accent); color:#fff; }
+    .btn-secondary { background:#f3f4f6; color:var(--text); }
+    .preview-container { margin-top:16px; }
+    .preview-container img { max-width:100%; border-radius:8px; }
+    .preview-container video, .preview-container audio { width:100%; border-radius:8px; }
+    .text-preview { white-space:pre-wrap; word-break:break-all; font-family:monospace; background:#f9fafb; padding:12px; border-radius:8px; max-height:400px; overflow-y:auto; }
+    .music-player { display:flex; flex-direction:column; gap:12px; padding:12px; background:#f9fafb; border-radius:8px; }
+    .music-cover { width:120px; height:120px; border-radius:8px; object-fit:cover; background:#e5e7eb; margin:0 auto; }
+    .music-info { text-align:center; }
+    .music-title { font-size:16px; font-weight:700; }
+    .music-artist { font-size:13px; color:var(--text-secondary); }
+    .music-album { font-size:12px; color:var(--text-secondary); }
+    .lyrics-container { max-height:200px; overflow-y:auto; text-align:center; font-size:13px; line-height:1.8; padding:8px; background:#fff; border-radius:8px; }
+    .lyric-line { transition:all 0.3s; cursor:default; }
+    .lyric-line.active { color:var(--accent); font-weight:700; transform:scale(1.05); }
+    .footer { text-align:center; padding:20px; color:var(--text-secondary); font-size:13px; }
+    .footer a { color:var(--accent); text-decoration:none; }
+    .toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:#1f2937; color:#fff; padding:10px 20px; border-radius:8px; font-size:13px; z-index:500; pointer-events:none; }
+    @media (max-width:480px) { .share-card { padding:16px; } }
+  </style>
+</head>
+<body>
+  <div class="share-container">
+    <div class="share-header">
+      <h1>📦 文件分享</h1>
+      <p>有人分享了一个文件给你</p>
+    </div>
+    <div class="share-card">
+      <div class="detail-header">
+        <div class="file-icon" id="fileIcon">📎</div>
+        <div class="detail-title" id="fileName">加载中...</div>
+      </div>
+      <div class="detail-meta" id="fileMeta">加载中...</div>
+      <div class="detail-actions">
+        <a class="btn btn-primary" id="downloadBtn" href="#">下载文件</a>
+        <button class="btn btn-secondary" id="previewBtn" style="display:none;">预览</button>
+      </div>
+      <div class="preview-container" id="previewContainer"></div>
+    </div>
+    <div class="footer">
+      <p>由 <a href="/">云盘</a> 提供分享服务</p>
+    </div>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/mui-player@latest/dist/mui-player.min.js"><\/script>
+  <script>
+    // 分享页面专用脚本
+    var API_BASE = "";
+    var currentItem = null;
+    var currentAudio = null;
+    var lyricLines = [];
+
+    function showToast(msg, duration) {
+      duration = duration || 2000;
+      var toast = document.createElement("div");
+      toast.className = "toast";
+      toast.textContent = msg;
+      document.body.appendChild(toast);
+      setTimeout(function() { toast.remove(); }, duration);
+    }
+
+    function formatSize(bytes) {
+      if (bytes === 0) return "0 B";
+      if (!bytes) return "-";
+      var k = 1024;
+      var sizes = ["B","KB","MB","GB","TB"];
+      var i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
+    }
+
+    function formatTime(ts) {
+      if (!ts) return "-";
+      var d = new Date(ts);
+      return d.toLocaleString("zh-CN", { month:"short", day:"numeric", hour:"2-digit", minute:"2-digit" });
+    }
+
+    function getFileIcon(name) {
+      var ext = (name.split(".").pop() || "").toLowerCase();
+      if (["jpg","jpeg","png","gif","webp","svg","bmp","ico"].indexOf(ext) !== -1) return "🖼️";
+      if (["mp4","webm","avi","mov","mkv","flv","a3v8"].indexOf(ext) !== -1) return "🎬";
+      if (["mp3","wav","ogg","flac","m4a"].indexOf(ext) !== -1) return "🎵";
+      if (["txt","md","json","js","ts","css","html","xml","yml","yaml","log"].indexOf(ext) !== -1) return "📄";
+      if (["zip","rar","7z","tar","gz","bz2"].indexOf(ext) !== -1) return "📦";
+      if (["pdf","doc","docx","xls","xlsx","ppt","pptx"].indexOf(ext) !== -1) return "📑";
+      return "📎";
+    }
+
+    function getIconClass(name) {
+      var ext = (name.split(".").pop() || "").toLowerCase();
+      if (["jpg","jpeg","png","gif","webp","svg","bmp","ico"].indexOf(ext) !== -1) return "image";
+      if (["mp4","webm","avi","mov","mkv","flv","a3v8"].indexOf(ext) !== -1) return "video";
+      if (["mp3","wav","ogg","flac","m4a"].indexOf(ext) !== -1) return "audio";
+      if (["txt","md","json","js","ts","css","html","xml"].indexOf(ext) !== -1) return "text";
+      return "";
+    }
+
+    function loadShareData() {
+      var path = window.location.pathname;
+      var shareId = path.replace("/s/", "");
+
+      fetch(API_BASE + "/api/share-info?shareId=" + encodeURIComponent(shareId))
+        .then(function(res) { return res.json(); })
+        .then(function(data) {
+          if (data.error) { showToast(data.error); return; }
+          currentItem = data.item;
+          renderSharePage();
+        })
+        .catch(function(e) { showToast("加载失败: " + e.message); });
+    }
+
+    function renderSharePage() {
+      var item = currentItem;
+      if (!item) return;
+
+      document.getElementById("fileName").textContent = item.name;
+      document.getElementById("fileIcon").textContent = getFileIcon(item.name);
+      document.getElementById("fileIcon").className = "file-icon " + getIconClass(item.name);
+      document.getElementById("fileMeta").innerHTML = '<span>大小: ' + formatSize(item.size) + '</span> · <span>类型: ' + (item.mimeType || "未知") + '</span>';
+
+      var downloadBtn = document.getElementById("downloadBtn");
+      downloadBtn.href = "/api/download?fileId=" + encodeURIComponent(item.id);
+      downloadBtn.setAttribute("download", item.name);
+
+      var ext = (item.name.split(".").pop() || "").toLowerCase();
+      var previewExts = ["jpg","jpeg","png","gif","webp","svg","bmp","ico","mp4","webm","ogg","mov","a3v8","mp3","wav","ogg","flac","m4a","txt","md","json","js","ts","css","html","xml","log"];
+      if (previewExts.indexOf(ext) !== -1) {
+        document.getElementById("previewBtn").style.display = "inline-block";
+        document.getElementById("previewBtn").onclick = function() { loadPreview(item); };
+      }
+    }
+
+    function loadPreview(item) {
+      var container = document.getElementById("previewContainer");
+      var ext = (item.name.split(".").pop() || "").toLowerCase();
+      var textExts = ["txt","md","json","js","ts","css","html","xml","log"]; 
+      var imageExts = ["jpg","jpeg","png","gif","webp","svg","bmp","ico"]; 
+      var videoExts = ["mp4","webm","ogg","mov","a3v8"]; 
+      var audioExts = ["mp3","wav","ogg","flac","m4a"]; 
+
+      if (imageExts.indexOf(ext) !== -1) { 
+        container.innerHTML = '<img src="/api/preview-image?fileId=' + item.id + '" alt="预览" style="max-width:100%;border-radius:8px;">'; 
+      }
+      else if (videoExts.indexOf(ext) !== -1) { 
+        container.innerHTML = '<video controls src="/api/download?fileId=' + item.id + '" style="width:100%;border-radius:8px;"></video>'; 
+      }
+      else if (audioExts.indexOf(ext) !== -1) {
+        container.innerHTML = '<div class="music-player"><div class="music-info"><div class="music-title">' + item.name + '</div></div><audio controls src="/api/download?fileId=' + item.id + '" style="width:100%;"></audio></div>';
+      }
+      else if (textExts.indexOf(ext) !== -1) { 
+        fetch("/api/file-content?path=" + encodeURIComponent(item.name)).then(function(res) { return res.json(); }).then(function(data) { 
+          if (data.base64) container.innerHTML = '<div class="text-preview">' + atob(data.base64) + '</div>'; 
+        }).catch(function() { container.innerHTML = "<p>无法加载文本预览</p>"; }); 
+      }
+      else container.innerHTML = "<p>该文件类型不支持预览，请下载后查看。</p>";
+    }
+
+    loadShareData();
   </script>
 </body>
 </html>
@@ -906,12 +1195,14 @@ export default {
     if (method === 'OPTIONS') return new Response(null, { headers });
 
     try {
+      // 主页和详情页
       if (path === '/' || path === '/index.html' || path === '/detail') {
         return new Response(HTML, {
           headers: { 'Content-Type': 'text/html;charset=UTF-8', ...headers },
         });
       }
 
+      // 直链下载 /d/{fileId}
       if (path.startsWith('/d/')) {
         const fileId = path.substring(3);
         const tree = await getTree(env);
@@ -927,6 +1218,7 @@ export default {
         });
       }
 
+      // 分享页面 /s/{shareId} - 使用独立的 SHARE_HTML 模板
       if (path.startsWith('/s/')) {
         const shareId = path.substring(3);
         const fileId = await env.FILE_STRUCTURE_KV.get('share:' + shareId);
@@ -934,22 +1226,14 @@ export default {
         const tree = await getTree(env);
         const item = findItemById(tree, fileId);
         if (!item || item.type !== 'file') return new Response('File not found', { status: 404, headers });
-        // 返回详情页 HTML，设置只读模式
-        const detailHtml = HTML.replace(
-          'var isShareReadonly = false;',
-          'var isShareReadonly = true;'
-        ).replace(
-          '    // ==================== 初始化 ====================',
-          '    currentDetailItem = ' + JSON.stringify(item) + '; currentView = "detail";\n    // ==================== 初始化 ===================='
-        ).replace(
-          'document.getElementById("mainView").classList.remove("hidden");',
-          'document.getElementById("mainView").classList.add("hidden"); document.getElementById("detailView").classList.remove("hidden"); renderDetail();'
-        );
-        return new Response(detailHtml, {
+
+        // 返回分享页面 HTML
+        return new Response(SHARE_HTML, {
           headers: { 'Content-Type': 'text/html;charset=UTF-8', ...headers },
         });
       }
 
+      // API 路由
       if (path.startsWith('/api/')) {
         const apiPath = path.substring(4);
         let body = {};
@@ -957,15 +1241,19 @@ export default {
           try { body = await request.json(); } catch (e) {}
         }
 
+        // 获取文件树
         if (apiPath === '/tree' && method === 'GET') {
           const tree = await getTree(env);
           return jsonResponse({ tree }, headers);
         }
+
+        // 保存文件树
         if (apiPath === '/tree' && method === 'PUT') {
           if (body.tree) { await putTree(env, body.tree); return jsonResponse({ success: true }, headers); }
           return jsonResponse({ error: 'Invalid tree' }, headers, 400);
         }
 
+        // 单文件上传
         if (apiPath === '/upload/single' && method === 'POST') {
           const { fileId, fileName, uploadPath, base64, mimeType, size } = body;
           if (!fileId || !fileName || !base64) return jsonResponse({ error: 'Missing fields' }, headers, 400);
@@ -976,6 +1264,7 @@ export default {
           } catch (e) { return jsonResponse({ error: e.message }, headers, 500); }
         }
 
+        // 分片上传初始化
         if (apiPath === '/upload/init' && method === 'POST') {
           const { fileId, fileName, uploadPath, chunks, chunkSize, mimeType, size } = body;
           if (!fileId || !fileName || !chunks) return jsonResponse({ error: 'Missing fields' }, headers, 400);
@@ -983,6 +1272,7 @@ export default {
           return jsonResponse({ success: true }, headers);
         }
 
+        // 上传分片
         if (apiPath === '/upload/chunk' && method === 'POST') {
           const { fileId, chunkIndex, base64 } = body;
           if (!fileId || chunkIndex === undefined || !base64) return jsonResponse({ error: 'Missing fields' }, headers, 400);
@@ -992,6 +1282,7 @@ export default {
           } catch (e) { return jsonResponse({ error: e.message }, headers, 500); }
         }
 
+        // 分片上传完成
         if (apiPath === '/upload/complete' && method === 'POST') {
           const { fileId, chunks } = body;
           if (!fileId || !chunks) return jsonResponse({ error: 'Missing fields' }, headers, 400);
@@ -1003,6 +1294,7 @@ export default {
           return jsonResponse({ success: true }, headers);
         }
 
+        // 删除文件内容
         if (apiPath === '/delete-content' && method === 'POST') {
           const { fileId, chunks } = body;
           if (!fileId) return jsonResponse({ error: 'Missing fileId' }, headers, 400);
@@ -1010,6 +1302,7 @@ export default {
           catch (e) { return jsonResponse({ error: e.message }, headers, 500); }
         }
 
+        // 下载文件
         if (apiPath === '/download' && method === 'GET') {
           const fileId = url.searchParams.get('fileId');
           if (!fileId) return jsonResponse({ error: 'Missing fileId' }, headers, 400);
@@ -1026,6 +1319,7 @@ export default {
           });
         }
 
+        // 图片预览
         if (apiPath === '/preview-image' && method === 'GET') {
           const fileId = url.searchParams.get('fileId');
           if (!fileId) return jsonResponse({ error: 'Missing fileId' }, headers, 400);
@@ -1042,6 +1336,7 @@ export default {
           });
         }
 
+        // 获取文件内容（base64）
         if (apiPath === '/file-content' && method === 'GET') {
           const filePath = url.searchParams.get('path');
           if (!filePath) return jsonResponse({ error: 'Missing path' }, headers, 400);
@@ -1053,6 +1348,7 @@ export default {
           return jsonResponse({ base64 }, headers);
         }
 
+        // 保存文件内容
         if (apiPath === '/save-content' && method === 'POST') {
           const { path, base64, fileId } = body;
           if (!path || !base64 || !fileId) return jsonResponse({ error: 'Missing fields' }, headers, 400);
@@ -1071,6 +1367,7 @@ export default {
           } catch (e) { return jsonResponse({ error: e.message }, headers, 500); }
         }
 
+        // 创建分享链接
         if (apiPath === '/share' && method === 'POST') {
           const { fileId } = body;
           if (!fileId) return jsonResponse({ error: 'Missing fileId' }, headers, 400);
@@ -1079,6 +1376,19 @@ export default {
           return jsonResponse({ shareId }, headers);
         }
 
+        // 获取分享信息（用于分享页面）
+        if (apiPath === '/share-info' && method === 'GET') {
+          const shareId = url.searchParams.get('shareId');
+          if (!shareId) return jsonResponse({ error: 'Missing shareId' }, headers, 400);
+          const fileId = await env.FILE_STRUCTURE_KV.get('share:' + shareId);
+          if (!fileId) return jsonResponse({ error: 'Share link invalid' }, headers, 404);
+          const tree = await getTree(env);
+          const item = findItemById(tree, fileId);
+          if (!item || item.type !== 'file') return jsonResponse({ error: 'File not found' }, headers, 404);
+          return jsonResponse({ item }, headers);
+        }
+
+        // 离线下载
         if (apiPath === '/offline' && method === 'POST') {
           const { url, savePath } = body;
           if (!url || !savePath) return jsonResponse({ error: 'Missing url or savePath' }, headers, 400);
@@ -1087,6 +1397,7 @@ export default {
           return jsonResponse({ success: true, taskId }, headers);
         }
 
+        // 任务相关 API
         if (apiPath === '/task/create' && method === 'POST') {
           const { type, name } = body;
           if (!type || !name) return jsonResponse({ error: 'Missing fields' }, headers, 400);
