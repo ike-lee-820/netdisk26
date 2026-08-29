@@ -401,7 +401,7 @@ const HTML = `
         var pathParts = relativePath.split("/");
         var fileName = pathParts.pop();
         var folderPath = pathParts.length > 0 ? uploadPath + "/" + pathParts.join("/") : uploadPath;
-        folderPath = folderPath.replace(/\/+/g, "/");
+        folderPath = folderPath.replace(/\\/+/g, "/");
         fileList.push({ file: f, name: fileName, folderPath: folderPath, size: f.size });
       }
       var totalSize = fileList.reduce(function(sum, e) { return sum + e.size; }, 0);
@@ -540,7 +540,7 @@ const HTML = `
                   var pathParts = entry.path.split("/");
                   var fileName = pathParts.pop();
                   var folderPath = currentPath + (pathParts.length > 0 ? "/" + pathParts.join("/") : "");
-                  folderPath = folderPath.replace(/\/+/g, "/");
+                  folderPath = folderPath.replace(/\\/+/g, "/");
                   return uploadSingleFileOptimized(new File([blob], fileName), fileName, folderPath, taskId, function(){});
                 }).then(function() {
                   done++;
