@@ -11,7 +11,7 @@ export default {
         hash = (hash * 31 + key.charCodeAt(i)) & 0x7fffffff;
       }
       const idx = Math.abs(hash) % 5;
-      return env[`DATA_KV_${idx}`];
+      return env['DATA_KV_' + idx];
     }
 
     async function getMeta(key, env) {
@@ -119,7 +119,7 @@ export default {
             const chunkBuffer = await file.slice(start, end).arrayBuffer();
             const bytes = new Uint8Array(chunkBuffer);
             const base64 = btoa(new TextDecoder('latin1').decode(bytes));
-            const partKey = `${mainKey}_part_${i}`;
+            const partKey = mainKey + '_part_' + i;
             await dataKV.put(partKey, JSON.stringify({ content: base64 }));
             partKeys.push(partKey);
           }
@@ -159,7 +159,7 @@ export default {
           taskMeta.status = 'running';
           await env.TASK_KV.put(taskId, JSON.stringify(taskMeta));
           const resp = await fetch(downloadUrl);
-          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          if (!resp.ok) throw new Error('HTTP ' + resp.status);
           const contentLength = parseInt(resp.headers.get('content-length')) || 0;
           const reader = resp.body.getReader();
           const CHUNK_SIZE = 10 * 1024 * 1024;
@@ -186,7 +186,7 @@ export default {
               const chunk = buffer.slice(0, CHUNK_SIZE);
               buffer = buffer.slice(CHUNK_SIZE);
               const base64 = btoa(new TextDecoder('latin1').decode(chunk));
-              const partKey = `${mainKey}_part_${partIndex}`;
+              const partKey = mainKey + '_part_' + partIndex;
               await dataKV.put(partKey, JSON.stringify({ content: base64 }));
               partKeys.push(partKey);
               partIndex++;
@@ -194,7 +194,7 @@ export default {
           }
           if (buffer.length > 0) {
             const base64 = btoa(new TextDecoder('latin1').decode(buffer));
-            const partKey = `${mainKey}_part_${partIndex}`;
+            const partKey = mainKey + '_part_' + partIndex;
             await dataKV.put(partKey, JSON.stringify({ content: base64 }));
             partKeys.push(partKey);
           }
@@ -258,7 +258,7 @@ export default {
             try {
               for (const partKey of partKeys) {
                 const partRaw = await dataKV.get(partKey);
-                if (!partRaw) throw new Error(`Missing part: ${partKey}`);
+                if (!partRaw) throw new Error('Missing part: ' + partKey);
                 const partData = JSON.parse(partRaw);
                 const bytes = Uint8Array.from(atob(partData.content), c => c.charCodeAt(0));
                 controller.enqueue(bytes);
@@ -270,7 +270,7 @@ export default {
         return new Response(stream, {
           headers: {
             'Content-Type': contentType,
-            'Content-Disposition': `inline; filename="${encodeURIComponent(filename)}"`,
+            'Content-Disposition': 'inline; filename="' + encodeURIComponent(filename) + '"',
             'Content-Length': size,
           },
         });
@@ -282,7 +282,7 @@ export default {
         return new Response(bytes, {
           headers: {
             'Content-Type': meta.contentType,
-            'Content-Disposition': `inline; filename="${encodeURIComponent(meta.filename)}"`,
+            'Content-Disposition': 'inline; filename="' + encodeURIComponent(meta.filename) + '"',
           },
         });
       }
@@ -299,266 +299,271 @@ export default {
   },
 };
 
-// ---------- HTML 页面 ----------
-const indexHtml = `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>云盘管理器</title>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:system-ui,sans-serif;background:#f5f7fb;padding:20px}
-.container{max-width:1000px;margin:0 auto;background:#fff;border-radius:12px;padding:24px;box-shadow:0 4px 12px rgba(0,0,0,0.06)}
-.header{display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap}
-.header h1{font-weight:500;font-size:20px}
-.breadcrumb{display:flex;align-items:center;gap:6px;font-size:14px;color:#555;flex-wrap:wrap;cursor:pointer}
-.breadcrumb span:hover{text-decoration:underline}
-.toolbar{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
-.toolbar button{background:#f0f2f5;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:14px}
-.toolbar button:hover{background:#e5e7eb}
-.toolbar .primary{background:#2563eb;color:#fff}
-.toolbar .primary:hover{background:#1d4ed8}
-table{width:100%;border-collapse:collapse;font-size:14px}
-th,td{padding:10px 8px;text-align:left;border-bottom:1px solid #eee}
-th{background:#f8f9fa;font-weight:500}
-td .name{display:flex;align-items:center;gap:6px;cursor:pointer}
-td .name:hover{color:#2563eb}
-.folder{font-weight:500}
-.actions a{margin-right:8px;color:#2563eb;text-decoration:none}
-.actions a:hover{text-decoration:underline}
-.modal{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.3);align-items:center;justify-content:center}
-.modal.active{display:flex}
-.modal-content{background:#fff;padding:24px;border-radius:12px;max-width:400px;width:100%}
-.modal-content h2{margin-bottom:12px;font-weight:500}
-.modal-content input{width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;margin-bottom:12px}
-.modal-content button{margin-right:8px;padding:8px 16px;border:none;border-radius:6px;cursor:pointer}
-.modal-content .primary{background:#2563eb;color:#fff}
-.modal-content .primary:hover{background:#1d4ed8}
-.task-panel{margin-top:20px;border-top:1px solid #eee;padding-top:16px}
-.task-panel h3{font-weight:500;margin-bottom:8px}
-.task-item{background:#f8f9fa;padding:8px 12px;border-radius:6px;margin-bottom:6px;font-size:13px;display:flex;justify-content:space-between}
-.progress-bar{width:100px;height:6px;background:#ddd;border-radius:3px;overflow:hidden;display:inline-block;vertical-align:middle}
-.progress-bar .fill{height:100%;background:#2563eb;width:0%}
-</style>
-</head>
-<body>
-<div class="container" id="app">
-  <div class="header">
-    <h1>📁 云盘</h1>
-    <span style="flex:1"></span>
-    <button class="primary" onclick="showUpload()">+ 上传</button>
-    <button onclick="showOffline()">⬇ 离线下载</button>
-    <button onclick="refreshTasks()">🔄 任务</button>
-  </div>
-  <div class="toolbar">
-    <button onclick="mkdir()">新建文件夹</button>
-    <button onclick="renameFile()">重命名</button>
-    <button onclick="refresh()">刷新</button>
-  </div>
-  <div class="breadcrumb" id="breadcrumb"></div>
-  <table>
-    <thead><tr><th>名称</th><th>大小</th><th>上传时间</th><th>操作</th></tr></thead>
-    <tbody id="fileList"></tbody>
-  </table>
-  <div id="taskPanel" class="task-panel" style="display:none">
-    <h3>任务列表</h3>
-    <div id="taskList"></div>
-  </div>
-</div>
-
-<!-- 上传弹窗 -->
-<div class="modal" id="uploadModal">
-  <div class="modal-content">
-    <h2>上传文件/文件夹</h2>
-    <p style="font-size:13px;color:#888;margin-bottom:8px">目标路径：<span id="uploadPathDisplay">/</span></p>
-    <input type="file" id="fileInput" multiple webkitdirectory style="margin-bottom:12px">
-    <button class="primary" onclick="doUpload()">开始上传</button>
-    <button onclick="closeModal('uploadModal')">取消</button>
-  </div>
-</div>
-
-<!-- 离线下载弹窗 -->
-<div class="modal" id="offlineModal">
-  <div class="modal-content">
-    <h2>离线下载</h2>
-    <p style="font-size:13px;color:#888;margin-bottom:8px">支持 HTTP/HTTPS 链接（单文件）</p>
-    <input type="text" id="downloadUrl" placeholder="下载链接" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;margin-bottom:8px">
-    <input type="text" id="downloadPath" placeholder="保存路径（如 /）" value="/" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;margin-bottom:12px">
-    <button class="primary" onclick="doOffline()">开始下载</button>
-    <button onclick="closeModal('offlineModal')">取消</button>
-  </div>
-</div>
-
-<!-- 重命名弹窗 -->
-<div class="modal" id="renameModal">
-  <div class="modal-content">
-    <h2>重命名</h2>
-    <input type="text" id="renameOld" placeholder="旧路径（自动填充）" readonly style="background:#f0f2f5">
-    <input type="text" id="renameNew" placeholder="新名称">
-    <button class="primary" onclick="doRename()">确认</button>
-    <button onclick="closeModal('renameModal')">取消</button>
-  </div>
-</div>
-
-<script>
-let currentPath = '/';
-let fileItems = [];
-let selectedItem = null;
-
-window.onload = function() {
-  refresh();
-  refreshTasks();
-};
-
-async function refresh() {
-  const resp = await fetch('/api/list?path=' + encodeURIComponent(currentPath));
-  const data = await resp.json();
-  fileItems = data.items;
-  renderBreadcrumb();
-  renderList();
-}
-
-function renderBreadcrumb() {
-  const el = document.getElementById('breadcrumb');
-  const parts = currentPath.split('/').filter(p => p);
-  let html = '<span onclick="navigateTo(\'/\')">根目录</span>';
-  let acc = '';
-  for (let p of parts) {
-    acc += '/' + p;
-    html += ' / <span onclick="navigateTo(\'' + acc + '\')">' + p + '</span>';
-  }
-  el.innerHTML = html;
-}
-
-function navigateTo(path) {
-  currentPath = path;
-  refresh();
-}
-
-function renderList() {
-  const tbody = document.getElementById('fileList');
-  if (fileItems.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#888">空目录</td></tr>';
-    return;
-  }
-  let html = '';
-  for (let item of fileItems) {
-    const icon = item.isDir ? '📁' : '📄';
-    const size = item.isDir ? '-' : (item.size / 1024 / 1024).toFixed(2) + ' MB';
-    const date = item.uploadedAt ? new Date(item.uploadedAt).toLocaleString() : '-';
-    const actions = item.isDir ? 
-      `<a href="#" onclick="navigateTo('${currentPath === '/' ? '/' + item.name : currentPath + '/' + item.name}')">打开</a>` :
-      `<a href="/file${currentPath === '/' ? '/' + item.name : currentPath + '/' + item.name}" target="_blank">下载</a> <a href="#" onclick="shareFile('${currentPath === '/' ? '/' + item.name : currentPath + '/' + item.name}')">分享</a>`;
-    html += \`<tr>
-      <td><span class="name" onclick="\${item.isDir ? 'navigateTo(\\'' + (currentPath === '/' ? '/' + item.name : currentPath + '/' + item.name) + '\\')' : ''}">\${icon} \${item.name}</span></td>
-      <td>\${size}</td>
-      <td>\${date}</td>
-      <td class="actions">\${actions}</td>
-    </tr>\`;
-  }
-  tbody.innerHTML = html;
-}
-
-async function mkdir() {
-  const name = prompt('请输入新文件夹名称');
-  if (!name) return;
-  const resp = await fetch('/api/mkdir', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: currentPath, name })
-  });
-  if (resp.ok) refresh();
-  else alert('创建失败');
-}
-
-function renameFile() {
-  const name = prompt('请输入要重命名的文件路径（相对当前目录）');
-  if (!name) return;
-  const newName = prompt('请输入新名称');
-  if (!newName) return;
-  const oldPath = currentPath === '/' ? '/' + name : currentPath + '/' + name;
-  fetch('/api/rename', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ oldPath, newName })
-  }).then(r => r.ok ? refresh() : alert('重命名失败'));
-}
-
-function showUpload() {
-  document.getElementById('uploadPathDisplay').textContent = currentPath;
-  document.getElementById('uploadModal').classList.add('active');
-}
-
-async function doUpload() {
-  const input = document.getElementById('fileInput');
-  const files = input.files;
-  if (files.length === 0) return alert('请选择文件');
-  const path = currentPath;
-  for (let file of files) {
-    const fd = new FormData();
-    fd.append('file', file);
-    fd.append('path', path);
-    await fetch('/api/upload', { method: 'POST', body: fd });
-  }
-  closeModal('uploadModal');
-  refresh();
-}
-
-function showOffline() {
-  document.getElementById('offlineModal').classList.add('active');
-}
-
-async function doOffline() {
-  const url = document.getElementById('downloadUrl').value.trim();
-  const targetPath = document.getElementById('downloadPath').value.trim() || '/';
-  if (!url) return alert('请输入下载链接');
-  const resp = await fetch('/api/offline', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url, targetPath })
-  });
-  if (resp.ok) {
-    alert('任务已创建，请查看任务列表');
-    closeModal('offlineModal');
-    refreshTasks();
-  } else {
-    alert('启动失败');
-  }
-}
-
-async function refreshTasks() {
-  const resp = await fetch('/api/tasks');
-  const data = await resp.json();
-  const panel = document.getElementById('taskPanel');
-  const list = document.getElementById('taskList');
-  if (data.tasks.length === 0) {
-    panel.style.display = 'none';
-    return;
-  }
-  panel.style.display = 'block';
-  let html = '';
-  for (let t of data.tasks) {
-    const status = t.status === 'running' ? '⏳' : t.status === 'completed' ? '✅' : t.status === 'failed' ? '❌' : '⏸️';
-    const progress = t.progress || 0;
-    html += \`<div class="task-item">
-      <span>\${status} \${t.url || '上传任务'} (\${progress}%)</span>
-      <span><span class="progress-bar"><span class="fill" style="width:\${progress}%"></span></span> \${t.status}</span>
-    </div>\`;
-  }
-  list.innerHTML = html;
-}
-
-function shareFile(path) {
-  const url = window.location.origin + '/file' + path;
-  navigator.clipboard.writeText(url).then(() => alert('链接已复制')).catch(() => alert('复制失败'));
-}
-
-function closeModal(id) {
-  document.getElementById(id).classList.remove('active');
-}
-
-setInterval(refreshTasks, 3000);
-</script>
-</body>
-</html>`;
+// ---------- 前端 HTML（所有 JavaScript 已改为字符串拼接，无模板字面量） ----------
+const indexHtml = '<!DOCTYPE html>\n' +
+'<html>\n' +
+'<head>\n' +
+'<meta charset="UTF-8">\n' +
+'<meta name="viewport" content="width=device-width,initial-scale=1.0">\n' +
+'<title>云盘管理器</title>\n' +
+'<style>\n' +
+'*{margin:0;padding:0;box-sizing:border-box}\n' +
+'body{font-family:system-ui,sans-serif;background:#f5f7fb;padding:20px}\n' +
+'.container{max-width:1000px;margin:0 auto;background:#fff;border-radius:12px;padding:24px;box-shadow:0 4px 12px rgba(0,0,0,0.06)}\n' +
+'.header{display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap}\n' +
+'.header h1{font-weight:500;font-size:20px}\n' +
+'.breadcrumb{display:flex;align-items:center;gap:6px;font-size:14px;color:#555;flex-wrap:wrap;cursor:pointer}\n' +
+'.breadcrumb span:hover{text-decoration:underline}\n' +
+'.toolbar{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}\n' +
+'.toolbar button{background:#f0f2f5;border:none;padding:6px 14px;border-radius:6px;cursor:pointer;font-size:14px}\n' +
+'.toolbar button:hover{background:#e5e7eb}\n' +
+'.toolbar .primary{background:#2563eb;color:#fff}\n' +
+'.toolbar .primary:hover{background:#1d4ed8}\n' +
+'table{width:100%;border-collapse:collapse;font-size:14px}\n' +
+'th,td{padding:10px 8px;text-align:left;border-bottom:1px solid #eee}\n' +
+'th{background:#f8f9fa;font-weight:500}\n' +
+'td .name{display:flex;align-items:center;gap:6px;cursor:pointer}\n' +
+'td .name:hover{color:#2563eb}\n' +
+'.folder{font-weight:500}\n' +
+'.actions a{margin-right:8px;color:#2563eb;text-decoration:none}\n' +
+'.actions a:hover{text-decoration:underline}\n' +
+'.modal{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.3);align-items:center;justify-content:center}\n' +
+'.modal.active{display:flex}\n' +
+'.modal-content{background:#fff;padding:24px;border-radius:12px;max-width:400px;width:100%}\n' +
+'.modal-content h2{margin-bottom:12px;font-weight:500}\n' +
+'.modal-content input{width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;margin-bottom:12px}\n' +
+'.modal-content button{margin-right:8px;padding:8px 16px;border:none;border-radius:6px;cursor:pointer}\n' +
+'.modal-content .primary{background:#2563eb;color:#fff}\n' +
+'.modal-content .primary:hover{background:#1d4ed8}\n' +
+'.task-panel{margin-top:20px;border-top:1px solid #eee;padding-top:16px}\n' +
+'.task-panel h3{font-weight:500;margin-bottom:8px}\n' +
+'.task-item{background:#f8f9fa;padding:8px 12px;border-radius:6px;margin-bottom:6px;font-size:13px;display:flex;justify-content:space-between}\n' +
+'.progress-bar{width:100px;height:6px;background:#ddd;border-radius:3px;overflow:hidden;display:inline-block;vertical-align:middle}\n' +
+'.progress-bar .fill{height:100%;background:#2563eb;width:0%}\n' +
+'</style>\n' +
+'</head>\n' +
+'<body>\n' +
+'<div class="container" id="app">\n' +
+'  <div class="header">\n' +
+'    <h1>📁 云盘</h1>\n' +
+'    <span style="flex:1"></span>\n' +
+'    <button class="primary" onclick="showUpload()">+ 上传</button>\n' +
+'    <button onclick="showOffline()">⬇ 离线下载</button>\n' +
+'    <button onclick="refreshTasks()">🔄 任务</button>\n' +
+'  </div>\n' +
+'  <div class="toolbar">\n' +
+'    <button onclick="mkdir()">新建文件夹</button>\n' +
+'    <button onclick="renameFile()">重命名</button>\n' +
+'    <button onclick="refresh()">刷新</button>\n' +
+'  </div>\n' +
+'  <div class="breadcrumb" id="breadcrumb"></div>\n' +
+'  <table>\n' +
+'    <thead><tr><th>名称</th><th>大小</th><th>上传时间</th><th>操作</th></tr></thead>\n' +
+'    <tbody id="fileList"></tbody>\n' +
+'  </table>\n' +
+'  <div id="taskPanel" class="task-panel" style="display:none">\n' +
+'    <h3>任务列表</h3>\n' +
+'    <div id="taskList"></div>\n' +
+'  </div>\n' +
+'</div>\n' +
+'\n' +
+'<!-- 上传弹窗 -->\n' +
+'<div class="modal" id="uploadModal">\n' +
+'  <div class="modal-content">\n' +
+'    <h2>上传文件/文件夹</h2>\n' +
+'    <p style="font-size:13px;color:#888;margin-bottom:8px">目标路径：<span id="uploadPathDisplay">/</span></p>\n' +
+'    <input type="file" id="fileInput" multiple webkitdirectory style="margin-bottom:12px">\n' +
+'    <button class="primary" onclick="doUpload()">开始上传</button>\n' +
+'    <button onclick="closeModal(\'uploadModal\')">取消</button>\n' +
+'  </div>\n' +
+'</div>\n' +
+'\n' +
+'<!-- 离线下载弹窗 -->\n' +
+'<div class="modal" id="offlineModal">\n' +
+'  <div class="modal-content">\n' +
+'    <h2>离线下载</h2>\n' +
+'    <p style="font-size:13px;color:#888;margin-bottom:8px">支持 HTTP/HTTPS 链接（单文件）</p>\n' +
+'    <input type="text" id="downloadUrl" placeholder="下载链接" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;margin-bottom:8px">\n' +
+'    <input type="text" id="downloadPath" placeholder="保存路径（如 /）" value="/" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;margin-bottom:12px">\n' +
+'    <button class="primary" onclick="doOffline()">开始下载</button>\n' +
+'    <button onclick="closeModal(\'offlineModal\')">取消</button>\n' +
+'  </div>\n' +
+'</div>\n' +
+'\n' +
+'<!-- 重命名弹窗 -->\n' +
+'<div class="modal" id="renameModal">\n' +
+'  <div class="modal-content">\n' +
+'    <h2>重命名</h2>\n' +
+'    <input type="text" id="renameOld" placeholder="旧路径（自动填充）" readonly style="background:#f0f2f5">\n' +
+'    <input type="text" id="renameNew" placeholder="新名称">\n' +
+'    <button class="primary" onclick="doRename()">确认</button>\n' +
+'    <button onclick="closeModal(\'renameModal\')">取消</button>\n' +
+'  </div>\n' +
+'</div>\n' +
+'\n' +
+'<script>\n' +
+'let currentPath = \'/\';\n' +
+'let fileItems = [];\n' +
+'\n' +
+'window.onload = function() {\n' +
+'  refresh();\n' +
+'  refreshTasks();\n' +
+'};\n' +
+'\n' +
+'async function refresh() {\n' +
+'  const resp = await fetch(\'/api/list?path=\' + encodeURIComponent(currentPath));\n' +
+'  const data = await resp.json();\n' +
+'  fileItems = data.items;\n' +
+'  renderBreadcrumb();\n' +
+'  renderList();\n' +
+'}\n' +
+'\n' +
+'function renderBreadcrumb() {\n' +
+'  const el = document.getElementById(\'breadcrumb\');\n' +
+'  const parts = currentPath.split(\'/\').filter(function(p) { return p; });\n' +
+'  let html = \'<span onclick="navigateTo(\\\'/\\\')">根目录</span>\';\n' +
+'  let acc = \'\';\n' +
+'  for (let p of parts) {\n' +
+'    acc += \'/\' + p;\n' +
+'    html += \' / <span onclick="navigateTo(\\\'\' + acc + \'\\\')">\' + p + \'</span>\';\n' +
+'  }\n' +
+'  el.innerHTML = html;\n' +
+'}\n' +
+'\n' +
+'function navigateTo(path) {\n' +
+'  currentPath = path;\n' +
+'  refresh();\n' +
+'}\n' +
+'\n' +
+'function renderList() {\n' +
+'  const tbody = document.getElementById(\'fileList\');\n' +
+'  if (fileItems.length === 0) {\n' +
+'    tbody.innerHTML = \'<tr><td colspan="4" style="text-align:center;color:#888">空目录</td></tr>\';\n' +
+'    return;\n' +
+'  }\n' +
+'  let html = \'\';\n' +
+'  for (let item of fileItems) {\n' +
+'    const icon = item.isDir ? \'📁\' : \'📄\';\n' +
+'    const size = item.isDir ? \'-\' : (item.size / 1024 / 1024).toFixed(2) + \' MB\';\n' +
+'    const date = item.uploadedAt ? new Date(item.uploadedAt).toLocaleString() : \'-\';\n' +
+'    let actions;\n' +
+'    if (item.isDir) {\n' +
+'      const navPath = currentPath === \'/\' ? \'/\' + item.name : currentPath + \'/\' + item.name;\n' +
+'      actions = \'<a href="#" onclick="navigateTo(\\\'\' + navPath + \'\\\')">打开</a>\';\n' +
+'    } else {\n' +
+'      const filePath = currentPath === \'/\' ? \'/\' + item.name : currentPath + \'/\' + item.name;\n' +
+'      actions = \'<a href="/file\' + filePath + \'" target="_blank">下载</a> <a href="#" onclick="shareFile(\\\'\' + filePath + \'\\\')">分享</a>\';\n' +
+'    }\n' +
+'    const clickHandler = item.isDir ? \'navigateTo(\\\'\' + (currentPath === \'/\' ? \'/\' + item.name : currentPath + \'/\' + item.name) + \'\\\')\' : \'\';\n' +
+'    html += \'<tr>\' +\n' +
+'      \'<td><span class="name" onclick="\' + clickHandler + \'">\' + icon + \' \' + item.name + \'</span></td>\' +\n' +
+'      \'<td>\' + size + \'</td>\' +\n' +
+'      \'<td>\' + date + \'</td>\' +\n' +
+'      \'<td class="actions">\' + actions + \'</td>\' +\n' +
+'      \'</tr>\';\n' +
+'  }\n' +
+'  tbody.innerHTML = html;\n' +
+'}\n' +
+'\n' +
+'async function mkdir() {\n' +
+'  const name = prompt(\'请输入新文件夹名称\');\n' +
+'  if (!name) return;\n' +
+'  const resp = await fetch(\'/api/mkdir\', {\n' +
+'    method: \'POST\',\n' +
+'    headers: { \'Content-Type\': \'application/json\' },\n' +
+'    body: JSON.stringify({ path: currentPath, name: name })\n' +
+'  });\n' +
+'  if (resp.ok) refresh();\n' +
+'  else alert(\'创建失败\');\n' +
+'}\n' +
+'\n' +
+'function renameFile() {\n' +
+'  const name = prompt(\'请输入要重命名的文件路径（相对当前目录）\');\n' +
+'  if (!name) return;\n' +
+'  const newName = prompt(\'请输入新名称\');\n' +
+'  if (!newName) return;\n' +
+'  const oldPath = currentPath === \'/\' ? \'/\' + name : currentPath + \'/\' + name;\n' +
+'  fetch(\'/api/rename\', {\n' +
+'    method: \'POST\',\n' +
+'    headers: { \'Content-Type\': \'application/json\' },\n' +
+'    body: JSON.stringify({ oldPath: oldPath, newName: newName })\n' +
+'  }).then(function(r) { if (r.ok) refresh(); else alert(\'重命名失败\'); });\n' +
+'}\n' +
+'\n' +
+'function showUpload() {\n' +
+'  document.getElementById(\'uploadPathDisplay\').textContent = currentPath;\n' +
+'  document.getElementById(\'uploadModal\').classList.add(\'active\');\n' +
+'}\n' +
+'\n' +
+'async function doUpload() {\n' +
+'  const input = document.getElementById(\'fileInput\');\n' +
+'  const files = input.files;\n' +
+'  if (files.length === 0) return alert(\'请选择文件\');\n' +
+'  const path = currentPath;\n' +
+'  for (let file of files) {\n' +
+'    const fd = new FormData();\n' +
+'    fd.append(\'file\', file);\n' +
+'    fd.append(\'path\', path);\n' +
+'    await fetch(\'/api/upload\', { method: \'POST\', body: fd });\n' +
+'  }\n' +
+'  closeModal(\'uploadModal\');\n' +
+'  refresh();\n' +
+'}\n' +
+'\n' +
+'function showOffline() {\n' +
+'  document.getElementById(\'offlineModal\').classList.add(\'active\');\n' +
+'}\n' +
+'\n' +
+'async function doOffline() {\n' +
+'  const url = document.getElementById(\'downloadUrl\').value.trim();\n' +
+'  const targetPath = document.getElementById(\'downloadPath\').value.trim() || \'/\';\n' +
+'  if (!url) return alert(\'请输入下载链接\');\n' +
+'  const resp = await fetch(\'/api/offline\', {\n' +
+'    method: \'POST\',\n' +
+'    headers: { \'Content-Type\': \'application/json\' },\n' +
+'    body: JSON.stringify({ url: url, targetPath: targetPath })\n' +
+'  });\n' +
+'  if (resp.ok) {\n' +
+'    alert(\'任务已创建，请查看任务列表\');\n' +
+'    closeModal(\'offlineModal\');\n' +
+'    refreshTasks();\n' +
+'  } else {\n' +
+'    alert(\'启动失败\');\n' +
+'  }\n' +
+'}\n' +
+'\n' +
+'async function refreshTasks() {\n' +
+'  const resp = await fetch(\'/api/tasks\');\n' +
+'  const data = await resp.json();\n' +
+'  const panel = document.getElementById(\'taskPanel\');\n' +
+'  const list = document.getElementById(\'taskList\');\n' +
+'  if (data.tasks.length === 0) {\n' +
+'    panel.style.display = \'none\';\n' +
+'    return;\n' +
+'  }\n' +
+'  panel.style.display = \'block\';\n' +
+'  let html = \'\';\n' +
+'  for (let t of data.tasks) {\n' +
+'    var statusIcon = t.status === \'running\' ? \'⏳\' : t.status === \'completed\' ? \'✅\' : t.status === \'failed\' ? \'❌\' : \'⏸️\';\n' +
+'    var progress = t.progress || 0;\n' +
+'    html += \'<div class="task-item">\' +\n' +
+'      \'<span>\' + statusIcon + \' \' + (t.url || \'上传任务\') + \' (\' + progress + \'%)</span>\' +\n' +
+'      \'<span><span class="progress-bar"><span class="fill" style="width:\' + progress + \'%"></span></span> \' + t.status + \'</span>\' +\n' +
+'      \'</div>\';\n' +
+'  }\n' +
+'  list.innerHTML = html;\n' +
+'}\n' +
+'\n' +
+'function shareFile(path) {\n' +
+'  var url = window.location.origin + \'/file\' + path;\n' +
+'  navigator.clipboard.writeText(url).then(function() { alert(\'链接已复制\'); }).catch(function() { alert(\'复制失败\'); });\n' +
+'}\n' +
+'\n' +
+'function closeModal(id) {\n' +
+'  document.getElementById(id).classList.remove(\'active\');\n' +
+'}\n' +
+'\n' +
+'setInterval(refreshTasks, 3000);\n' +
+'</script>\n' +
+'</body>\n' +
+'</html>';
