@@ -1,4 +1,4 @@
-// worker.js - 修改版
+// worker.js - 优化版
 const HTML = [
   '<!DOCTYPE html>',
   '<html lang="zh-CN">',
@@ -54,9 +54,10 @@ const HTML = [
   '    .task-name { font-size:13px; font-weight:600; word-break:break-all; }',
   '    .task-status { font-size:11px; color:var(--text-secondary); margin-top:4px; }',
   '    .progress-bar { height:4px; background:#e5e7eb; border-radius:2px; margin-top:6px; overflow:hidden; }',
-  '    .progress-fill { height:100%; background:var(--accent); }',
+  '    .progress-fill { height:100%; background:var(--accent); transition:width 0.3s ease; }',
   '    .progress-fill.completed { background:var(--success); }',
   '    .progress-fill.failed { background:var(--danger); }',
+  '    .progress-fill.cancelled { background:#9ca3af; }',
   '    .task-backdrop { position:fixed; inset:0; background:rgba(0,0,0,0.3); z-index:240; opacity:0; pointer-events:none; transition:opacity 0.3s; }',
   '    .task-backdrop.open { opacity:1; pointer-events:auto; }',
   '    .detail-page { max-width:800px; margin:0 auto; padding:16px; }',
@@ -86,6 +87,13 @@ const HTML = [
   '    .zip-tree-item { padding-left:16px; }',
   '    .zip-tree-folder { color:var(--accent); font-weight:600; }',
   '    .share-readonly-badge { display:inline-block; background:var(--accent-light); color:var(--accent); padding:2px 8px; border-radius:4px; font-size:12px; margin-left:8px; }',
+  '    .task-actions { display:flex; gap:6px; margin-top:8px; }',
+  '    .task-actions .btn-text { font-size:11px; padding:3px 8px; }',
+  '    .upload-progress-overlay { position:fixed; bottom:0; left:0; right:0; background:var(--card); padding:12px 16px; box-shadow:0 -2px 10px rgba(0,0,0,0.08); z-index:180; transform:translateY(100%); transition:transform 0.3s ease; }',
+  '    .upload-progress-overlay.show { transform:translateY(0); }',
+  '    .upload-progress-bar { height:6px; background:#e5e7eb; border-radius:3px; overflow:hidden; margin-top:8px; }',
+  '    .upload-progress-fill { height:100%; background:var(--accent); transition:width 0.2s ease; }',
+  '    .upload-progress-info { display:flex; justify-content:space-between; font-size:13px; color:var(--text-secondary); }',
   '    @media (max-width:480px) { .file-item { padding:10px 12px; } .btn-text { padding:3px 8px; font-size:11px; } }',
   '  </style>',
   '</head>',
@@ -95,9 +103,11 @@ const HTML = [
   '  <div id="detailView" class="hidden"><div class="detail-page"><button class="btn btn-secondary" id="backBtn" style="margin-bottom:12px;">返回</button><div class="detail-card" id="detailCard"></div></div></div>',
   '  <div class="task-backdrop" id="taskBackdrop"></div><div class="task-panel" id="taskPanel"><div class="task-panel-header"><h3>任务列表</h3><button class="btn-text" id="closeTaskBtn">关闭</button></div><div id="taskList"></div></div>',
   '  <div id="modalContainer"></div><div id="toastContainer"></div>',
+  '  <div class="upload-progress-overlay" id="uploadProgressOverlay"><div class="upload-progress-info"><span id="uploadProgressText">准备上传...</span><span id="uploadProgressPercent">0%</span></div><div class="upload-progress-bar"><div class="upload-progress-fill" id="uploadProgressFill" style="width:0%"></div></div><div class="btn-row" style="margin-top:10px;"><button class="btn btn-danger" id="cancelUploadBtn" style="flex:0 0 auto;padding:6px 12px;font-size:12px;">取消上传</button></div></div>',
   '  <script src="https://unpkg.com/@wangeditor/editor@latest/dist/index.js"><\/script>',
   '  <script src="https://cdn.jsdelivr.net/npm/mui-player@latest/dist/mui-player.min.js"><\/script>',
   '  <script>',
+
     // ==================== 全局变量 ====================
     var API_BASE = "";
     var currentPath = "/";
@@ -109,6 +119,8 @@ const HTML = [
     var currentAudio = null;
     var lyricLines = [];
     var isShareReadonly = false;
+    var activeUploads = {}; // taskId -> { cancelled: false }
+    var uploadProgressOverlay = null;
 
     // ==================== 工具函数 ====================
     function showToast(msg, duration) {
@@ -161,13 +173,13 @@ const HTML = [
       return "f_" + Date.now() + "_" + Math.random().toString(36).substr(2, 8);
     }
 
-    function arrayBufferToBase64(buffer) {
+    // 分块读取 File/Blob 为 base64，避免大文件内存溢出
+    function readChunkAsBase64(blob) {
       return new Promise(function(resolve, reject) {
-        var blob = new Blob([buffer]);
         var reader = new FileReader();
         reader.onload = function() {
           var result = reader.result;
-          var base64 = result.split(",")[1] || result;
+          var base64 = result.split(",")[1];
           resolve(base64);
         };
         reader.onerror = reject;
@@ -360,8 +372,25 @@ const HTML = [
 
     function deleteItem(itemId) { var item = findItemInTree(fileTree, itemId); if (!item) return; if (!confirm("确定要删除 " + item.name + " 吗？")) return; if (item.type === "file" && item.chunks > 0) { api("/api/delete-content", { method:"POST", body: { fileId: item.id, chunks: item.chunks } }).catch(function(){}); } removeItemFromTree(fileTree, itemId); saveTree().then(function() { renderFileList(); showToast("已删除"); if (currentView === "detail" && currentDetailItem && currentDetailItem.id === itemId) closeDetail(); }); }
 
-    // ==================== 上传（支持文件夹） ====================
+    // ==================== 上传（支持文件夹，分块 base64，可取消） ====================
     function showUploadModal() { showModal('<h2>上传文件</h2><input type="file" id="fileInput" multiple webkitdirectory directory><div style="font-size:12px;color:var(--text-secondary);margin-bottom:12px;">提示：可选择文件夹上传整个目录</div><div class="btn-row"><button class="btn btn-secondary" id="cancelBtn">取消</button><button class="btn btn-primary" id="uploadBtn">开始上传</button></div>'); document.getElementById("cancelBtn").onclick = closeModal; document.getElementById("uploadBtn").onclick = startUpload; }
+
+    function showUploadProgress(text, percent) {
+      var overlay = document.getElementById("uploadProgressOverlay");
+      var fill = document.getElementById("uploadProgressFill");
+      var txt = document.getElementById("uploadProgressText");
+      var pct = document.getElementById("uploadProgressPercent");
+      overlay.classList.add("show");
+      if (text) txt.textContent = text;
+      if (percent !== undefined) { fill.style.width = percent + "%"; pct.textContent = Math.round(percent) + "%"; }
+    }
+
+    function hideUploadProgress() {
+      document.getElementById("uploadProgressOverlay").classList.remove("show");
+      document.getElementById("uploadProgressFill").style.width = "0%";
+      document.getElementById("uploadProgressPercent").textContent = "0%";
+    }
+
     function startUpload() {
       var input = document.getElementById("fileInput"); if (!input.files || input.files.length === 0) { showToast("请选择文件"); return; }
       var files = Array.from(input.files); var uploadPath = currentPath; closeModal();
@@ -373,32 +402,110 @@ const HTML = [
         var fileName = pathParts.pop();
         var folderPath = pathParts.length > 0 ? uploadPath + "/" + pathParts.join("/") : uploadPath;
         folderPath = folderPath.replace(/\/+/g, "/");
-        fileList.push({ file: f, name: fileName, folderPath: folderPath });
+        fileList.push({ file: f, name: fileName, folderPath: folderPath, size: f.size });
       }
+      var totalSize = fileList.reduce(function(sum, e) { return sum + e.size; }, 0);
+      var uploadedSize = 0;
       api("/api/task/create", { method:"POST", body: { type:"upload", name:"上传 " + fileList.length + " 个文件" } }).then(function(taskData) {
-        var taskId = taskData.taskId; showToast("开始上传 " + fileList.length + " 个文件");
-        var queue = Promise.resolve(); var completed = 0;
+        var taskId = taskData.taskId;
+        activeUploads[taskId] = { cancelled: false };
+        showUploadProgress("准备上传 " + fileList.length + " 个文件...", 0);
+        // 绑定取消按钮
+        var cancelBtn = document.getElementById("cancelUploadBtn");
+        cancelBtn.onclick = function() {
+          activeUploads[taskId].cancelled = true;
+          showUploadProgress("正在取消...", document.getElementById("uploadProgressFill").style.width.replace("%",""));
+        };
+        var queue = Promise.resolve();
+        var completed = 0;
         for (var i = 0; i < fileList.length; i++) {
-          (function(entry) { queue = queue.then(function() { return uploadSingleFile(entry.file, entry.name, entry.folderPath, taskId, function(progress) { var overall = ((completed + progress) / fileList.length) * 100; api("/api/task/update", { method:"POST", body: { taskId: taskId, progress: Math.round(overall) } }); }).then(function() { completed++; api("/api/task/update", { method:"POST", body: { taskId: taskId, progress: Math.round((completed / fileList.length) * 100) } }); }); }); })(fileList[i]);
+          (function(entry, index) {
+            queue = queue.then(function() {
+              if (activeUploads[taskId].cancelled) return Promise.reject(new Error("用户取消"));
+              return uploadSingleFileOptimized(entry.file, entry.name, entry.folderPath, taskId, function(fileProgress) {
+                var currentUploaded = uploadedSize + entry.size * fileProgress;
+                var overall = (currentUploaded / totalSize) * 100;
+                showUploadProgress("上传中 " + (index + 1) + "/" + fileList.length + " - " + entry.name, overall);
+              }).then(function() {
+                uploadedSize += entry.size;
+                completed++;
+                var overall = (uploadedSize / totalSize) * 100;
+                showUploadProgress("上传中 " + completed + "/" + fileList.length, overall);
+                return api("/api/task/update", { method:"POST", body: { taskId: taskId, progress: Math.round(overall) } });
+              });
+            });
+          })(fileList[i], i);
         }
-        queue.then(function() { api("/api/task/update", { method:"POST", body: { taskId: taskId, progress: 100, status:"completed" } }); showToast("上传完成"); loadTree(); loadTasks(); }).catch(function(e) { api("/api/task/update", { method:"POST", body: { taskId: taskId, status:"failed", error: e.message } }); showToast("上传失败: " + e.message); });
+        queue.then(function() {
+          if (activeUploads[taskId].cancelled) {
+            api("/api/task/update", { method:"POST", body: { taskId: taskId, status:"cancelled", progress: Math.round((uploadedSize / totalSize) * 100) } });
+            showToast("上传已取消");
+          } else {
+            api("/api/task/update", { method:"POST", body: { taskId: taskId, progress: 100, status:"completed" } });
+            showToast("上传完成");
+          }
+          hideUploadProgress();
+          delete activeUploads[taskId];
+          loadTree(); loadTasks();
+        }).catch(function(e) {
+          if (e.message === "用户取消") {
+            api("/api/task/update", { method:"POST", body: { taskId: taskId, status:"cancelled", progress: Math.round((uploadedSize / totalSize) * 100) } });
+            showToast("上传已取消");
+          } else {
+            api("/api/task/update", { method:"POST", body: { taskId: taskId, status:"failed", error: e.message } });
+            showToast("上传失败: " + e.message);
+          }
+          hideUploadProgress();
+          delete activeUploads[taskId];
+        });
       });
     }
 
-    function uploadSingleFile(file, fileName, uploadPath, taskId, onProgress) {
-      var fileId = generateId(); var CHUNK_THRESHOLD = 15 * 1024 * 1024; var CHUNK_SIZE = 18 * 1024 * 1024;
-      return arrayBufferToBase64(file).then(function(base64) {
-        if (file.size <= CHUNK_THRESHOLD) { onProgress(0.3); return api("/api/upload/single", { method:"POST", body: { fileId: fileId, fileName: fileName, uploadPath: uploadPath, base64: base64, mimeType: file.type || "application/octet-stream", size: file.size } }).then(function() { onProgress(1); }); }
-        else {
-          var chunks = Math.ceil(file.size / CHUNK_SIZE); var chunkList = [];
-          for (var i = 0; i < chunks; i++) { var start = i * CHUNK_SIZE; var end = Math.min(start + CHUNK_SIZE, file.size); chunkList.push(file.slice(start, end)); }
-          return api("/api/upload/init", { method:"POST", body: { fileId: fileId, fileName: fileName, uploadPath: uploadPath, chunks: chunks, chunkSize: CHUNK_SIZE, mimeType: file.type || "application/octet-stream", size: file.size } }).then(function() {
-            var chunkQueue = Promise.resolve();
-            for (var i = 0; i < chunkList.length; i++) { (function(index) { chunkQueue = chunkQueue.then(function() { return arrayBufferToBase64(chunkList[index]).then(function(chunkBase64) { return api("/api/upload/chunk", { method:"POST", body: { fileId: fileId, chunkIndex: index, base64: chunkBase64 } }); }).then(function() { onProgress((index + 1) / chunks); }); }); })(i); }
-            return chunkQueue.then(function() { return api("/api/upload/complete", { method:"POST", body: { fileId: fileId, chunks: chunks } }); });
+    // 优化版：分块读取 base64，避免大文件内存问题，支持进度回调和取消检查
+    function uploadSingleFileOptimized(file, fileName, uploadPath, taskId, onProgress) {
+      var fileId = generateId();
+      var CHUNK_THRESHOLD = 15 * 1024 * 1024;
+      var CHUNK_SIZE = 18 * 1024 * 1024;
+      var ctrl = activeUploads[taskId];
+
+      if (file.size <= CHUNK_THRESHOLD) {
+        // 小文件：直接分块读取
+        onProgress(0.1);
+        return readChunkAsBase64(file).then(function(base64) {
+          if (ctrl && ctrl.cancelled) throw new Error("用户取消");
+          onProgress(0.5);
+          return api("/api/upload/single", { method:"POST", body: { fileId: fileId, fileName: fileName, uploadPath: uploadPath, base64: base64, mimeType: file.type || "application/octet-stream", size: file.size } });
+        }).then(function() {
+          onProgress(1);
+        });
+      } else {
+        // 大文件：分片上传，每片单独读取 base64
+        var chunks = Math.ceil(file.size / CHUNK_SIZE);
+        onProgress(0.05);
+        return api("/api/upload/init", { method:"POST", body: { fileId: fileId, fileName: fileName, uploadPath: uploadPath, chunks: chunks, chunkSize: CHUNK_SIZE, mimeType: file.type || "application/octet-stream", size: file.size } }).then(function() {
+          var chunkQueue = Promise.resolve();
+          for (var i = 0; i < chunks; i++) {
+            (function(index) {
+              chunkQueue = chunkQueue.then(function() {
+                if (ctrl && ctrl.cancelled) throw new Error("用户取消");
+                var start = index * CHUNK_SIZE;
+                var end = Math.min(start + CHUNK_SIZE, file.size);
+                var slice = file.slice(start, end);
+                return readChunkAsBase64(slice).then(function(chunkBase64) {
+                  if (ctrl && ctrl.cancelled) throw new Error("用户取消");
+                  return api("/api/upload/chunk", { method:"POST", body: { fileId: fileId, chunkIndex: index, base64: chunkBase64 } });
+                }).then(function() {
+                  onProgress((index + 1) / chunks);
+                });
+              });
+            })(i);
+          }
+          return chunkQueue.then(function() {
+            if (ctrl && ctrl.cancelled) throw new Error("用户取消");
+            return api("/api/upload/complete", { method:"POST", body: { fileId: fileId, chunks: chunks } });
           });
-        }
-      });
+        });
+      }
     }
 
     // ==================== 下载/分享 ====================
@@ -420,6 +527,7 @@ const HTML = [
         showToast("发现 " + entries.filter(function(e){return !e.dir}).length + " 个文件，开始解压...", 3000);
         return api("/api/task/create", { method:"POST", body: { type:"extract", name:"解压 " + item.name } }).then(function(taskData) {
           var taskId = taskData.taskId;
+          activeUploads[taskId] = { cancelled: false };
           var fileEntries = entries.filter(function(e){return !e.dir});
           var total = fileEntries.length;
           var done = 0;
@@ -427,12 +535,13 @@ const HTML = [
           for (var i = 0; i < fileEntries.length; i++) {
             (function(entry) {
               queue = queue.then(function() {
+                if (activeUploads[taskId] && activeUploads[taskId].cancelled) return Promise.reject(new Error("用户取消"));
                 return entry.async("blob").then(function(blob) {
                   var pathParts = entry.path.split("/");
                   var fileName = pathParts.pop();
                   var folderPath = currentPath + (pathParts.length > 0 ? "/" + pathParts.join("/") : "");
                   folderPath = folderPath.replace(/\/+/g, "/");
-                  return uploadSingleFile(new File([blob], fileName), fileName, folderPath, taskId, function(){});
+                  return uploadSingleFileOptimized(new File([blob], fileName), fileName, folderPath, taskId, function(){});
                 }).then(function() {
                   done++;
                   return api("/api/task/update", { method:"POST", body: { taskId: taskId, progress: Math.round((done / total) * 100) } });
@@ -453,11 +562,56 @@ const HTML = [
     function showOfflineDownloadModal() { showModal('<h2>离线下载</h2><input type="url" id="offlineUrl" placeholder="https://example.com/file.zip"><div class="btn-row"><button class="btn btn-secondary" id="cancelBtn">取消</button><button class="btn btn-primary" id="offlineBtn">开始下载</button></div>'); document.getElementById("cancelBtn").onclick = closeModal; document.getElementById("offlineBtn").onclick = startOfflineDownload; }
     function startOfflineDownload() { var url = document.getElementById("offlineUrl").value.trim(); if (!url) { showToast("请输入下载链接"); return; } closeModal(); api("/api/offline", { method:"POST", body: { url: url, savePath: currentPath } }).then(function() { showToast("离线下载任务已创建"); loadTasks(); }).catch(function(e) { showToast("创建任务失败: " + e.message); }); }
 
-    // ==================== 任务 ====================
+    // ==================== 任务（支持取消和删除） ====================
     function loadTasks() { return api("/api/tasks").then(function(data) { tasks = data.tasks || []; renderTasks(); }); }
-    function renderTasks() { var container = document.getElementById("taskList"); if (tasks.length === 0) { container.innerHTML = '<p style="text-align:center;color:var(--text-secondary);padding:20px;">暂无任务</p>'; return; } container.innerHTML = ""; var sorted = tasks.slice().sort(function(a, b) { return (b.createdAt || 0) - (a.createdAt || 0); }); for (var i = 0; i < sorted.length; i++) { var task = sorted[i]; var statusClass = task.status === "completed" ? "completed" : task.status === "failed" ? "failed" : ""; var statusText = task.status === "completed" ? "完成" : task.status === "failed" ? "失败" : task.status === "processing" ? "处理中" : "等待中"; var div = document.createElement("div"); div.className = "task-item"; div.innerHTML = '<div class="task-name">' + (task.type === "upload" ? "上传" : task.type === "extract" ? "解压" : "下载") + " " + (task.name || task.url || "未知") + '</div><div class="task-status">' + statusText + (task.progress ? " · " + Math.round(task.progress) + "%" : "") + '</div><div class="progress-bar"><div class="progress-fill ' + statusClass + '" style="width:' + (task.progress || 0) + '%"></div></div>'; container.appendChild(div); } }
+    function renderTasks() {
+      var container = document.getElementById("taskList");
+      if (tasks.length === 0) { container.innerHTML = '<p style="text-align:center;color:var(--text-secondary);padding:20px;">暂无任务</p>'; return; }
+      container.innerHTML = "";
+      var sorted = tasks.slice().sort(function(a, b) { return (b.createdAt || 0) - (a.createdAt || 0); });
+      for (var i = 0; i < sorted.length; i++) {
+        var task = sorted[i];
+        var statusClass = task.status === "completed" ? "completed" : task.status === "failed" ? "failed" : task.status === "cancelled" ? "cancelled" : "";
+        var statusText = task.status === "completed" ? "完成" : task.status === "failed" ? "失败" : task.status === "cancelled" ? "已取消" : task.status === "processing" ? "处理中" : "等待中";
+        var actionsHtml = "";
+        if (task.status === "processing") {
+          actionsHtml += '<button class="btn-text" data-task-action="cancel" data-task-id="' + task.id + '">取消</button>';
+        }
+        if (task.status === "completed" || task.status === "failed" || task.status === "cancelled") {
+          actionsHtml += '<button class="btn-text danger" data-task-action="delete" data-task-id="' + task.id + '">删除</button>';
+        }
+        var div = document.createElement("div"); div.className = "task-item";
+        div.innerHTML = '<div class="task-name">' + (task.type === "upload" ? "上传" : task.type === "extract" ? "解压" : "下载") + " " + (task.name || task.url || "未知") + '</div><div class="task-status">' + statusText + (task.progress ? " · " + Math.round(task.progress) + "%" : "") + '</div><div class="progress-bar"><div class="progress-fill ' + statusClass + '" style="width:' + (task.progress || 0) + '%"></div></div>' + (actionsHtml ? '<div class="task-actions">' + actionsHtml + '</div>' : '');
+        container.appendChild(div);
+      }
+      // 绑定任务操作按钮
+      container.querySelectorAll('[data-task-action]').forEach(function(btn) {
+        btn.onclick = function() {
+          var action = this.getAttribute("data-task-action");
+          var taskId = this.getAttribute("data-task-id");
+          if (action === "cancel") { cancelTask(taskId); }
+          else if (action === "delete") { deleteTask(taskId); }
+        };
+      });
+    }
     function openTaskPanel() { document.getElementById("taskPanel").classList.add("open"); document.getElementById("taskBackdrop").classList.add("open"); loadTasks(); }
     function closeTaskPanel() { document.getElementById("taskPanel").classList.remove("open"); document.getElementById("taskBackdrop").classList.remove("open"); }
+
+    function cancelTask(taskId) {
+      if (activeUploads[taskId]) {
+        activeUploads[taskId].cancelled = true;
+      }
+      api("/api/task/update", { method:"POST", body: { taskId: taskId, status:"cancelled" } }).then(function() {
+        showToast("任务已取消"); loadTasks();
+      }).catch(function(e) { showToast("取消失败: " + e.message); });
+    }
+
+    function deleteTask(taskId) {
+      if (!confirm("确定要删除此任务记录吗？")) return;
+      api("/api/task/delete", { method:"POST", body: { taskId: taskId } }).then(function() {
+        showToast("任务已删除"); loadTasks();
+      }).catch(function(e) { showToast("删除失败: " + e.message); });
+    }
 
     // ==================== 详情页 ====================
     function openDetail(item, updateUrl) { if (updateUrl !== false) { history.pushState({ fileId: item.id }, "", "/detail?file=" + item.id); } currentDetailItem = item; currentView = "detail"; document.getElementById("mainView").classList.add("hidden"); document.getElementById("detailView").classList.remove("hidden"); renderDetail(); }
@@ -530,7 +684,7 @@ const HTML = [
       document.getElementById("taskBackdrop").onclick = closeTaskPanel;
       window.addEventListener("popstate", function(e) { if (e.state && e.state.fileId) { var item = findItemInTree(fileTree, e.state.fileId); if (item) openDetail(item, false); else closeDetail(); } else { currentView = "list"; document.getElementById("detailView").classList.add("hidden"); document.getElementById("mainView").classList.remove("hidden"); refreshFileList(); } });
       var params = new URLSearchParams(window.location.search); var fileId = params.get("file"); if (fileId) { loadTree().then(function() { var item = findItemInTree(fileTree, fileId); if (item && item.type !== "folder") openDetail(item, false); }); }
-      setInterval(function() { var oldTasks = JSON.stringify(tasks); loadTasks().then(function() { var newTasks = JSON.stringify(tasks); if (oldTasks !== newTasks) { var hasCompleted = tasks.some(function(t) { return t.status === "completed" || t.status === "failed"; }); if (hasCompleted) refreshFileList(); } }); }, 5000);
+      setInterval(function() { var oldTasks = JSON.stringify(tasks); loadTasks().then(function() { var newTasks = JSON.stringify(tasks); if (oldTasks !== newTasks) { var hasCompleted = tasks.some(function(t) { return t.status === "completed" || t.status === "failed" || t.status === "cancelled"; }); if (hasCompleted) refreshFileList(); } }); }, 5000);
     }
     init();
   <\/script>
@@ -706,6 +860,12 @@ async function updateTask(env, taskId, updates) {
   }
 }
 
+async function deleteTask(env, taskId) {
+  const tasks = await env.TASK_KV.get('tasks', 'json') || [];
+  const filtered = tasks.filter(t => t.id !== taskId);
+  await env.TASK_KV.put('tasks', JSON.stringify(filtered));
+}
+
 async function handleOfflineDownload(env, url, savePath, taskId) {
   try {
     const response = await fetch(url);
@@ -777,7 +937,13 @@ export default {
         // 返回详情页 HTML，设置只读模式
         const detailHtml = HTML.replace(
           'var isShareReadonly = false;',
-          'var isShareReadonly = true; currentDetailItem = ' + JSON.stringify(item) + '; currentView = "detail"; document.getElementById("mainView").classList.add("hidden"); document.getElementById("detailView").classList.remove("hidden"); renderDetail();'
+          'var isShareReadonly = true;'
+        ).replace(
+          '    // ==================== 初始化 ====================',
+          '    currentDetailItem = ' + JSON.stringify(item) + '; currentView = "detail";\n    // ==================== 初始化 ===================='
+        ).replace(
+          'document.getElementById("mainView").classList.remove("hidden");',
+          'document.getElementById("mainView").classList.add("hidden"); document.getElementById("detailView").classList.remove("hidden"); renderDetail();'
         );
         return new Response(detailHtml, {
           headers: { 'Content-Type': 'text/html;charset=UTF-8', ...headers },
@@ -936,6 +1102,13 @@ export default {
           if (status) updates.status = status;
           if (error) updates.error = error;
           await updateTask(env, taskId, updates);
+          return jsonResponse({ success: true }, headers);
+        }
+
+        if (apiPath === '/task/delete' && method === 'POST') {
+          const { taskId } = body;
+          if (!taskId) return jsonResponse({ error: 'Missing taskId' }, headers, 400);
+          await deleteTask(env, taskId);
           return jsonResponse({ success: true }, headers);
         }
 
