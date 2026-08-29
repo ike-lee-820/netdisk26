@@ -7,6 +7,7 @@ const HTML = `<!DOCTYPE html>
     <title>云盘</title>
     <link rel="stylesheet" href="https://unpkg.com/@wangeditor/editor@latest/dist/css/style.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mui-player@latest/dist/mui-player.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.5/dist/jsmediatags.min.js"></script>
     <style>
         :root {
             --bg: #f5f7fa;
@@ -140,6 +141,60 @@ const HTML = `<!DOCTYPE html>
         .editor-wrapper { border:1px solid #ccc; z-index:100; }
         .toolbar-container { border-bottom:1px solid #ccc; }
         .editor-container { height:400px; }
+        .hidden { display: none !important; }
+
+        /* 音乐播放器样式 */
+        .music-player {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            padding: 12px;
+            background: #f9fafb;
+            border-radius: 8px;
+        }
+        .music-cover {
+            width: 120px;
+            height: 120px;
+            border-radius: 8px;
+            object-fit: cover;
+            background: #e5e7eb;
+            margin: 0 auto;
+        }
+        .music-info {
+            text-align: center;
+        }
+        .music-title {
+            font-size: 16px;
+            font-weight: 700;
+        }
+        .music-artist {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+        .music-album {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+        .lyrics-container {
+            max-height: 200px;
+            overflow-y: auto;
+            text-align: center;
+            font-size: 13px;
+            line-height: 1.8;
+            padding: 8px;
+            background: #fff;
+            border-radius: 8px;
+        }
+        .lyric-line {
+            transition: all 0.3s;
+            cursor: default;
+        }
+        .lyric-line.active {
+            color: var(--accent);
+            font-weight: 700;
+            transform: scale(1.05);
+        }
+
         @media (max-width:480px) {
             .file-item { padding:10px 12px; }
             .btn-text { padding:3px 8px; font-size:11px; }
@@ -191,6 +246,8 @@ const HTML = `<!DOCTYPE html>
         var pendingUploads = [];
         var currentView = 'list';
         var currentDetailItem = null;
+        var currentAudio = null; // 当前音频元素
+        var lyricLines = []; // 歌词行数据
 
         // ==================== 工具函数 ====================
         function showToast(msg, duration) {
@@ -404,6 +461,8 @@ const HTML = `<!DOCTYPE html>
             document.getElementById('detailView').classList.add('hidden');
             renderBreadcrumb();
             renderFileList();
+            if (history.state && history.state.path === path) return;
+            history.pushState({ path: path }, '', path === '/' ? '/' : path);
         }
 
         function loadTree() {
@@ -586,7 +645,6 @@ const HTML = `<!DOCTYPE html>
             var files = Array.from(input.files);
             var uploadPath = currentPath;
             closeModal();
-            // 创建总任务
             api('/api/task/create', { method:'POST', body: { type:'upload', name:'上传 ' + files.length + ' 个文件' } }).then(function(taskData) {
                 var taskId = taskData.taskId;
                 showToast('开始上传 ' + files.length + ' 个文件');
@@ -619,24 +677,16 @@ const HTML = `<!DOCTYPE html>
 
         function uploadSingleFile(file, fileName, uploadPath, taskId, onProgress) {
             var fileId = generateId();
-            var CHUNK_THRESHOLD = 15 * 1024 * 1024; // 15MB
-            var CHUNK_SIZE = 18 * 1024 * 1024; // 18MB
+            var CHUNK_THRESHOLD = 15 * 1024 * 1024;
+            var CHUNK_SIZE = 18 * 1024 * 1024;
             return arrayBufferToBase64(file).then(function(base64) {
                 if (file.size <= CHUNK_THRESHOLD) {
                     onProgress(0.3);
                     return api('/api/upload/single', {
                         method:'POST',
-                        body: {
-                            fileId: fileId,
-                            fileName: fileName,
-                            uploadPath: uploadPath,
-                            base64: base64,
-                            mimeType: file.type || 'application/octet-stream',
-                            size: file.size
-                        }
+                        body: { fileId: fileId, fileName: fileName, uploadPath: uploadPath, base64: base64, mimeType: file.type || 'application/octet-stream', size: file.size }
                     }).then(function() { onProgress(1); });
                 } else {
-                    // 分片上传
                     var chunks = Math.ceil(file.size / CHUNK_SIZE);
                     var chunkList = [];
                     for (var i = 0; i < chunks; i++) {
@@ -644,32 +694,16 @@ const HTML = `<!DOCTYPE html>
                         var end = Math.min(start + CHUNK_SIZE, file.size);
                         chunkList.push(file.slice(start, end));
                     }
-                    // 初始化分片
                     return api('/api/upload/init', {
                         method:'POST',
-                        body: {
-                            fileId: fileId,
-                            fileName: fileName,
-                            uploadPath: uploadPath,
-                            chunks: chunks,
-                            chunkSize: CHUNK_SIZE,
-                            mimeType: file.type || 'application/octet-stream',
-                            size: file.size
-                        }
+                        body: { fileId: fileId, fileName: fileName, uploadPath: uploadPath, chunks: chunks, chunkSize: CHUNK_SIZE, mimeType: file.type || 'application/octet-stream', size: file.size }
                     }).then(function() {
                         var chunkQueue = Promise.resolve();
                         for (var i = 0; i < chunkList.length; i++) {
                             (function(index) {
                                 chunkQueue = chunkQueue.then(function() {
                                     return arrayBufferToBase64(chunkList[index]).then(function(chunkBase64) {
-                                        return api('/api/upload/chunk', {
-                                            method:'POST',
-                                            body: {
-                                                fileId: fileId,
-                                                chunkIndex: index,
-                                                base64: chunkBase64
-                                            }
-                                        });
+                                        return api('/api/upload/chunk', { method:'POST', body: { fileId: fileId, chunkIndex: index, base64: chunkBase64 } });
                                     }).then(function() {
                                         onProgress((index + 1) / chunks);
                                     });
@@ -677,10 +711,7 @@ const HTML = `<!DOCTYPE html>
                             })(i);
                         }
                         return chunkQueue.then(function() {
-                            return api('/api/upload/complete', {
-                                method:'POST',
-                                body: { fileId: fileId, chunks: chunks }
-                            });
+                            return api('/api/upload/complete', { method:'POST', body: { fileId: fileId, chunks: chunks } });
                         });
                     });
                 }
@@ -758,14 +789,19 @@ const HTML = `<!DOCTYPE html>
         }
 
         // ==================== 详情页 ====================
-        function openDetail(item) {
+        function openDetail(item, updateUrl) {
+            if (updateUrl !== false) {
+                history.pushState({ fileId: item.id }, '', '/detail?file=' + item.id);
+            }
             currentDetailItem = item;
             currentView = 'detail';
             document.getElementById('mainView').classList.add('hidden');
             document.getElementById('detailView').classList.remove('hidden');
             renderDetail();
         }
+
         function closeDetail() {
+            history.pushState({}, '', currentPath === '/' ? '/' : currentPath);
             currentView = 'list';
             currentDetailItem = null;
             document.getElementById('detailView').classList.add('hidden');
@@ -813,6 +849,7 @@ const HTML = `<!DOCTYPE html>
             var imageExts = ['jpg','jpeg','png','gif','webp','svg','bmp','ico'];
             var videoExts = ['mp4','webm','ogg','mov'];
             var audioExts = ['mp3','wav','ogg','flac','m4a'];
+
             if (imageExts.indexOf(ext) !== -1) {
                 container.innerHTML = '<img src="/api/preview-image?fileId=' + item.id + '" alt="预览">';
             } else if (videoExts.indexOf(ext) !== -1) {
@@ -826,7 +863,67 @@ const HTML = `<!DOCTYPE html>
                     height: 'auto'
                 });
             } else if (audioExts.indexOf(ext) !== -1) {
-                container.innerHTML = '<audio controls src="/api/download?fileId=' + item.id + '" style="width:100%;"></audio>';
+                // 音乐播放器增强
+                container.innerHTML = '<div class="music-player" id="musicPlayer">' +
+                    '<img class="music-cover" id="musicCover" style="display:none;" alt="封面">' +
+                    '<div class="music-info">' +
+                        '<div class="music-title" id="musicTitle">' + item.name + '</div>' +
+                        '<div class="music-artist" id="musicArtist"></div>' +
+                        '<div class="music-album" id="musicAlbum"></div>' +
+                    '</div>' +
+                    '<audio controls src="/api/download?fileId=' + item.id + '" id="musicAudio"></audio>' +
+                    '<div class="lyrics-container" id="lyricsContainer" style="display:none;"></div>' +
+                '</div>';
+
+                // 解析音乐元数据
+                fetch('/api/download?fileId=' + item.id)
+                    .then(response => response.blob())
+                    .then(blob => {
+                        jsmediatags.read(blob, {
+                            onSuccess: function(tag) {
+                                var tags = tag.tags;
+                                if (tags.picture) {
+                                    var picture = tags.picture;
+                                    var base64String = '';
+                                    for (var i = 0; i < picture.data.length; i++) {
+                                        base64String += String.fromCharCode(picture.data[i]);
+                                    }
+                                    var coverUrl = 'data:' + picture.format + ';base64,' + btoa(base64String);
+                                    var coverImg = document.getElementById('musicCover');
+                                    coverImg.src = coverUrl;
+                                    coverImg.style.display = 'block';
+                                }
+                                if (tags.title) {
+                                    document.getElementById('musicTitle').textContent = tags.title;
+                                }
+                                if (tags.artist) {
+                                    document.getElementById('musicArtist').textContent = tags.artist;
+                                }
+                                if (tags.album) {
+                                    document.getElementById('musicAlbum').textContent = tags.album;
+                                }
+                                if (tags.lyrics) {
+                                    var lyrics = tags.lyrics.lyrics || tags.lyrics;
+                                    displayLyrics(lyrics);
+                                } else {
+                                    // 尝试加载同名lrc文件
+                                    loadLrcFromFile(item);
+                                }
+                            },
+                            onError: function(error) {
+                                console.log('元数据解析失败', error);
+                                loadLrcFromFile(item);
+                            }
+                        });
+                    });
+
+                // 监听播放时间更新歌词
+                var audio = document.getElementById('musicAudio');
+                currentAudio = audio;
+                audio.addEventListener('timeupdate', function() {
+                    var currentTime = audio.currentTime;
+                    highlightLyric(currentTime);
+                });
             } else if (textExts.indexOf(ext) !== -1) {
                 api('/api/file-content?path=' + encodeURIComponent(joinPath(currentPath, item.name))).then(function(data) {
                     if (data.base64) {
@@ -837,6 +934,85 @@ const HTML = `<!DOCTYPE html>
                 });
             } else {
                 container.innerHTML = '<p>该文件类型不支持预览，请下载后查看。</p>';
+            }
+        }
+
+        function loadLrcFromFile(item) {
+            var lrcName = item.name.replace(/\.[^.]+$/, '') + '.lrc';
+            var items = getCurrentFolderItems();
+            var lrcItem = null;
+            for (var i = 0; i < items.length; i++) {
+                if (items[i].name === lrcName) {
+                    lrcItem = items[i];
+                    break;
+                }
+            }
+            if (lrcItem) {
+                api('/api/file-content?path=' + encodeURIComponent(joinPath(currentPath, lrcItem.name))).then(function(data) {
+                    if (data.base64) {
+                        var lyrics = atob(data.base64);
+                        displayLyrics(lyrics);
+                    } else {
+                        document.getElementById('lyricsContainer').style.display = 'none';
+                    }
+                });
+            } else {
+                document.getElementById('lyricsContainer').style.display = 'none';
+            }
+        }
+
+        function displayLyrics(lyrics) {
+            var container = document.getElementById('lyricsContainer');
+            container.style.display = 'block';
+            container.innerHTML = '';
+            var lines = lyrics.split('\n');
+            var hasTimestamps = /\[\d{2}:\d{2}(\.\d+)?\]/.test(lyrics);
+            if (hasTimestamps) {
+                lyricLines = [];
+                for (var i = 0; i < lines.length; i++) {
+                    var line = lines[i].trim();
+                    var timeMatch = line.match(/\[(\d{2}):(\d{2})(\.\d+)?\]/);
+                    if (timeMatch) {
+                        var minutes = parseInt(timeMatch[1]);
+                        var seconds = parseFloat(timeMatch[2] + (timeMatch[3] || ''));
+                        var text = line.replace(/\[.*?\]/g, '').trim();
+                        if (text) {
+                            lyricLines.push({ time: minutes * 60 + seconds, text: text });
+                        }
+                    }
+                }
+                lyricLines.sort(function(a, b) { return a.time - b.time; });
+                for (var j = 0; j < lyricLines.length; j++) {
+                    var div = document.createElement('div');
+                    div.className = 'lyric-line';
+                    div.setAttribute('data-time', lyricLines[j].time);
+                    div.textContent = lyricLines[j].text;
+                    container.appendChild(div);
+                }
+            } else {
+                container.textContent = lyrics;
+                container.style.whiteSpace = 'pre-wrap';
+            }
+        }
+
+        function highlightLyric(currentTime) {
+            if (!lyricLines || lyricLines.length === 0) return;
+            var lines = document.querySelectorAll('.lyric-line');
+            var activeIndex = -1;
+            for (var i = 0; i < lyricLines.length; i++) {
+                if (currentTime >= lyricLines[i].time) {
+                    activeIndex = i;
+                } else {
+                    break;
+                }
+            }
+            for (var j = 0; j < lines.length; j++) {
+                if (j === activeIndex) {
+                    lines[j].classList.add('active');
+                    lines[j].scrollIntoView({ block: 'center', behavior: 'smooth' });
+                } else {
+                    lines[j].classList.remove('active');
+                }
             }
         }
 
@@ -910,6 +1086,37 @@ const HTML = `<!DOCTYPE html>
             };
             document.getElementById('closeTaskBtn').onclick = closeTaskPanel;
             document.getElementById('taskBackdrop').onclick = closeTaskPanel;
+
+            // 浏览器前进/后退
+            window.addEventListener('popstate', function(e) {
+                if (e.state && e.state.fileId) {
+                    var item = findItemInTree(fileTree, e.state.fileId);
+                    if (item) {
+                        openDetail(item, false);
+                    } else {
+                        closeDetail();
+                    }
+                } else {
+                    currentView = 'list';
+                    document.getElementById('detailView').classList.add('hidden');
+                    document.getElementById('mainView').classList.remove('hidden');
+                    refreshFileList();
+                }
+            });
+
+            // 根据URL参数自动打开详情页
+            var params = new URLSearchParams(window.location.search);
+            var fileId = params.get('file');
+            if (fileId) {
+                loadTree().then(function() {
+                    var item = findItemInTree(fileTree, fileId);
+                    if (item && item.type !== 'folder') {
+                        openDetail(item, false);
+                    }
+                });
+            }
+
+            // 自动刷新任务
             setInterval(function() {
                 var oldTasks = JSON.stringify(tasks);
                 loadTasks().then(function() {
