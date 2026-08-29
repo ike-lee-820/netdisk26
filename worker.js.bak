@@ -579,29 +579,187 @@ const HTML = `<!DOCTYPE html>
         }
 
         async function renderDetail() {
-    const item = currentDetailItem;
-    const card = document.getElementById('detailCard');
-    let actionsHtml = '<button class="btn btn-primary" onclick="downloadDetailFile()">下载</button>' +
-        '<button class="btn btn-secondary" onclick="shareDetailFile()">分享</button>' +
-        '<button class="btn btn-secondary" onclick="getDetailDirectLink()">获取直链</button>' +
-        '<button class="btn btn-secondary" onclick="renameDetailItem()">重命名</button>' +
-        '<button class="btn btn-danger" onclick="deleteDetailItem()">删除</button>';
-    const ext = (item.name.split('.').pop() || '').toLowerCase();
-    if (['txt','md','json','js','ts','css','html','xml','log'].includes(ext)) {
-        actionsHtml += '<button class="btn btn-secondary" onclick="editDetailText()">编辑</button>';
-    }
-    card.innerHTML = '<div class="detail-header">' +
-        '<div class="file-icon ' + getIconClass(item) + '" style="width:48px;height:48px;font-size:24px;">' + getFileIcon(item) + '</div>' +
-        '<div class="detail-title">' + item.name + '</div>' +
-        '</div>' +
-        '<div class="detail-meta">' +
-        '<span>大小: ' + formatSize(item.size) + '</span> · ' +
-        '<span>修改时间: ' + formatTime(item.updatedAt || item.createdAt) + '</span> · ' +
-        '<span>类型: ' + (item.mimeType || '未知') + '</span>' +
-        '</div>' +
-        '<div class="detail-actions">' + actionsHtml + '</div>' +
-        '<div class="preview-container" id="previewContainer"></div>';
-    await loadPreview(item);
+            const item = currentDetailItem;
+            const card = document.getElementById('detailCard');
+            let actionsHtml = '<button class="btn btn-primary" onclick="downloadDetailFile()">下载</button>' +
+                '<button class="btn btn-secondary" onclick="shareDetailFile()">分享</button>' +
+                '<button class="btn btn-secondary" onclick="getDetailDirectLink()">获取直链</button>' +
+                '<button class="btn btn-secondary" onclick="renameDetailItem()">重命名</button>' +
+                '<button class="btn btn-danger" onclick="deleteDetailItem()">删除</button>';
+            const ext = (item.name.split('.').pop() || '').toLowerCase();
+            if (['txt','md','json','js','ts','css','html','xml','log'].includes(ext)) {
+                actionsHtml += '<button class="btn btn-secondary" onclick="editDetailText()">编辑</button>';
+            }
+            card.innerHTML = `
+                <div class="detail-header">
+                    <div class="file-icon ${getIconClass(item)}" style="width:48px;height:48px;font-size:24px;">${getFileIcon(item)}</div>
+                    <div class="detail-title">${item.name}</div>
+                </div>
+                <div class="detail-meta">
+                    <span>大小: ${formatSize(item.size)}</span> · 
+                    <span>修改时间: ${formatTime(item.updatedAt || item.createdAt)}</span> · 
+                    <span>类型: ${item.mimeType || '未知'}</span>
+                </div>
+                <div class="detail-actions">${actionsHtml}</div>
+                <div class="preview-container" id="previewContainer"></div>
+            `;
+            await loadPreview(item);
+        }
+
+        async function loadPreview(item) {
+            const container = document.getElementById('previewContainer');
+            const ext = (item.name.split('.').pop() || '').toLowerCase();
+            const textExts = ['txt','md','json','js','ts','css','html','xml','log'];
+            const imageExts = ['jpg','jpeg','png','gif','webp','svg','bmp','ico'];
+            const videoExts = ['mp4','webm','ogg','mov'];
+            const audioExts = ['mp3','wav','ogg','flac','m4a'];
+
+            if (imageExts.includes(ext)) {
+                container.innerHTML = '<img src="/api/preview-image?fileId=' + item.id + '" alt="预览">';
+            } else if (videoExts.includes(ext)) {
+                container.innerHTML = '<div id="video-player"></div>';
+                new MuiPlayer({
+                    container: '#video-player',
+                    title: item.name,
+                    src: '/api/download?fileId=' + item.id,
+                    autoplay: false,
+                    width: '100%',
+                    height: 'auto',
+                });
+            } else if (audioExts.includes(ext)) {
+                container.innerHTML = '<audio controls src="/api/download?fileId=' + item.id + '" style="width:100%;"></audio>';
+            } else if (textExts.includes(ext)) {
+                try {
+                    const data = await api('/api/file-content?path=' + encodeURIComponent(joinPath(currentPath, item.name)));
+                    if (data.base64) {
+                        const content = atob(data.base64);
+                        container.innerHTML = '<div class="text-preview">' + escapeHtml(content) + '</div>';
+                    }
+                } catch (e) {
+                    container.innerHTML = '<p>无法加载文本预览</p>';
+                }
+            } else {
+                container.innerHTML = '<p>该文件类型不支持预览，请下载后查看。</p>';
+            }
+        }
+
+        // 详情页操作
+        function downloadDetailFile() { if (currentDetailItem) downloadFile(currentDetailItem.id, currentDetailItem.name); }
+        function shareDetailFile() { if (currentDetailItem) shareFile(currentDetailItem.id, currentDetailItem.name); }
+        function getDetailDirectLink() {
+            if (currentDetailItem) {
+                const link = location.origin + '/d/' + currentDetailItem.id;
+                showModal('<h2>直链</h2><div class="share-link-box">' + link + '</div><button class="btn btn-primary" onclick="copyText(\'' + link + '\')">复制</button>');
+            }
+        }
+        function copyText(text) { navigator.clipboard.writeText(text).then(() => showToast('已复制')); }
+        function renameDetailItem() { if (currentDetailItem) renameItem(currentDetailItem.id, currentDetailItem.name, currentDetailItem.type); }
+        function deleteDetailItem() { if (currentDetailItem) deleteItem(currentDetailItem.id, currentDetailItem.name, currentDetailItem.type); }
+
+        function editDetailText() {
+            const item = currentDetailItem;
+            if (!item) return;
+            showModal('<h2>编辑文本</h2><div id="editor-wrapper"><div id="toolbar-container"></div><div id="editor-container"></div></div><div class="btn-row"><button class="btn btn-secondary" onclick="closeModal()">取消</button><button class="btn btn-primary" onclick="saveDetailText()">保存</button></div>');
+            const { createEditor, createToolbar } = window.wangEditor;
+            const editorConfig = { placeholder: '请输入内容...' };
+            const editor = createEditor({
+                selector: '#editor-container',
+                html: '<p><br></p>',
+                config: editorConfig,
+                mode: 'default',
+            });
+            const toolbarConfig = {};
+            createToolbar({
+                editor,
+                selector: '#toolbar-container',
+                config: toolbarConfig,
+                mode: 'default',
+            });
+            // 加载现有内容
+            (async () => {
+                try {
+                    const path = joinPath(currentPath, item.name);
+                    const data = await api('/api/file-content?path=' + encodeURIComponent(path));
+                    if (data.base64) {
+                        const content = atob(data.base64);
+                        editor.setHtml(content);
+                    }
+                } catch (e) { showToast('加载内容失败'); }
+            })();
+            window._editor = editor;
+        }
+
+        async function saveDetailText() {
+            const editor = window._editor;
+            if (!editor) return;
+            const html = editor.getHtml();
+            const base64 = btoa(unescape(encodeURIComponent(html)));
+            const item = currentDetailItem;
+            if (item) {
+                try {
+                    await api('/api/save-content', {
+                        method: 'POST',
+                        body: JSON.stringify({ path: joinPath(currentPath, item.name), base64, fileId: item.id }),
+                    });
+                    closeModal();
+                    await loadTree();
+                    showToast('保存成功');
+                    await renderDetail();
+                } catch (e) {
+                    showToast('保存失败: ' + e.message);
+                }
+            }
+        }
+
+        // ========== 初始化 ==========
+        async function init() {
+            await loadTree();
+            await loadTasks();
+            document.getElementById('refreshBtn').onclick = refreshFileList;
+            document.getElementById('backBtn').onclick = closeDetail;
+            document.getElementById('fabBtn').onclick = () => {
+                showModal('<h2>添加</h2><div style="display:flex;flex-direction:column;gap:8px;">' +
+                    '<button class="btn btn-primary" onclick="closeModal();showUploadModal()">上传文件</button>' +
+                    '<button class="btn btn-secondary" onclick="closeModal();showNewFolderModal()">新建文件夹</button>' +
+                    '<button class="btn btn-secondary" onclick="closeModal();showNewFileModal()">新建文本文件</button>' +
+                    '<button class="btn btn-secondary" onclick="closeModal();showOfflineDownloadModal()">离线下载</button>' +
+                    '<button class="btn btn-secondary" onclick="closeModal();openTaskPanel()">查看任务</button></div>');
+            };
+            document.getElementById('taskBtn').onclick = openTaskPanel;
+            document.getElementById('closeTaskPanel').onclick = closeTaskPanel;
+            document.getElementById('taskBackdrop').onclick = closeTaskPanel;
+            // 任务自动刷新
+            setInterval(async () => {
+                const oldTasks = JSON.stringify(tasks);
+                await loadTasks();
+                const newTasks = JSON.stringify(tasks);
+                if (oldTasks !== newTasks) {
+                    const hasCompleted = tasks.some(t => t.status === 'completed' || t.status === 'failed');
+                    if (hasCompleted) {
+                        await refreshFileList();
+                    }
+                }
+            }, 5000);
+        }
+
+        init();
+    </script>
+</body>
+</html>`;
+// ==================== 后端逻辑 ====================
+const FILE_KV_BINDINGS = [
+  'FILE_KV_1',
+  'FILE_KV_2',
+  'FILE_KV_3',
+  'FILE_KV_4',
+  'FILE_KV_5'
+];
+
+function jsonResponse(data, headers = {}, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { 'Content-Type': 'application/json', ...headers },
+  });
 }
 
 function corsHeaders() {
