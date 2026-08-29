@@ -1100,6 +1100,12 @@ async function deleteFileContentAll(env, fileId, chunks) {
       return true;
     }
 
+    // 密码验证成功后的回调
+    function onAuthSuccess() {
+      document.getElementById("modalContainer").innerHTML = "";
+      initApp();
+    }
+
     function showAuthModal() {
       var container = document.getElementById("modalContainer");
       container.innerHTML = '<div class="modal-overlay" style="z-index:1000;"><div class="modal"><h2>🔒 需要密码</h2><p style="color:var(--text-secondary);margin-bottom:12px;font-size:13px;">请输入访问密码以继续使用云盘</p><input type="password" id="authPassword" placeholder="密码" style="margin-bottom:12px;"><div id="authError" style="color:var(--danger);font-size:12px;margin-bottom:8px;display:none;">密码错误</div><div class="btn-row"><button class="btn btn-primary" id="authSubmit">进入</button></div></div></div>';
@@ -1117,8 +1123,7 @@ async function deleteFileContentAll(env, fileId, chunks) {
         .then(function(data) {
           if (data.token) {
             localStorage.setItem(AUTH_TOKEN_KEY, data.token);
-            document.getElementById("modalContainer").innerHTML = "";
-            initApp();
+            onAuthSuccess();
           } else {
             document.getElementById("authError").style.display = "block";
             document.getElementById("authPassword").value = "";
@@ -1157,11 +1162,13 @@ async function deleteFileContentAll(env, fileId, chunks) {
       var params = new URLSearchParams(window.location.search); var fileId = params.get("file"); if (fileId) { loadTree().then(function() { var item = findItemInTree(fileTree, fileId); if (item && item.type !== "folder") openDetail(item, false); }); }
       setInterval(function() { var oldTasks = JSON.stringify(tasks); loadTasks().then(function() { var newTasks = JSON.stringify(tasks); if (oldTasks !== newTasks) { var hasCompleted = tasks.some(function(t) { return t.status === "completed" || t.status === "failed" || t.status === "cancelled"; }); if (hasCompleted) refreshFileList(); } }); }, 5000);
     }
-    if (!checkAuth()) {
-      // 等待密码验证通过后再初始化
-      return;
+    // 密码验证通过后初始化
+    function tryInit() {
+      if (checkAuth()) {
+        initApp();
+      }
     }
-    initApp();
+    tryInit();
   </script>
 </body>
 </html>
