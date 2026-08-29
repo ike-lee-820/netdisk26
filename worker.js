@@ -2127,26 +2127,6 @@ export default {
         });
       }
 
-      // API 路由
-      // 密码验证 API（不需要主认证）
-      if (apiPath === '/auth' && method === 'POST') {
-        const { password } = body;
-        if (!password) return jsonResponse({ error: 'Missing password' }, headers, 400);
-        if (verifyPassword(env, password)) {
-          const token = generateToken();
-          await storeToken(env, token);
-          return jsonResponse({ token }, headers);
-        }
-        return jsonResponse({ error: 'Invalid password' }, headers, 401);
-      }
-
-      if (apiPath === '/auth/verify' && method === 'POST') {
-        const { token } = body;
-        if (!token) return jsonResponse({ valid: false }, headers);
-        const valid = await verifyToken(env, token);
-        return jsonResponse({ valid }, headers);
-      }
-
       if (path.startsWith('/api/')) {
         const apiPath = path.substring(4);
         let body = {};
@@ -2154,6 +2134,24 @@ export default {
           try { body = await request.json(); } catch (e) {}
         }
 
+        // 密码验证 API（不需要主认证）
+        if (apiPath === '/auth' && method === 'POST') {
+          const { password } = body;
+          if (!password) return jsonResponse({ error: 'Missing password' }, headers, 400);
+          if (verifyPassword(env, password)) {
+            const token = generateToken();
+            await storeToken(env, token);
+            return jsonResponse({ token }, headers);
+          }
+          return jsonResponse({ error: 'Invalid password' }, headers, 401);
+        }
+
+        if (apiPath === '/auth/verify' && method === 'POST') {
+          const { token } = body;
+          if (!token) return jsonResponse({ valid: false }, headers);
+          const valid = await verifyToken(env, token);
+          return jsonResponse({ valid }, headers);
+        }
         // 获取文件树
         if (apiPath === '/tree' && method === 'GET') {
           const tree = await getTree(env);
