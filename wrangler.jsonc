@@ -1,0 +1,36 @@
+{
+  // 项目名称（可自定义）
+  "name": "netdisk",
+  // 主入口文件
+  "main": "worker.js",
+  // 兼容日期（使用最新稳定特性）
+  "compatibility_date": "2024-12-18",
+  // KV 命名空间绑定
+  "kv_namespaces": [
+    {
+      "binding": "MY_KV",
+      "id": "e8b818d9fc4c4291ada38a186807a1b0"
+    }
+  ],
+  // 生产环境（可选）
+  "env": {
+    "production": {
+      "kv_namespaces": [
+        {
+          "binding": "MY_KV",
+          "id": "e8b818d9fc4c4291ada38a186807a1b0"
+        }
+      ]
+    }
+  },
+  // 是否在部署时自动上传 source map（可选）
+  "upload_source_maps": false,
+  // 日志级别（可选）
+  "logpush": true,
+  // 最小请求数（可选）
+  "minify": false,
+  // 观察模式配置（开发用）
+  "watch": {
+    "directory": "."
+  }
+}
