@@ -338,7 +338,7 @@ export default {
   },
 };
 
-// ---------- 前端 HTML（使用反引号，无任何插值，安全可靠） ----------
+// ---------- 前端 HTML（完全使用 addEventListener，无内联事件，安全可靠） ----------
 const htmlContent = `<!DOCTYPE html>
 <html lang="zh">
 <head>
@@ -398,9 +398,9 @@ const htmlContent = `<!DOCTYPE html>
     <div class="header">
       <h1>📁 云盘</h1>
       <div class="header-actions">
-        <button class="btn btn-primary" onclick="showUpload()">+ 上传</button>
-        <button class="btn btn-success" onclick="showNewFile()">📄 新建</button>
-        <button class="btn btn-outline" onclick="toggleTasks()">📋 任务</button>
+        <button id="btnUpload" class="btn btn-primary">+ 上传</button>
+        <button id="btnNewFile" class="btn btn-success">📄 新建</button>
+        <button id="btnTasks" class="btn btn-outline">📋 任务</button>
       </div>
     </div>
     <div class="breadcrumb" id="breadcrumb"></div>
@@ -422,8 +422,8 @@ const htmlContent = `<!DOCTYPE html>
     <p style="font-size:14px;color:#64748b;margin-bottom:8px;">目标路径：<span id="uploadPathDisplay">/</span></p>
     <input type="file" id="fileInput" multiple webkitdirectory>
     <div class="btn-group">
-      <button class="btn btn-primary" onclick="doUpload()">开始上传</button>
-      <button class="btn btn-outline" onclick="closeModal('uploadModal')">取消</button>
+      <button id="doUploadBtn" class="btn btn-primary">开始上传</button>
+      <button id="cancelUploadBtn" class="btn btn-outline">取消</button>
     </div>
   </div>
 </div>
@@ -435,180 +435,259 @@ const htmlContent = `<!DOCTYPE html>
     <p style="font-size:14px;color:#64748b;margin-bottom:8px;">在 <span id="newFilePathDisplay">/</span> 下创建</p>
     <input type="text" id="newFileName" placeholder="文件名（如 readme.txt）" value="新文件.txt">
     <div class="btn-group">
-      <button class="btn btn-success" onclick="doCreateFile()">创建</button>
-      <button class="btn btn-outline" onclick="closeModal('newFileModal')">取消</button>
+      <button id="doCreateBtn" class="btn btn-success">创建</button>
+      <button id="cancelCreateBtn" class="btn btn-outline">取消</button>
     </div>
   </div>
 </div>
 
 <script>
-var currentPath = "/";
-var fileItems = [];
+(function() {
+  'use strict';
 
-window.onload = function() {
+  var currentPath = '/';
+  var fileItems = [];
+
+  // DOM 引用
+  var breadcrumb = document.getElementById('breadcrumb');
+  var fileList = document.getElementById('fileList');
+  var taskPanel = document.getElementById('taskPanel');
+  var taskList = document.getElementById('taskList');
+  var uploadModal = document.getElementById('uploadModal');
+  var uploadPathDisplay = document.getElementById('uploadPathDisplay');
+  var fileInput = document.getElementById('fileInput');
+  var newFileModal = document.getElementById('newFileModal');
+  var newFilePathDisplay = document.getElementById('newFilePathDisplay');
+  var newFileName = document.getElementById('newFileName');
+
+  // 辅助函数
+  function closeModal(id) {
+    document.getElementById(id).classList.remove('open');
+  }
+
+  // 刷新文件列表
+  async function refresh() {
+    try {
+      var resp = await fetch('/api/list?path=' + encodeURIComponent(currentPath));
+      var data = await resp.json();
+      fileItems = data.items || [];
+      renderBreadcrumb();
+      renderList();
+    } catch(e) { console.error(e); }
+  }
+
+  function renderBreadcrumb() {
+    var parts = currentPath.split('/').filter(function(p) { return p; });
+    var html = '<span data-path="/">🏠 根目录</span>';
+    var acc = '';
+    for (var i = 0; i < parts.length; i++) {
+      var p = parts[i];
+      acc += '/' + p;
+      html += ' <span>›</span> <span data-path="' + acc + '">' + p + '</span>';
+    }
+    breadcrumb.innerHTML = html;
+    // 绑定点击事件
+    breadcrumb.querySelectorAll('span[data-path]').forEach(function(el) {
+      el.addEventListener('click', function() {
+        navigateTo(el.getAttribute('data-path'));
+      });
+    });
+  }
+
+  function navigateTo(path) {
+    currentPath = path;
+    refresh();
+  }
+
+  function renderList() {
+    if (fileItems.length === 0) {
+      fileList.innerHTML = '<div class="empty-state"><div class="icon">📂</div><p>此目录为空</p></div>';
+      return;
+    }
+    var html = '';
+    for (var i = 0; i < fileItems.length; i++) {
+      var item = fileItems[i];
+      var icon = item.isDir ? '📁' : '📄';
+      var size = item.isDir ? '' : (item.size / 1024).toFixed(1) + ' KB';
+      var date = item.uploadedAt ? new Date(item.uploadedAt).toLocaleString() : '';
+      var fullPath = currentPath === '/' ? '/' + item.name : currentPath + '/' + item.name;
+      var actionsHtml = '';
+      if (item.isDir) {
+        actionsHtml = '<button class="btn btn-sm btn-outline open-dir" data-path="' + fullPath + '">打开</button>';
+      } else {
+        actionsHtml = '<a href="/file' + fullPath + '" target="_blank" class="btn btn-sm btn-primary">下载</a>';
+      }
+      actionsHtml += '<button class="btn btn-sm btn-outline rename-btn" data-path="' + fullPath + '">✏️</button>';
+      actionsHtml += '<button class="btn btn-sm btn-danger delete-btn" data-path="' + fullPath + '">🗑️</button>';
+      html += '<div class="file-item" data-path="' + fullPath + '" data-isdir="' + item.isDir + '">' +
+        '<div class="file-info">' +
+          '<span class="icon">' + icon + '</span>' +
+          '<span class="name">' + item.name + '</span>' +
+          '<span class="meta">' + size + ' ' + date + '</span>' +
+        '</div>' +
+        '<div class="file-actions">' + actionsHtml + '</div>' +
+      '</div>';
+    }
+    fileList.innerHTML = html;
+
+    // 绑定事件
+    fileList.querySelectorAll('.open-dir').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        navigateTo(this.getAttribute('data-path'));
+      });
+    });
+    fileList.querySelectorAll('.rename-btn').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        renameItem(this.getAttribute('data-path'));
+      });
+    });
+    fileList.querySelectorAll('.delete-btn').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        deleteItem(this.getAttribute('data-path'));
+      });
+    });
+    // 点击文件名也可打开目录
+    fileList.querySelectorAll('.file-item .name').forEach(function(el) {
+      var parent = el.closest('.file-item');
+      if (parent && parent.getAttribute('data-isdir') === 'true') {
+        el.style.cursor = 'pointer';
+        el.addEventListener('click', function() {
+          navigateTo(parent.getAttribute('data-path'));
+        });
+      }
+    });
+  }
+
+  // 新建文件夹（弹出对话框）
+  window.mkdir = function() {
+    var name = prompt('请输入新文件夹名称');
+    if (!name) return;
+    fetch('/api/mkdir', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: currentPath, name: name })
+    }).then(function(r) {
+      if (r.ok) refresh();
+      else alert('创建失败');
+    });
+  };
+
+  // 重命名
+  function renameItem(fullPath) {
+    var newName = prompt('请输入新名称', fullPath.split('/').pop());
+    if (!newName) return;
+    fetch('/api/rename', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ oldPath: fullPath, newName: newName })
+    }).then(function(r) {
+      if (r.ok) refresh();
+      else alert('重命名失败');
+    });
+  }
+
+  // 删除
+  function deleteItem(fullPath) {
+    if (!confirm('确定要删除 "' + fullPath + '" 吗？')) return;
+    fetch('/api/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: fullPath })
+    }).then(function(r) {
+      if (r.ok) refresh();
+      else alert('删除失败');
+    });
+  }
+
+  // 上传
+  function showUpload() {
+    uploadPathDisplay.textContent = currentPath;
+    uploadModal.classList.add('open');
+  }
+
+  async function doUpload() {
+    var files = fileInput.files;
+    if (files.length === 0) return alert('请选择文件');
+    var path = currentPath;
+    for (var i = 0; i < files.length; i++) {
+      var fd = new FormData();
+      fd.append('file', files[i]);
+      fd.append('path', path);
+      await fetch('/api/upload', { method: 'POST', body: fd });
+    }
+    closeModal('uploadModal');
+    refresh();
+  }
+
+  // 新建文件
+  function showNewFile() {
+    newFilePathDisplay.textContent = currentPath;
+    newFileModal.classList.add('open');
+  }
+
+  async function doCreateFile() {
+    var name = newFileName.value.trim();
+    if (!name) return alert('请输入文件名');
+    var resp = await fetch('/api/create_file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: currentPath, name: name })
+    });
+    if (resp.ok) {
+      closeModal('newFileModal');
+      refresh();
+    } else {
+      alert('创建失败：' + (await resp.text()));
+    }
+  }
+
+  // 任务
+  function toggleTasks() {
+    taskPanel.classList.toggle('open');
+    if (taskPanel.classList.contains('open')) refreshTasks();
+  }
+
+  async function refreshTasks() {
+    try {
+      var resp = await fetch('/api/tasks');
+      var data = await resp.json();
+      if (!data.tasks || data.tasks.length === 0) {
+        taskList.innerHTML = '<div style="color:#94a3b8;text-align:center;padding:12px;">暂无任务</div>';
+        return;
+      }
+      var html = '';
+      for (var i = 0; i < data.tasks.length; i++) {
+        var t = data.tasks[i];
+        var statusMap = { 'pending': '⏸️ 等待', 'running': '⏳ 运行中', 'completed': '✅ 完成', 'failed': '❌ 失败' };
+        var statusText = statusMap[t.status] || t.status;
+        var progress = t.progress || 0;
+        html += '<div class="task-item">' +
+          '<span>' + (t.url || '任务') + ' (' + progress + '%)</span>' +
+          '<span><span class="progress-bar"><span class="fill" style="width:' + progress + '%"></span></span> ' + statusText + '</span>' +
+        '</div>';
+      }
+      taskList.innerHTML = html;
+    } catch(e) { console.error(e); }
+  }
+
+  // 绑定按钮事件
+  document.getElementById('btnUpload').addEventListener('click', showUpload);
+  document.getElementById('btnNewFile').addEventListener('click', showNewFile);
+  document.getElementById('btnTasks').addEventListener('click', toggleTasks);
+  document.getElementById('doUploadBtn').addEventListener('click', doUpload);
+  document.getElementById('cancelUploadBtn').addEventListener('click', function() { closeModal('uploadModal'); });
+  document.getElementById('doCreateBtn').addEventListener('click', doCreateFile);
+  document.getElementById('cancelCreateBtn').addEventListener('click', function() { closeModal('newFileModal'); });
+
+  // 初始化
   refresh();
   refreshTasks();
   setInterval(refresh, 5000);
   setInterval(refreshTasks, 3000);
-};
 
-async function refresh() {
-  try {
-    var resp = await fetch("/api/list?path=" + encodeURIComponent(currentPath));
-    var data = await resp.json();
-    fileItems = data.items || [];
-    renderBreadcrumb();
-    renderList();
-  } catch(e) { console.error(e); }
-}
-
-function renderBreadcrumb() {
-  var el = document.getElementById("breadcrumb");
-  var parts = currentPath.split("/").filter(function(p) { return p; });
-  var html = "<span onclick=\"navigateTo('/')\">🏠 根目录</span>";
-  var acc = "";
-  for (var i = 0; i < parts.length; i++) {
-    var p = parts[i];
-    acc += "/" + p;
-    html += " <span>›</span> <span onclick=\"navigateTo('" + acc + "')\">" + p + "</span>";
-  }
-  el.innerHTML = html;
-}
-
-function navigateTo(path) {
-  currentPath = path;
-  refresh();
-}
-
-function renderList() {
-  var container = document.getElementById("fileList");
-  if (fileItems.length === 0) {
-    container.innerHTML = "<div class=\"empty-state\"><div class=\"icon\">📂</div><p>此目录为空</p></div>";
-    return;
-  }
-  var html = "";
-  for (var i = 0; i < fileItems.length; i++) {
-    var item = fileItems[i];
-    var icon = item.isDir ? "📁" : "📄";
-    var size = item.isDir ? "" : (item.size / 1024).toFixed(1) + " KB";
-    var date = item.uploadedAt ? new Date(item.uploadedAt).toLocaleString() : "";
-    var fullPath = currentPath === "/" ? "/" + item.name : currentPath + "/" + item.name;
-    var actions = "";
-    if (item.isDir) {
-      actions = "<button class=\"btn btn-sm btn-outline\" onclick=\"navigateTo('" + fullPath + "')\">打开</button>";
-    } else {
-      actions = "<a href=\"/file" + fullPath + "\" target=\"_blank\" class=\"btn btn-sm btn-primary\">下载</a>";
-    }
-    var nameClick = item.isDir ? "navigateTo('" + fullPath + "')" : "";
-    html += "<div class=\"file-item\">" +
-      "<div class=\"file-info\">" +
-        "<span class=\"icon\">" + icon + "</span>" +
-        "<span class=\"name\" onclick=\"" + nameClick + "\">" + item.name + "</span>" +
-        "<span class=\"meta\">" + size + " " + date + "</span>" +
-      "</div>" +
-      "<div class=\"file-actions\">" +
-        actions +
-        "<button class=\"btn btn-sm btn-outline\" onclick=\"renameItem('" + fullPath + "')\">✏️</button>" +
-        "<button class=\"btn btn-sm btn-danger\" onclick=\"deleteItem('" + fullPath + "')\">🗑️</button>" +
-      "</div>" +
-    "</div>";
-  }
-  container.innerHTML = html;
-}
-
-function showUpload() {
-  document.getElementById("uploadPathDisplay").textContent = currentPath;
-  document.getElementById("uploadModal").classList.add("open");
-}
-
-function showNewFile() {
-  document.getElementById("newFilePathDisplay").textContent = currentPath;
-  document.getElementById("newFileModal").classList.add("open");
-}
-
-async function doUpload() {
-  var input = document.getElementById("fileInput");
-  var files = input.files;
-  if (files.length === 0) return alert("请选择文件");
-  var path = currentPath;
-  for (var i = 0; i < files.length; i++) {
-    var fd = new FormData();
-    fd.append("file", files[i]);
-    fd.append("path", path);
-    await fetch("/api/upload", { method: "POST", body: fd });
-  }
-  closeModal("uploadModal");
-  refresh();
-}
-
-async function doCreateFile() {
-  var name = document.getElementById("newFileName").value.trim();
-  if (!name) return alert("请输入文件名");
-  var resp = await fetch("/api/create_file", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path: currentPath, name: name })
-  });
-  if (resp.ok) {
-    closeModal("newFileModal");
-    refresh();
-  } else {
-    alert("创建失败：" + (await resp.text()));
-  }
-}
-
-function renameItem(fullPath) {
-  var newName = prompt("请输入新名称", fullPath.split("/").pop());
-  if (!newName) return;
-  fetch("/api/rename", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ oldPath: fullPath, newName: newName })
-  }).then(function(r) { if (r.ok) refresh(); else alert("重命名失败"); });
-}
-
-function deleteItem(fullPath) {
-  if (!confirm("确定要删除 \"" + fullPath + "\" 吗？")) return;
-  fetch("/api/delete", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path: fullPath })
-  }).then(function(r) { if (r.ok) refresh(); else alert("删除失败"); });
-}
-
-function toggleTasks() {
-  var panel = document.getElementById("taskPanel");
-  panel.classList.toggle("open");
-  if (panel.classList.contains("open")) refreshTasks();
-}
-
-async function refreshTasks() {
-  try {
-    var resp = await fetch("/api/tasks");
-    var data = await resp.json();
-    var list = document.getElementById("taskList");
-    if (!data.tasks || data.tasks.length === 0) {
-      list.innerHTML = "<div style=\"color:#94a3b8;text-align:center;padding:12px;\">暂无任务</div>";
-      return;
-    }
-    var html = "";
-    for (var i = 0; i < data.tasks.length; i++) {
-      var t = data.tasks[i];
-      var statusMap = { "pending": "⏸️ 等待", "running": "⏳ 运行中", "completed": "✅ 完成", "failed": "❌ 失败" };
-      var statusText = statusMap[t.status] || t.status;
-      var progress = t.progress || 0;
-      html += "<div class=\"task-item\">" +
-        "<span>" + (t.url || "任务") + " (" + progress + "%)</span>" +
-        "<span><span class=\"progress-bar\"><span class=\"fill\" style=\"width:" + progress + "%\"></span></span> " + statusText + "</span>" +
-      "</div>";
-    }
-    list.innerHTML = html;
-  } catch(e) { console.error(e); }
-}
-
-function closeModal(id) {
-  document.getElementById(id).classList.remove("open");
-}
+  // 暴露 mkdir 给全局
+  window.mkdir = window.mkdir;
+})();
 </script>
 </body>
 </html>`;
