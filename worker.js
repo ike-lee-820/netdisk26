@@ -1,687 +1,1436 @@
-// 绑定多个 KV：FILE_INDEX, DATA_KV_0 ~ DATA_KV_4, TASK_KV
+// worker.js
+// 前端页面
+const HTML = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>云盘</title>
+    <style>
+        :root {
+            --bg: #f5f7fa;
+            --card: #ffffff;
+            --text: #1a1a2e;
+            --text-secondary: #6b7280;
+            --accent: #4f6ef7;
+            --accent-light: #eef1ff;
+            --danger: #ef4444;
+            --success: #10b981;
+            --border: #e5e7eb;
+            --shadow: 0 2px 8px rgba(0,0,0,0.06);
+            --radius: 12px;
+            --radius-sm: 8px;
+            --header-height: 52px;
+            --fab-size: 56px;
+        }
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            padding-bottom: 80px;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .header {
+            position: sticky; top:0; background:var(--card); padding:0 16px;
+            height:var(--header-height); display:flex; align-items:center; z-index:100;
+            box-shadow:0 1px 3px rgba(0,0,0,0.05); border-bottom:1px solid var(--border);
+        }
+        .header h1 { font-size:18px; font-weight:700; flex-shrink:0; margin-right:12px; color:var(--accent); }
+        .breadcrumb {
+            display:flex; align-items:center; flex-wrap:nowrap; overflow-x:auto;
+            gap:4px; font-size:13px; -webkit-overflow-scrolling:touch;
+            scrollbar-width:none; flex:1;
+        }
+        .breadcrumb::-webkit-scrollbar { display:none; }
+        .breadcrumb span {
+            white-space:nowrap; padding:4px 6px; border-radius:4px; cursor:pointer;
+            color:var(--text-secondary); transition:all 0.15s; flex-shrink:0;
+        }
+        .breadcrumb span:hover, .breadcrumb span.current { color:var(--accent); background:var(--accent-light); }
+        .breadcrumb .sep { color:#ccc; cursor:default; padding:0 2px; }
+        .file-list { padding:12px 16px; max-width:800px; margin:0 auto; }
+        .file-item {
+            background:var(--card); border-radius:var(--radius); padding:12px 14px;
+            margin-bottom:8px; display:flex; align-items:center; gap:12px;
+            box-shadow:var(--shadow); border:1px solid var(--border);
+            transition:all 0.15s; cursor:pointer; position:relative;
+        }
+        .file-item:active { transform:scale(0.98); background:#fafafa; }
+        .file-icon {
+            width:40px; height:40px; border-radius:var(--radius-sm); display:flex;
+            align-items:center; justify-content:center; font-size:20px; flex-shrink:0;
+            background:var(--accent-light);
+        }
+        .file-icon.folder { background:#fef3c7; }
+        .file-icon.image { background:#dcfce7; }
+        .file-icon.video { background:#fee2e2; }
+        .file-icon.text { background:#e0e7ff; }
+        .file-info { flex:1; min-width:0; }
+        .file-name {
+            font-size:14px; font-weight:600; word-break:break-all; line-height:1.3;
+            display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
+        }
+        .file-meta {
+            font-size:11px; color:var(--text-secondary); margin-top:2px;
+            display:flex; gap:8px; flex-wrap:wrap;
+        }
+        .file-actions { display:flex; gap:4px; flex-shrink:0; opacity:0.7; transition:opacity 0.2s; }
+        .file-item:hover .file-actions, .file-actions:focus-within { opacity:1; }
+        .btn-icon {
+            width:32px; height:32px; border:none; background:none; border-radius:6px;
+            cursor:pointer; font-size:16px; display:flex; align-items:center; justify-content:center;
+            color:var(--text-secondary); transition:all 0.15s; padding:0;
+        }
+        .btn-icon:hover { background:var(--accent-light); color:var(--accent); }
+        .btn-icon.danger:hover { background:#fee2e2; color:var(--danger); }
+        .fab {
+            position:fixed; bottom:24px; right:24px; width:var(--fab-size); height:var(--fab-size);
+            border-radius:50%; background:var(--accent); color:#fff; border:none; font-size:28px;
+            cursor:pointer; box-shadow:0 4px 16px rgba(79,110,247,0.4); z-index:200;
+            display:flex; align-items:center; justify-content:center; transition:all 0.2s;
+            -webkit-tap-highlight-color:transparent;
+        }
+        .fab:active { transform:scale(0.9); box-shadow:0 2px 8px rgba(79,110,247,0.3); }
+        .modal-overlay {
+            position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:300;
+            display:flex; align-items:center; justify-content:center; animation:fadeIn 0.2s ease;
+        }
+        .modal {
+            background:var(--card); border-radius:16px; padding:20px; width:90%; max-width:420px;
+            max-height:85vh; overflow-y:auto; box-shadow:0 20px 60px rgba(0,0,0,0.15);
+            animation:slideUp 0.25s ease;
+        }
+        .modal h2 { font-size:17px; margin-bottom:16px; font-weight:700; }
+        .modal input[type="text"], .modal input[type="url"], .modal select {
+            width:100%; padding:10px 14px; border:1.5px solid var(--border); border-radius:var(--radius-sm);
+            font-size:14px; outline:none; transition:border-color 0.2s; margin-bottom:12px; background:#fafbfc;
+        }
+        .modal input:focus, .modal select:focus { border-color:var(--accent); background:#fff; }
+        .modal .btn-row { display:flex; gap:8px; margin-top:8px; }
+        .btn {
+            padding:10px 16px; border-radius:var(--radius-sm); border:none; font-size:14px;
+            font-weight:600; cursor:pointer; transition:all 0.15s; flex:1; text-align:center;
+            -webkit-tap-highlight-color:transparent;
+        }
+        .btn-primary { background:var(--accent); color:#fff; }
+        .btn-primary:active { background:#3b53d4; }
+        .btn-secondary { background:#f3f4f6; color:var(--text); }
+        .btn-secondary:active { background:#e5e7eb; }
+        .btn-danger { background:var(--danger); color:#fff; }
+        .btn-danger:active { background:#dc2626; }
+        .empty-state { text-align:center; padding:60px 20px; color:var(--text-secondary); }
+        .empty-state .icon { font-size:48px; margin-bottom:12px; opacity:0.5; }
+        .empty-state p { font-size:14px; }
+        .task-panel {
+            position:fixed; top:0; right:0; bottom:0; width:320px; max-width:90vw;
+            background:var(--card); z-index:250; box-shadow:-4px 0 20px rgba(0,0,0,0.1);
+            transform:translateX(100%); transition:transform 0.3s ease; overflow-y:auto; padding:16px;
+        }
+        .task-panel.open { transform:translateX(0); }
+        .task-panel-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
+        .task-panel-header h3 { font-size:16px; }
+        .task-item {
+            padding:10px; border-radius:var(--radius-sm); background:#f9fafb;
+            margin-bottom:8px; border:1px solid var(--border);
+        }
+        .task-item .task-name { font-size:13px; font-weight:600; word-break:break-all; }
+        .task-item .task-status { font-size:11px; color:var(--text-secondary); margin-top:4px; }
+        .progress-bar { height:4px; background:#e5e7eb; border-radius:2px; margin-top:6px; overflow:hidden; }
+        .progress-bar .fill { height:100%; background:var(--accent); border-radius:2px; transition:width 0.3s ease; }
+        .progress-bar .fill.completed { background:var(--success); }
+        .progress-bar .fill.failed { background:var(--danger); }
+        .task-panel-backdrop {
+            position:fixed; inset:0; background:rgba(0,0,0,0.3); z-index:240;
+            opacity:0; pointer-events:none; transition:opacity 0.3s ease;
+        }
+        .task-panel-backdrop.open { opacity:1; pointer-events:auto; }
+        .upload-area {
+            border:2px dashed var(--border); border-radius:var(--radius); padding:32px 16px;
+            text-align:center; cursor:pointer; transition:all 0.2s; margin-bottom:12px; background:#fafbfc;
+        }
+        .upload-area:active, .upload-area.dragover { border-color:var(--accent); background:var(--accent-light); }
+        .upload-area .icon { font-size:40px; margin-bottom:8px; }
+        .upload-area p { font-size:13px; color:var(--text-secondary); }
+        .file-preview-grid {
+            display:grid; grid-template-columns:repeat(auto-fill,minmax(80px,1fr));
+            gap:8px; margin:12px 0; max-height:200px; overflow-y:auto; padding:4px;
+        }
+        .file-preview-item {
+            background:#f9fafb; border-radius:8px; padding:8px; text-align:center;
+            font-size:11px; word-break:break-all; border:1px solid var(--border);
+        }
+        .file-preview-item .fp-icon { font-size:24px; display:block; margin-bottom:4px; }
+        .toast {
+            position:fixed; bottom:90px; left:50%; transform:translateX(-50%);
+            background:#1f2937; color:#fff; padding:10px 20px; border-radius:8px; font-size:13px;
+            z-index:500; animation:fadeIn 0.2s ease; pointer-events:none; max-width:90vw; text-align:center;
+        }
+        @keyframes fadeIn { from{opacity:0} to{opacity:1} }
+        @keyframes slideUp { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
+        @media (max-width:480px) {
+            .file-item { padding:10px 12px; }
+            .file-actions { gap:2px; }
+            .btn-icon { width:28px; height:28px; font-size:14px; }
+            .fab { bottom:16px; right:16px; }
+        }
+        .hidden { display:none !important; }
+        .share-link-box {
+            background:#f9fafb; border:1px solid var(--border); border-radius:8px; padding:10px;
+            font-size:12px; word-break:break-all; margin:8px 0; user-select:all; -webkit-user-select:all;
+        }
+        .task-btn {
+            position:fixed; bottom:24px; right:96px; width:44px; height:44px; border-radius:50%;
+            background:var(--card); color:var(--text); border:1px solid var(--border); font-size:18px;
+            cursor:pointer; box-shadow:var(--shadow); z-index:200; display:flex; align-items:center;
+            justify-content:center; -webkit-tap-highlight-color:transparent;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📁 云盘</h1>
+        <div class="breadcrumb" id="breadcrumb"></div>
+    </div>
+
+    <div class="file-list" id="fileList"></div>
+
+    <button class="task-btn" id="taskBtn" title="任务列表">📋</button>
+    <button class="fab" id="fabBtn" title="添加">+</button>
+
+    <div class="task-panel-backdrop" id="taskBackdrop"></div>
+    <div class="task-panel" id="taskPanel">
+        <div class="task-panel-header">
+            <h3>📋 任务列表</h3>
+            <button class="btn-icon" id="closeTaskPanel">✕</button>
+        </div>
+        <div id="taskList"></div>
+    </div>
+
+    <div id="modalContainer"></div>
+    <div id="toastContainer"></div>
+
+    <script>
+        const API_BASE = '';
+        let currentPath = '/';
+        let fileTree = null;
+        let tasks = [];
+        let pendingUploads = [];
+        let currentTaskId = null;
+
+        function showToast(msg, duration = 2000) {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+            toast.textContent = msg;
+            container.appendChild(toast);
+            setTimeout(() => toast.remove(), duration);
+        }
+
+        function formatSize(bytes) {
+            if (bytes === 0) return '0 B';
+            if (!bytes) return '-';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+
+        function formatTime(ts) {
+            if (!ts) return '-';
+            const d = new Date(ts);
+            return d.toLocaleString('zh-CN', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+        }
+
+        function getFileIcon(item) {
+            if (item.type === 'folder') return '📁';
+            const ext = (item.name.split('.').pop() || '').toLowerCase();
+            if (['jpg','jpeg','png','gif','webp','svg','bmp','ico'].includes(ext)) return '🖼️';
+            if (['mp4','webm','avi','mov','mkv','flv'].includes(ext)) return '🎬';
+            if (['mp3','wav','ogg','flac','m4a'].includes(ext)) return '🎵';
+            if (['txt','md','json','js','ts','css','html','xml','yml','yaml','log'].includes(ext)) return '📄';
+            if (['zip','rar','7z','tar','gz','bz2'].includes(ext)) return '📦';
+            if (['pdf','doc','docx','xls','xlsx','ppt','pptx'].includes(ext)) return '📑';
+            return '📎';
+        }
+
+        function getIconClass(item) {
+            if (item.type === 'folder') return 'folder';
+            const ext = (item.name.split('.').pop() || '').toLowerCase();
+            if (['jpg','jpeg','png','gif','webp','svg','bmp','ico'].includes(ext)) return 'image';
+            if (['mp4','webm','avi','mov','mkv','flv'].includes(ext)) return 'video';
+            if (['txt','md','json','js','ts','css','html','xml'].includes(ext)) return 'text';
+            return '';
+        }
+
+        function generateId() {
+            return 'f_' + Date.now() + '_' + Math.random().toString(36).substr(2, 8);
+        }
+
+        function arrayBufferToBase64(buffer) {
+            return new Promise((resolve, reject) => {
+                const blob = new Blob([buffer]);
+                const reader = new FileReader();
+                reader.onload = () => {
+                    const result = reader.result;
+                    const base64 = result.split(',')[1] || result;
+                    resolve(base64);
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+            });
+        }
+
+        function base64ToArrayBuffer(base64) {
+            const binary = atob(base64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) {
+                bytes[i] = binary.charCodeAt(i);
+            }
+            return bytes.buffer;
+        }
+
+        async function api(path, options = {}) {
+            const res = await fetch(API_BASE + path, {
+                ...options,
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(options.headers || {}),
+                },
+            });
+            const data = await res.json();
+            if (!res.ok && data.error) {
+                throw new Error(data.error);
+            }
+            return data;
+        }
+
+        function getCurrentFolderItems() {
+            if (!fileTree || !fileTree.children) return [];
+            const parts = currentPath.split('/').filter(Boolean);
+            let current = fileTree;
+            for (const part of parts) {
+                const found = current.children?.find(c => c.name === part && c.type === 'folder');
+                if (!found) return [];
+                current = found;
+            }
+            return current.children || [];
+        }
+
+        function joinPath(base, name) {
+            const cleanBase = base.endsWith('/') ? base : base + '/';
+            if (name.startsWith('/')) return name;
+            return cleanBase + name;
+        }
+
+        function renderBreadcrumb() {
+            const container = document.getElementById('breadcrumb');
+            container.innerHTML = '';
+            const parts = currentPath.split('/').filter(Boolean);
+            const rootSpan = document.createElement('span');
+            rootSpan.textContent = '根目录';
+            rootSpan.className = currentPath === '/' ? 'current' : '';
+            rootSpan.onclick = () => navigateTo('/');
+            container.appendChild(rootSpan);
+
+            let accumulated = '';
+            for (const part of parts) {
+                accumulated += '/' + part;
+                const sep = document.createElement('span');
+                sep.className = 'sep';
+                sep.textContent = '›';
+                container.appendChild(sep);
+                const span = document.createElement('span');
+                span.textContent = part;
+                span.className = accumulated === currentPath ? 'current' : '';
+                span.onclick = () => navigateTo(accumulated);
+                container.appendChild(span);
+            }
+            container.scrollLeft = container.scrollWidth;
+        }
+
+        function renderFileList() {
+            const container = document.getElementById('fileList');
+            const items = getCurrentFolderItems();
+            container.innerHTML = '';
+
+            if (items.length === 0) {
+                container.innerHTML = '<div class="empty-state"><div class="icon">📂</div><p>此文件夹为空</p><p style="font-size:12px;margin-top:4px;">点击右下角 + 上传文件</p></div>';
+                return;
+            }
+
+            const sortedItems = [...items].sort((a, b) => {
+                if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+                return a.name.localeCompare(b.name);
+            });
+
+            for (const item of sortedItems) {
+                const div = document.createElement('div');
+                div.className = 'file-item';
+                const iconClass = getIconClass(item);
+                div.innerHTML = '<div class="file-icon ' + iconClass + '">' + getFileIcon(item) + '</div>' +
+                    '<div class="file-info"><div class="file-name">' + item.name + '</div>' +
+                    '<div class="file-meta"><span>' + (item.type === 'folder' ? '文件夹' : formatSize(item.size)) + '</span>' +
+                    '<span>' + formatTime(item.updatedAt || item.createdAt) + '</span>' +
+                    (item.type === 'file' && item.chunks > 1 ? '<span>🔗 分片</span>' : '') +
+                    '</div></div>' +
+                    '<div class="file-actions" onclick="event.stopPropagation()">' +
+                    (item.type === 'file' ? '<button class="btn-icon" title="下载" onclick="downloadFile(\\'' + item.id + '\\',\\'' + item.name + '\\')">⬇️</button>' +
+                    '<button class="btn-icon" title="分享" onclick="shareFile(\\'' + item.id + '\\',\\'' + item.name + '\\')">🔗</button>' +
+                    (['txt','md','json','js','ts','css','html','xml','log'].includes((item.name.split('.').pop()||'').toLowerCase()) ? '<button class="btn-icon" title="编辑" onclick="editFile(\\'' + item.id + '\\',\\'' + item.name + '\\')">✏️</button>' : '') : '') +
+                    '<button class="btn-icon" title="重命名" onclick="renameItem(\\'' + item.id + '\\',\\'' + item.name + '\\',\\'' + item.type + '\\')">✏️</button>' +
+                    '<button class="btn-icon danger" title="删除" onclick="deleteItem(\\'' + item.id + '\\',\\'' + item.name + '\\',\\'' + item.type + '\\')">🗑️</button>' +
+                    '</div>';
+                div.onclick = () => {
+                    if (item.type === 'folder') {
+                        navigateTo(joinPath(currentPath, item.name));
+                    } else {
+                        previewFile(item);
+                    }
+                };
+                container.appendChild(div);
+            }
+        }
+
+        function navigateTo(path) {
+            if (!path.startsWith('/')) path = '/' + path;
+            currentPath = path;
+            renderBreadcrumb();
+            renderFileList();
+        }
+
+        async function loadTree() {
+            try {
+                const data = await api('/api/tree');
+                fileTree = data.tree || { name:'/', type:'folder', children:[] };
+                renderFileList();
+                renderBreadcrumb();
+            } catch (e) {
+                fileTree = { name:'/', type:'folder', children:[] };
+                renderFileList();
+                renderBreadcrumb();
+            }
+        }
+
+        async function saveTree() {
+            await api('/api/tree', { method:'PUT', body: JSON.stringify({ tree: fileTree }) });
+        }
+
+        function findItemInTree(tree, itemId) {
+            if (!tree) return null;
+            if (tree.id === itemId) return tree;
+            if (tree.children) {
+                for (const child of tree.children) {
+                    const found = findItemInTree(child, itemId);
+                    if (found) return found;
+                }
+            }
+            return null;
+        }
+
+        function removeItemFromTree(tree, itemId) {
+            if (!tree || !tree.children) return false;
+            const idx = tree.children.findIndex(c => c.id === itemId);
+            if (idx !== -1) {
+                tree.children.splice(idx, 1);
+                return true;
+            }
+            for (const child of tree.children) {
+                if (removeItemFromTree(child, itemId)) return true;
+            }
+            return false;
+        }
+
+        function showModal(html) {
+            const container = document.getElementById('modalContainer');
+            container.innerHTML = '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">' + html + '</div></div>';
+        }
+
+        function closeModal() {
+            document.getElementById('modalContainer').innerHTML = '';
+        }
+
+        function showNewFolderModal() {
+            showModal('<h2>📁 新建文件夹</h2><input type="text" id="newFolderName" placeholder="文件夹名称" autofocus><div class="btn-row"><button class="btn btn-secondary" onclick="closeModal()">取消</button><button class="btn btn-primary" onclick="createFolder()">创建</button></div>');
+            document.getElementById('newFolderName').focus();
+            document.getElementById('newFolderName').onkeydown = (e) => { if (e.key === 'Enter') createFolder(); };
+        }
+
+        async function createFolder() {
+            const name = document.getElementById('newFolderName').value.trim();
+            if (!name) { showToast('请输入文件夹名称'); return; }
+            if (name.includes('/')) { showToast('名称不能包含 /'); return; }
+            const items = getCurrentFolderItems();
+            if (items.some(i => i.name === name)) { showToast('同名文件已存在'); return; }
+            const newFolder = { id: generateId(), name, type:'folder', children:[], createdAt: Date.now(), updatedAt: Date.now() };
+            let target = fileTree;
+            const parts = currentPath.split('/').filter(Boolean);
+            for (const part of parts) {
+                target = target.children.find(c => c.name === part && c.type === 'folder');
+            }
+            if (!target.children) target.children = [];
+            target.children.push(newFolder);
+            await saveTree();
+            closeModal();
+            renderFileList();
+            showToast('文件夹已创建');
+        }
+
+        function showNewFileModal() {
+            showModal('<h2>📄 新建文本文件</h2><input type="text" id="newFileName" placeholder="文件名（如 note.txt）" autofocus><div class="btn-row"><button class="btn btn-secondary" onclick="closeModal()">取消</button><button class="btn btn-primary" onclick="createNewFile()">创建</button></div>');
+            document.getElementById('newFileName').focus();
+            document.getElementById('newFileName').onkeydown = (e) => { if (e.key === 'Enter') createNewFile(); };
+        }
+
+        async function createNewFile() {
+            const name = document.getElementById('newFileName').value.trim();
+            if (!name) { showToast('请输入文件名'); return; }
+            const items = getCurrentFolderItems();
+            if (items.some(i => i.name === name)) { showToast('同名文件已存在'); return; }
+            const fileId = generateId();
+            const newFile = { id: fileId, name, type:'file', size:0, mimeType:'text/plain', chunks:0, chunkSize:0, createdAt: Date.now(), updatedAt: Date.now() };
+            let target = fileTree;
+            const parts = currentPath.split('/').filter(Boolean);
+            for (const part of parts) {
+                target = target.children.find(c => c.name === part && c.type === 'folder');
+            }
+            if (!target.children) target.children = [];
+            target.children.push(newFile);
+            await saveTree();
+            closeModal();
+            renderFileList();
+            showToast('文件已创建');
+        }
+
+        function renameItem(itemId, oldName, type) {
+            showModal('<h2>✏️ 重命名' + (type === 'folder' ? '文件夹' : '文件') + '</h2><input type="text" id="renameInput" value="' + oldName + '" autofocus><div class="btn-row"><button class="btn btn-secondary" onclick="closeModal()">取消</button><button class="btn btn-primary" onclick="doRename(\\'' + itemId + '\\',\\'' + type + '\\')">确定</button></div>');
+            const input = document.getElementById('renameInput');
+            input.focus();
+            input.select();
+            input.onkeydown = (e) => { if (e.key === 'Enter') doRename(itemId, type); };
+        }
+
+        async function doRename(itemId, type) {
+            const newName = document.getElementById('renameInput').value.trim();
+            if (!newName) { showToast('请输入新名称'); return; }
+            if (newName.includes('/')) { showToast('名称不能包含 /'); return; }
+            const item = findItemInTree(fileTree, itemId);
+            if (!item) { showToast('未找到文件'); return; }
+            const parentItems = getCurrentFolderItems();
+            if (parentItems.some(i => i.name === newName && i.id !== itemId)) { showToast('同名文件已存在'); return; }
+            item.name = newName;
+            item.updatedAt = Date.now();
+            await saveTree();
+            closeModal();
+            renderFileList();
+            showToast('重命名成功');
+        }
+
+        function deleteItem(itemId, name, type) {
+            const isFolder = type === 'folder';
+            showModal('<h2>🗑️ 确认删除</h2><p style="font-size:14px;margin-bottom:16px;color:var(--text-secondary);">确定要删除 ' + (isFolder ? '文件夹' : '文件') + '「' + name + '」吗？' + (isFolder ? '其中的所有内容都会被删除。' : '') + '此操作不可撤销。</p><div class="btn-row"><button class="btn btn-secondary" onclick="closeModal()">取消</button><button class="btn btn-danger" onclick="doDelete(\\'' + itemId + '\\')">删除</button></div>');
+        }
+
+        async function doDelete(itemId) {
+            try {
+                const item = findItemInTree(fileTree, itemId);
+                if (!item) { showToast('未找到文件'); closeModal(); return; }
+                if (item.type === 'file' && item.chunks > 0) {
+                    await api('/api/delete-content', { method:'POST', body: JSON.stringify({ fileId: item.id, chunks: item.chunks }) });
+                }
+                removeItemFromTree(fileTree, itemId);
+                await saveTree();
+                closeModal();
+                renderFileList();
+                showToast('已删除');
+            } catch (e) {
+                showToast('删除失败: ' + e.message);
+            }
+        }
+
+        async function previewFile(item) {
+            const ext = (item.name.split('.').pop() || '').toLowerCase();
+            const previewableExts = ['jpg','jpeg','png','gif','webp','svg','bmp','ico','txt','md','json','js','ts','css','html','xml','log','mp4','webm','mp3','wav','pdf'];
+            if (!previewableExts.includes(ext)) { showToast('此文件类型不支持预览，请下载查看'); return; }
+            try {
+                showToast('正在加载预览...', 1000);
+                const data = await api('/api/preview?path=' + encodeURIComponent(joinPath(currentPath, item.name)));
+                if (data.base64) {
+                    const binary = base64ToArrayBuffer(data.base64);
+                    const blob = new Blob([binary], { type: item.mimeType || 'application/octet-stream' });
+                    const url = URL.createObjectURL(blob);
+                    window.open(url, '_blank');
+                    setTimeout(() => URL.revokeObjectURL(url), 60000);
+                } else {
+                    showToast('预览失败');
+                }
+            } catch (e) {
+                showToast('预览失败: ' + e.message);
+            }
+        }
+
+        async function downloadFile(fileId, fileName) {
+            try {
+                showToast('正在准备下载...', 1500);
+                const res = await fetch(API_BASE + '/api/download?fileId=' + encodeURIComponent(fileId));
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.error || '下载失败');
+                }
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = fileName;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(() => URL.revokeObjectURL(url), 10000);
+                showToast('下载已开始');
+            } catch (e) {
+                showToast('下载失败: ' + e.message);
+            }
+        }
+
+        async function shareFile(fileId, fileName) {
+            try {
+                showModal('<h2>🔗 分享文件</h2><p style="font-size:13px;color:var(--text-secondary);margin-bottom:8px;">' + fileName + '</p><div class="share-link-box" id="shareLink">正在生成分享链接...</div><div class="btn-row"><button class="btn btn-secondary" onclick="closeModal()">关闭</button><button class="btn btn-primary" onclick="copyShareLink()">复制链接</button></div>');
+                const data = await api('/api/share', { method:'POST', body: JSON.stringify({ fileId }) });
+                const link = location.origin + '/s/' + data.shareId;
+                document.getElementById('shareLink').textContent = link;
+                document.getElementById('shareLink').dataset.link = link;
+            } catch (e) {
+                closeModal();
+                showToast('分享失败: ' + e.message);
+            }
+        }
+
+        function copyShareLink() {
+            const el = document.getElementById('shareLink');
+            const link = el?.dataset?.link || el?.textContent;
+            if (link && link !== '正在生成分享链接...') {
+                navigator.clipboard.writeText(link).then(() => showToast('链接已复制')).catch(() => showToast('复制失败，请手动复制'));
+            }
+        }
+
+        async function editFile(fileId, fileName) {
+            try {
+                const path = joinPath(currentPath, fileName);
+                showModal('<h2>✏️ 编辑文件</h2><p style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;">' + fileName + '</p><textarea id="editContent" style="width:100%;min-height:200px;border:1.5px solid var(--border);border-radius:8px;padding:10px;font-size:13px;font-family:monospace;resize:vertical;outline:none;margin-bottom:12px;"></textarea><div class="btn-row"><button class="btn btn-secondary" onclick="closeModal()">取消</button><button class="btn btn-primary" onclick="saveEditFile(\\'' + fileId + '\\',\\'' + fileName + '\\')">保存</button></div>');
+                const data = await api('/api/file-content?path=' + encodeURIComponent(path));
+                if (data.base64) {
+                    const content = atob(data.base64);
+                    document.getElementById('editContent').value = content;
+                }
+            } catch (e) {
+                closeModal();
+                showToast('加载文件失败: ' + e.message);
+            }
+        }
+
+        async function saveEditFile(fileId, fileName) {
+            try {
+                const content = document.getElementById('editContent').value;
+                const base64 = btoa(unescape(encodeURIComponent(content)));
+                const path = joinPath(currentPath, fileName);
+                await api('/api/save-content', { method:'POST', body: JSON.stringify({ path, base64, fileId }) });
+                closeModal();
+                await loadTree();
+                showToast('已保存');
+            } catch (e) {
+                showToast('保存失败: ' + e.message);
+            }
+        }
+
+        function showUploadModal() {
+            showModal('<h2>📤 上传文件</h2><div style="margin-bottom:12px;"><label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px;">上传到：</label><div style="display:flex;gap:8px;align-items:center;"><input type="text" id="uploadPath" value="' + currentPath + '" style="flex:1;" readonly><button class="btn btn-secondary" style="flex:0;padding:8px 10px;" onclick="chooseUploadDir()">选择</button></div></div><div class="upload-area" id="fileUploadArea"><div class="icon">📄</div><p>点击选择文件上传</p><input type="file" id="fileInput" multiple style="display:none;"></div><div class="upload-area" id="folderUploadArea" style="margin-top:8px;"><div class="icon">📁</div><p>点击选择文件夹上传</p><input type="file" id="folderInput" webkitdirectory multiple style="display:none;"></div><div id="filePreviewGrid" class="file-preview-grid hidden"></div><div id="uploadProgress" class="hidden" style="margin-top:12px;"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;"><span id="uploadProgressText">准备上传...</span><span id="uploadProgressPct">0%</span></div><div class="progress-bar"><div class="fill" id="uploadProgressBar" style="width:0%"></div></div></div><div class="btn-row" style="margin-top:12px;"><button class="btn btn-secondary" onclick="closeModal()">取消</button><button class="btn btn-primary" id="startUploadBtn" onclick="startUpload()" disabled>开始上传</button></div>');
+            document.getElementById('fileUploadArea').onclick = () => document.getElementById('fileInput').click();
+            document.getElementById('folderUploadArea').onclick = () => document.getElementById('folderInput').click();
+            document.getElementById('fileInput').onchange = (e) => {
+                pendingUploads = [];
+                const files = Array.from(e.target.files);
+                for (const f of files) pendingUploads.push({ file: f, relativePath: f.name });
+                renderUploadPreview();
+            };
+            document.getElementById('folderInput').onchange = (e) => {
+                pendingUploads = [];
+                const files = Array.from(e.target.files);
+                for (const f of files) pendingUploads.push({ file: f, relativePath: f.webkitRelativePath || f.name });
+                renderUploadPreview();
+            };
+        }
+
+        function chooseUploadDir() {
+            showModal('<h2>📂 选择上传目录</h2><div id="dirList" style="max-height:300px;overflow-y:auto;">' + renderDirOptions() + '</div><div class="btn-row" style="margin-top:8px;"><button class="btn btn-secondary" onclick="closeModal()">取消</button></div>');
+            document.querySelectorAll('.dir-option').forEach(el => {
+                el.onclick = () => {
+                    const path = el.dataset.path;
+                    document.getElementById('uploadPath').value = path;
+                    closeModal();
+                };
+            });
+        }
+
+        function renderDirOptions(currentPathStr = '', depth = 0) {
+            let html = '';
+            const items = currentPathStr === '' ? (fileTree?.children || []) : getChildrenOfPath(currentPathStr);
+            const indent = '&nbsp;'.repeat(depth * 4);
+            html += '<div class="dir-option" data-path="/" style="padding:8px;cursor:pointer;border-radius:6px;font-size:13px;">' + indent + '📁 / (根目录)</div>';
+            if (fileTree && fileTree.children) {
+                for (const item of fileTree.children) {
+                    if (item.type === 'folder') {
+                        html += '<div class="dir-option" data-path="/' + item.name + '" style="padding:8px;cursor:pointer;border-radius:6px;font-size:13px;">' + indent + '📁 ' + item.name + '</div>';
+                        html += renderDirOptionsRecursive(item, '/' + item.name, depth + 1);
+                    }
+                }
+            }
+            return html;
+        }
+
+        function renderDirOptionsRecursive(folder, path, depth) {
+            let html = '';
+            const indent = '&nbsp;'.repeat(depth * 4);
+            if (folder.children) {
+                for (const item of folder.children) {
+                    if (item.type === 'folder') {
+                        html += '<div class="dir-option" data-path="' + path + '/' + item.name + '" style="padding:8px;cursor:pointer;border-radius:6px;font-size:13px;">' + indent + '📁 ' + item.name + '</div>';
+                        html += renderDirOptionsRecursive(item, path + '/' + item.name, depth + 1);
+                    }
+                }
+            }
+            return html;
+        }
+
+        function getChildrenOfPath(path) {
+            const parts = path.split('/').filter(Boolean);
+            let current = fileTree;
+            for (const part of parts) {
+                current = current?.children?.find(c => c.name === part && c.type === 'folder');
+                if (!current) return [];
+            }
+            return current.children || [];
+        }
+
+        function renderUploadPreview() {
+            const grid = document.getElementById('filePreviewGrid');
+            if (pendingUploads.length === 0) {
+                grid.classList.add('hidden');
+                document.getElementById('startUploadBtn').disabled = true;
+                return;
+            }
+            grid.classList.remove('hidden');
+            grid.innerHTML = '';
+            for (const item of pendingUploads) {
+                const div = document.createElement('div');
+                div.className = 'file-preview-item';
+                div.innerHTML = '<span class="fp-icon">' + getFileIcon({name: item.file.name, type:'file'}) + '</span>' + item.file.name + ' (' + formatSize(item.file.size) + ')';
+                grid.appendChild(div);
+            }
+            document.getElementById('startUploadBtn').disabled = false;
+        }
+
+        async function startUpload() {
+            if (pendingUploads.length === 0) { showToast('请先选择文件'); return; }
+            const uploadPath = document.getElementById('uploadPath').value || '/';
+            const startBtn = document.getElementById('startUploadBtn');
+            startBtn.disabled = true;
+            document.getElementById('uploadProgress').classList.remove('hidden');
+            const progressBar = document.getElementById('uploadProgressBar');
+            const progressText = document.getElementById('uploadProgressText');
+            const progressPct = document.getElementById('uploadProgressPct');
+            let totalSize = 0, uploadedSize = 0;
+            for (const item of pendingUploads) totalSize += item.file.size;
+            let completedCount = 0;
+            for (const item of pendingUploads) {
+                const file = item.file;
+                const relativePath = item.relativePath;
+                progressText.textContent = '正在上传: ' + file.name + ' (' + (completedCount + 1) + '/' + pendingUploads.length + ')';
+                try {
+                    await uploadSingleFile(file, relativePath, uploadPath, (progress) => {
+                        const totalProgress = (uploadedSize + file.size * progress) / totalSize * 100;
+                        progressBar.style.width = Math.min(totalProgress, 100) + '%';
+                        progressPct.textContent = Math.round(Math.min(totalProgress, 100)) + '%';
+                    });
+                    uploadedSize += file.size;
+                    completedCount++;
+                } catch (e) {
+                    showToast('上传 ' + file.name + ' 失败: ' + e.message);
+                }
+            }
+            progressBar.style.width = '100%';
+            progressBar.classList.add('completed');
+            progressText.textContent = '上传完成 (' + completedCount + '/' + pendingUploads.length + ')';
+            progressPct.textContent = '100%';
+            setTimeout(() => { closeModal(); loadTree(); loadTasks(); }, 800);
+            showToast('上传完成');
+        }
+
+        async function uploadSingleFile(file, relativePath, uploadPath, onProgress) {
+            const CHUNK_THRESHOLD = 15 * 1024 * 1024;
+            const CHUNK_SIZE = 18 * 1024 * 1024;
+            const fileId = generateId();
+            const fileBase64 = await arrayBufferToBase64(await file.arrayBuffer());
+            if (file.size <= CHUNK_THRESHOLD) {
+                onProgress(0.3);
+                await api('/api/upload/single', {
+                    method:'POST',
+                    body: JSON.stringify({
+                        fileId,
+                        fileName: file.name,
+                        relativePath,
+                        uploadPath,
+                        base64: fileBase64,
+                        mimeType: file.type || 'application/octet-stream',
+                        size: file.size
+                    })
+                });
+                onProgress(1);
+            } else {
+                const chunks = Math.ceil(fileBase64.length / (CHUNK_SIZE * 1.37));
+                const chunkList = [];
+                for (let i = 0; i < chunks; i++) {
+                    const start = i * CHUNK_SIZE;
+                    const end = Math.min(start + CHUNK_SIZE, file.size);
+                    const chunkBlob = file.slice(start, end);
+                    const chunkArrayBuffer = await chunkBlob.arrayBuffer();
+                    const chunkBase64 = await arrayBufferToBase64(chunkArrayBuffer);
+                    chunkList.push(chunkBase64);
+                }
+                await api('/api/upload/init', {
+                    method:'POST',
+                    body: JSON.stringify({
+                        fileId,
+                        fileName: file.name,
+                        relativePath,
+                        uploadPath,
+                        chunks: chunkList.length,
+                        chunkSize: CHUNK_SIZE,
+                        mimeType: file.type || 'application/octet-stream',
+                        size: file.size
+                    })
+                });
+                for (let i = 0; i < chunkList.length; i++) {
+                    await api('/api/upload/chunk', {
+                        method:'POST',
+                        body: JSON.stringify({ fileId, chunkIndex: i, base64: chunkList[i] })
+                    });
+                    onProgress((i + 1) / chunkList.length);
+                }
+                await api('/api/upload/complete', {
+                    method:'POST',
+                    body: JSON.stringify({ fileId, chunks: chunkList.length })
+                });
+            }
+        }
+
+        function showOfflineDownloadModal() {
+            showModal('<h2>📥 离线下载</h2><p style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;">支持 HTTP/HTTPS 链接（BT/ED2K暂不支持）</p><input type="url" id="offlineUrl" placeholder="https://example.com/file.zip"><div style="margin-bottom:12px;"><label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px;">保存到：</label><input type="text" id="offlinePath" value="' + currentPath + '" readonly></div><div class="btn-row"><button class="btn btn-secondary" onclick="closeModal()">取消</button><button class="btn btn-primary" onclick="startOfflineDownload()">开始下载</button></div>');
+        }
+
+        async function startOfflineDownload() {
+            const url = document.getElementById('offlineUrl').value.trim();
+            const savePath = document.getElementById('offlinePath').value || '/';
+            if (!url) { showToast('请输入下载链接'); return; }
+            if (!url.startsWith('http://') && !url.startsWith('https://')) { showToast('仅支持 HTTP/HTTPS 链接'); return; }
+            try {
+                closeModal();
+                showToast('离线下载任务已创建');
+                await api('/api/offline', { method:'POST', body: JSON.stringify({ url, savePath }) });
+                loadTasks();
+                setTimeout(() => { loadTree(); loadTasks(); }, 3000);
+            } catch (e) {
+                showToast('创建下载任务失败: ' + e.message);
+            }
+        }
+
+        async function loadTasks() {
+            try {
+                const data = await api('/api/tasks');
+                tasks = data.tasks || [];
+                renderTasks();
+            } catch (e) {
+                tasks = [];
+                renderTasks();
+            }
+        }
+
+        function renderTasks() {
+            const container = document.getElementById('taskList');
+            if (tasks.length === 0) {
+                container.innerHTML = '<p style="font-size:13px;color:var(--text-secondary);text-align:center;padding:20px;">暂无任务</p>';
+                return;
+            }
+            container.innerHTML = '';
+            const sorted = [...tasks].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+            for (const task of sorted) {
+                const div = document.createElement('div');
+                div.className = 'task-item';
+                const statusClass = task.status === 'completed' ? 'completed' : task.status === 'failed' ? 'failed' : '';
+                const statusText = task.status === 'completed' ? '✅ 完成' : task.status === 'failed' ? '❌ 失败' : task.status === 'processing' ? '⏳ 处理中' : '⏸ 等待中';
+                div.innerHTML = '<div class="task-name">' + (task.type === 'upload' ? '📤' : '📥') + ' ' + (task.name || task.url || '未知任务') + '</div><div class="task-status">' + statusText + (task.progress ? ' · ' + Math.round(task.progress) + '%' : '') + '</div><div class="progress-bar"><div class="fill ' + statusClass + '" style="width:' + (task.progress || 0) + '%"></div></div>' + (task.error ? '<div style="font-size:11px;color:var(--danger);margin-top:4px;">' + task.error + '</div>' : '');
+                container.appendChild(div);
+            }
+        }
+
+        function openTaskPanel() {
+            document.getElementById('taskPanel').classList.add('open');
+            document.getElementById('taskBackdrop').classList.add('open');
+            loadTasks();
+        }
+
+        function closeTaskPanel() {
+            document.getElementById('taskPanel').classList.remove('open');
+            document.getElementById('taskBackdrop').classList.remove('open');
+        }
+
+        async function init() {
+            await loadTree();
+            await loadTasks();
+            document.getElementById('fabBtn').onclick = () => {
+                showModal('<h2>➕ 添加</h2><div style="display:flex;flex-direction:column;gap:8px;"><button class="btn btn-primary" onclick="closeModal();showUploadModal()">📤 上传文件</button><button class="btn btn-secondary" onclick="closeModal();showNewFolderModal()">📁 新建文件夹</button><button class="btn btn-secondary" onclick="closeModal();showNewFileModal()">📄 新建文本文件</button><button class="btn btn-secondary" onclick="closeModal();showOfflineDownloadModal()">📥 离线下载</button><button class="btn btn-secondary" onclick="closeModal();openTaskPanel()">📋 查看任务</button></div>');
+            };
+            document.getElementById('taskBtn').onclick = openTaskPanel;
+            document.getElementById('closeTaskPanel').onclick = closeTaskPanel;
+            document.getElementById('taskBackdrop').onclick = closeTaskPanel;
+            setInterval(loadTasks, 5000);
+        }
+
+        init();
+    <\/script>
+</body>
+</html>`;
+
+// ==================== 后端逻辑 ====================
+const FILE_KV_BINDINGS = [
+  'FILE_KV_1',
+  'FILE_KV_2',
+  'FILE_KV_3',
+  'FILE_KV_4',
+  'FILE_KV_5'
+];
+
+// 工具函数
+function jsonResponse(data, headers = {}, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      'Content-Type': 'application/json',
+      ...headers,
+    },
+  });
+}
+
+function corsHeaders() {
+  return {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+  };
+}
+
+function base64ToArrayBuffer(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes.buffer;
+}
+
+function arrayBufferToBase64(arrayBuffer) {
+  const bytes = new Uint8Array(arrayBuffer);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+// 根据文件ID选择KV索引
+function getKvIndex(fileId, chunkIndex = null) {
+  let hash = 0;
+  const str = chunkIndex !== null ? fileId + ':' + chunkIndex : fileId;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash << 5) - hash + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash) % 5;
+}
+
+// 文件树操作
+async function getTree(env) {
+  const tree = await env.FILE_STRUCTURE_KV.get('tree', 'json');
+  return tree || { name: '/', type: 'folder', children: [] };
+}
+
+async function putTree(env, tree) {
+  await env.FILE_STRUCTURE_KV.put('tree', JSON.stringify(tree));
+}
+
+function findItemByPathInTree(tree, path) {
+  const parts = path.split('/').filter(Boolean);
+  let current = tree;
+  for (const part of parts) {
+    if (!current.children) return null;
+    current = current.children.find(c => c.name === part);
+    if (!current) return null;
+  }
+  return current;
+}
+
+function findItemById(tree, id) {
+  if (!tree) return null;
+  if (tree.id === id) return tree;
+  if (tree.children) {
+    for (const child of tree.children) {
+      const found = findItemById(child, id);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+async function addFileToTree(env, uploadPath, fileName, fileId, size, mimeType, chunks, chunkSize) {
+  const tree = await getTree(env);
+  const parts = uploadPath.split('/').filter(Boolean);
+  let current = tree;
+  for (const part of parts) {
+    let folder = current.children?.find(c => c.name === part && c.type === 'folder');
+    if (!folder) {
+      // 创建缺失的文件夹
+      folder = {
+        id: 'f_' + Date.now() + '_' + Math.random().toString(36).substr(2, 8),
+        name: part,
+        type: 'folder',
+        children: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      };
+      if (!current.children) current.children = [];
+      current.children.push(folder);
+    }
+    current = folder;
+  }
+  const newFile = {
+    id: fileId,
+    name: fileName,
+    type: 'file',
+    size,
+    mimeType,
+    chunks,
+    chunkSize,
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  };
+  if (!current.children) current.children = [];
+  // 检查是否已存在同名文件，若存在则替换
+  const existingIndex = current.children.findIndex(c => c.name === fileName && c.type === 'file');
+  if (existingIndex !== -1) {
+    current.children[existingIndex] = newFile;
+  } else {
+    current.children.push(newFile);
+  }
+  await putTree(env, tree);
+}
+
+// 存储文件
+async function storeSingleFile(env, fileId, base64) {
+  const arrayBuffer = base64ToArrayBuffer(base64);
+  const kvIndex = getKvIndex(fileId);
+  const kv = env[FILE_KV_BINDINGS[kvIndex]];
+  await kv.put(`f:${fileId}`, arrayBuffer);
+}
+
+async function storeChunk(env, fileId, chunkIndex, base64) {
+  const arrayBuffer = base64ToArrayBuffer(base64);
+  const kvIndex = getKvIndex(fileId, chunkIndex);
+  const kv = env[FILE_KV_BINDINGS[kvIndex]];
+  await kv.put(`f:${fileId}:chunk:${chunkIndex}`, arrayBuffer);
+}
+
+async function getFileArrayBuffer(env, item) {
+  if (item.chunks <= 1) {
+    const kvIndex = getKvIndex(item.id);
+    const kv = env[FILE_KV_BINDINGS[kvIndex]];
+    return await kv.get(`f:${item.id}`, 'arrayBuffer');
+  } else {
+    const chunks = item.chunks;
+    const totalLength = item.size;
+    const result = new Uint8Array(totalLength);
+    let offset = 0;
+    for (let i = 0; i < chunks; i++) {
+      const kvIndex = getKvIndex(item.id, i);
+      const kv = env[FILE_KV_BINDINGS[kvIndex]];
+      const chunkBuffer = await kv.get(`f:${item.id}:chunk:${i}`, 'arrayBuffer');
+      if (!chunkBuffer) throw new Error('Missing chunk ' + i);
+      const chunkBytes = new Uint8Array(chunkBuffer);
+      result.set(chunkBytes, offset);
+      offset += chunkBytes.length;
+    }
+    return result.buffer;
+  }
+}
+
+async function getFileContentBase64(env, item) {
+  const arrayBuffer = await getFileArrayBuffer(env, item);
+  return arrayBufferToBase64(arrayBuffer);
+}
+
+async function deleteFileContent(env, fileId, chunks) {
+  if (chunks <= 1) {
+    const kvIndex = getKvIndex(fileId);
+    const kv = env[FILE_KV_BINDINGS[kvIndex]];
+    await kv.delete(`f:${fileId}`);
+  } else {
+    for (let i = 0; i < chunks; i++) {
+      const kvIndex = getKvIndex(fileId, i);
+      const kv = env[FILE_KV_BINDINGS[kvIndex]];
+      await kv.delete(`f:${fileId}:chunk:${i}`);
+    }
+  }
+}
+
+// 任务管理
+async function addTask(env, type, name, status, progress, error = '') {
+  const tasks = await env.TASK_KV.get('tasks', 'json') || [];
+  const task = {
+    id: crypto.randomUUID(),
+    type,
+    name,
+    status,
+    progress,
+    error,
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  };
+  tasks.push(task);
+  await env.TASK_KV.put('tasks', JSON.stringify(tasks));
+  return task.id;
+}
+
+async function updateTask(env, taskId, status, progress, error = '') {
+  const tasks = await env.TASK_KV.get('tasks', 'json') || [];
+  const idx = tasks.findIndex(t => t.id === taskId);
+  if (idx !== -1) {
+    tasks[idx].status = status;
+    tasks[idx].progress = progress;
+    tasks[idx].error = error;
+    tasks[idx].updatedAt = Date.now();
+    await env.TASK_KV.put('tasks', JSON.stringify(tasks));
+  }
+}
+
+// 离线下载处理（简化版，仅支持小文件）
+async function handleOfflineDownload(env, url, savePath, taskId) {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error('下载失败: HTTP ' + response.status);
+    }
+    const contentLength = parseInt(response.headers.get('content-length') || '0');
+    if (contentLength > 25 * 1024 * 1024) {
+      throw new Error('文件过大，超过25MB限制');
+    }
+    const arrayBuffer = await response.arrayBuffer();
+    if (arrayBuffer.byteLength === 0) {
+      throw new Error('文件内容为空');
+    }
+    // 提取文件名
+    let fileName = 'download_' + Date.now();
+    const disposition = response.headers.get('content-disposition');
+    if (disposition) {
+      const match = disposition.match(/filename="?([^"]+)"?/i);
+      if (match) fileName = match[1];
+    } else {
+      const urlObj = new URL(url);
+      const pathname = urlObj.pathname;
+      const parts = pathname.split('/');
+      if (parts.length > 0 && parts[parts.length - 1]) {
+        fileName = decodeURIComponent(parts[parts.length - 1]);
+      }
+    }
+    const fileId = 'f_' + Date.now() + '_' + Math.random().toString(36).substr(2, 8);
+    // 存储为单文件
+    const kvIndex = getKvIndex(fileId);
+    const kv = env[FILE_KV_BINDINGS[kvIndex]];
+    await kv.put(`f:${fileId}`, arrayBuffer);
+    // 添加到文件树
+    const mimeType = response.headers.get('content-type') || 'application/octet-stream';
+    await addFileToTree(env, savePath, fileName, fileId, arrayBuffer.byteLength, mimeType, 1, 0);
+    await updateTask(env, taskId, 'completed', 100);
+  } catch (e) {
+    await updateTask(env, taskId, 'failed', 0, e.message);
+  }
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
+    const method = request.method;
+    const headers = corsHeaders();
 
-    // ---------- 辅助函数 ----------
-    function getDataKV(key, env) {
-      let hash = 0;
-      for (let i = 0; i < key.length; i++) {
-        hash = (hash * 31 + key.charCodeAt(i)) & 0x7fffffff;
-      }
-      const idx = Math.abs(hash) % 5;
-      return env['DATA_KV_' + idx];
+    // 处理 CORS 预检
+    if (method === 'OPTIONS') {
+      return new Response(null, { headers });
     }
 
-    async function getMeta(key, env) {
-      const raw = await env.FILE_INDEX.get(key);
-      return raw ? JSON.parse(raw) : null;
-    }
-
-    async function putMeta(key, meta, env) {
-      await env.FILE_INDEX.put(key, JSON.stringify(meta));
-    }
-
-    async function deleteMeta(key, env) {
-      await env.FILE_INDEX.delete(key);
-    }
-
-    async function listDir(dirPath, env) {
-      dirPath = dirPath || '/';
-      if (dirPath !== '/' && !dirPath.endsWith('/')) dirPath += '/';
-      const prefix = dirPath;
-      const list = await env.FILE_INDEX.list({ prefix });
-      const items = [];
-      for (const kv of list.keys) {
-        const key = kv.name;
-        const relative = key.slice(prefix.length);
-        if (relative.includes('/')) continue;
-        const meta = await getMeta(key, env);
-        if (meta) {
-          items.push({
-            name: relative,
-            isDir: meta.isDir || false,
-            size: meta.size || 0,
-            uploadedAt: meta.uploadedAt,
-          });
-        }
-      }
-      items.sort((a, b) => {
-        if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
-        return a.name.localeCompare(b.name);
-      });
-      return items;
-    }
-
-    // ---------- API 路由 ----------
-    if (path === '/api/list' && request.method === 'GET') {
-      const dir = url.searchParams.get('path') || '/';
-      const items = await listDir(dir, env);
-      return new Response(JSON.stringify({ items }), {
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-
-    if (path === '/api/mkdir' && request.method === 'POST') {
-      const { path: dirPath, name } = await request.json();
-      const fullPath = dirPath === '/' ? '/' + name : dirPath + '/' + name;
-      const existing = await getMeta(fullPath, env);
-      if (existing) return new Response('已存在', { status: 400 });
-      await putMeta(fullPath, { isDir: true, createdAt: new Date().toISOString() }, env);
-      return new Response('OK');
-    }
-
-    if (path === '/api/create_file' && request.method === 'POST') {
-      const { path: dirPath, name } = await request.json();
-      const fullPath = dirPath === '/' ? '/' + name : dirPath + '/' + name;
-      const existing = await getMeta(fullPath, env);
-      if (existing) return new Response('已存在', { status: 400 });
-      const mainKey = crypto.randomUUID();
-      const dataKV = getDataKV(mainKey, env);
-      await dataKV.put(mainKey, JSON.stringify({ content: '' }));
-      const meta = {
-        filename: name,
-        path: fullPath,
-        contentType: 'text/plain',
-        size: 0,
-        uploadedAt: new Date().toISOString(),
-        kvIndex: parseInt(dataKV.bindingName.slice(-1)),
-        dataKey: mainKey,
-        isDir: false,
-      };
-      await putMeta(fullPath, meta, env);
-      return new Response('OK');
-    }
-
-    if (path === '/api/rename' && request.method === 'POST') {
-      const { oldPath, newName } = await request.json();
-      const dir = oldPath.substring(0, oldPath.lastIndexOf('/') + 1);
-      const newPath = dir + newName;
-      const meta = await getMeta(oldPath, env);
-      if (!meta) return new Response('不存在', { status: 404 });
-      if (meta.isDir) return new Response('暂不支持目录重命名', { status: 400 });
-      await putMeta(newPath, meta, env);
-      await deleteMeta(oldPath, env);
-      return new Response('OK');
-    }
-
-    if (path === '/api/delete' && request.method === 'POST') {
-      const { path: targetPath } = await request.json();
-      const meta = await getMeta(targetPath, env);
-      if (!meta) return new Response('不存在', { status: 404 });
-      if (meta.isDir) return new Response('暂不支持删除目录', { status: 400 });
-      const dataKV = getDataKV(meta.dataKey, env);
-      if (meta.type === 'multipart') {
-        for (const partKey of meta.partKeys) {
-          await dataKV.delete(partKey);
-        }
-      } else {
-        await dataKV.delete(meta.dataKey);
-      }
-      await deleteMeta(targetPath, env);
-      return new Response('OK');
-    }
-
-    if (path === '/api/upload' && request.method === 'POST') {
-      try {
-        const formData = await request.formData();
-        const file = formData.get('file');
-        const targetPath = formData.get('path') || '/';
-        if (!file) return new Response('未选择文件', { status: 400 });
-
-        const fullPath = targetPath === '/' ? '/' + file.name : targetPath + '/' + file.name;
-        const existing = await getMeta(fullPath, env);
-        if (existing) return new Response('文件已存在', { status: 409 });
-
-        const mainKey = crypto.randomUUID();
-        const dataKV = getDataKV(mainKey, env);
-        const CHUNK_SIZE = 10 * 1024 * 1024;
-        const fileSize = file.size;
-        let meta = {
-          filename: file.name,
-          path: fullPath,
-          contentType: file.type || 'application/octet-stream',
-          size: fileSize,
-          uploadedAt: new Date().toISOString(),
-          kvIndex: parseInt(dataKV.bindingName.slice(-1)),
-          dataKey: mainKey,
-          isDir: false,
-        };
-
-        if (fileSize > 20 * 1024 * 1024) {
-          const chunks = Math.ceil(fileSize / CHUNK_SIZE);
-          const partKeys = [];
-          for (let i = 0; i < chunks; i++) {
-            const start = i * CHUNK_SIZE;
-            const end = Math.min(start + CHUNK_SIZE, fileSize);
-            const chunkBuffer = await file.slice(start, end).arrayBuffer();
-            const bytes = new Uint8Array(chunkBuffer);
-            const base64 = btoa(new TextDecoder('latin1').decode(bytes));
-            const partKey = mainKey + '_part_' + i;
-            await dataKV.put(partKey, JSON.stringify({ content: base64 }));
-            partKeys.push(partKey);
-          }
-          meta.type = 'multipart';
-          meta.chunks = chunks;
-          meta.partKeys = partKeys;
-        } else {
-          const buffer = await file.arrayBuffer();
-          const bytes = new Uint8Array(buffer);
-          const base64 = btoa(new TextDecoder('latin1').decode(bytes));
-          await dataKV.put(mainKey, JSON.stringify({ content: base64 }));
-        }
-
-        await putMeta(fullPath, meta, env);
-        return new Response('OK');
-      } catch (err) {
-        return new Response('上传失败：' + err.message, { status: 500 });
-      }
-    }
-
-    if (path === '/api/offline' && request.method === 'POST') {
-      const { url: downloadUrl, targetPath } = await request.json();
-      if (!downloadUrl) return new Response('缺少URL', { status: 400 });
-      const taskId = crypto.randomUUID();
-      const taskMeta = {
-        type: 'download',
-        url: downloadUrl,
-        targetPath: targetPath || '/',
-        status: 'pending',
-        progress: 0,
-        createdAt: new Date().toISOString(),
-      };
-      await env.TASK_KV.put(taskId, JSON.stringify(taskMeta));
-
-      ctx.waitUntil((async () => {
-        try {
-          taskMeta.status = 'running';
-          await env.TASK_KV.put(taskId, JSON.stringify(taskMeta));
-          const resp = await fetch(downloadUrl);
-          if (!resp.ok) throw new Error('HTTP ' + resp.status);
-          const contentLength = parseInt(resp.headers.get('content-length')) || 0;
-          const reader = resp.body.getReader();
-          const CHUNK_SIZE = 10 * 1024 * 1024;
-          let buffer = new Uint8Array(0);
-          let partIndex = 0;
-          const mainKey = crypto.randomUUID();
-          const dataKV = getDataKV(mainKey, env);
-          const partKeys = [];
-          let downloaded = 0;
-
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            const newBuffer = new Uint8Array(buffer.length + value.length);
-            newBuffer.set(buffer);
-            newBuffer.set(value, buffer.length);
-            buffer = newBuffer;
-            downloaded += value.length;
-            if (contentLength > 0) {
-              taskMeta.progress = Math.round((downloaded / contentLength) * 100);
-              await env.TASK_KV.put(taskId, JSON.stringify(taskMeta));
-            }
-            while (buffer.length >= CHUNK_SIZE) {
-              const chunk = buffer.slice(0, CHUNK_SIZE);
-              buffer = buffer.slice(CHUNK_SIZE);
-              const base64 = btoa(new TextDecoder('latin1').decode(chunk));
-              const partKey = mainKey + '_part_' + partIndex;
-              await dataKV.put(partKey, JSON.stringify({ content: base64 }));
-              partKeys.push(partKey);
-              partIndex++;
-            }
-          }
-          if (buffer.length > 0) {
-            const base64 = btoa(new TextDecoder('latin1').decode(buffer));
-            const partKey = mainKey + '_part_' + partIndex;
-            await dataKV.put(partKey, JSON.stringify({ content: base64 }));
-            partKeys.push(partKey);
-          }
-
-          const filename = downloadUrl.split('/').pop() || 'downloaded';
-          const fullPath = targetPath === '/' ? '/' + filename : targetPath + '/' + filename;
-          const meta = {
-            filename,
-            path: fullPath,
-            contentType: resp.headers.get('content-type') || 'application/octet-stream',
-            size: downloaded,
-            uploadedAt: new Date().toISOString(),
-            kvIndex: parseInt(dataKV.bindingName.slice(-1)),
-            dataKey: mainKey,
-            isDir: false,
-            type: 'multipart',
-            chunks: partKeys.length,
-            partKeys: partKeys,
-          };
-          await putMeta(fullPath, meta, env);
-          taskMeta.status = 'completed';
-          taskMeta.progress = 100;
-          await env.TASK_KV.put(taskId, JSON.stringify(taskMeta));
-        } catch (err) {
-          taskMeta.status = 'failed';
-          taskMeta.error = err.message;
-          await env.TASK_KV.put(taskId, JSON.stringify(taskMeta));
-        }
-      })());
-
-      return new Response(JSON.stringify({ taskId }), {
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-
-    if (path === '/api/tasks' && request.method === 'GET') {
-      const list = await env.TASK_KV.list();
-      const tasks = [];
-      for (const kv of list.keys) {
-        const raw = await env.TASK_KV.get(kv.name);
-        if (raw) tasks.push(JSON.parse(raw));
-      }
-      tasks.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-      return new Response(JSON.stringify({ tasks }), {
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-
-    // ---------- 文件下载 ----------
-    if (path.startsWith('/file/')) {
-      const filePath = path.slice(6);
-      const meta = await getMeta(filePath, env);
-      if (!meta) return new Response('文件不存在', { status: 404 });
-      if (meta.isDir) return new Response('这是一个目录', { status: 400 });
-      const dataKV = getDataKV(meta.dataKey, env);
-
-      if (meta.type === 'multipart') {
-        const { partKeys, contentType, filename, size } = meta;
-        const stream = new ReadableStream({
-          async start(controller) {
-            try {
-              for (const partKey of partKeys) {
-                const partRaw = await dataKV.get(partKey);
-                if (!partRaw) throw new Error('Missing part: ' + partKey);
-                const partData = JSON.parse(partRaw);
-                const bytes = Uint8Array.from(atob(partData.content), c => c.charCodeAt(0));
-                controller.enqueue(bytes);
-              }
-              controller.close();
-            } catch (err) { controller.error(err); }
-          }
-        });
-        return new Response(stream, {
-          headers: {
-            'Content-Type': contentType,
-            'Content-Disposition': 'inline; filename="' + encodeURIComponent(filename) + '"',
-            'Content-Length': size,
-          },
-        });
-      } else {
-        const dataRaw = await dataKV.get(meta.dataKey);
-        if (!dataRaw) return new Response('内容丢失', { status: 404 });
-        const data = JSON.parse(dataRaw);
-        const bytes = Uint8Array.from(atob(data.content), c => c.charCodeAt(0));
-        return new Response(bytes, {
-          headers: {
-            'Content-Type': meta.contentType,
-            'Content-Disposition': 'inline; filename="' + encodeURIComponent(meta.filename) + '"',
-          },
+    try {
+      // 主页面
+      if (path === '/' || path === '/index.html') {
+        return new Response(HTML, {
+          headers: { 'Content-Type': 'text/html;charset=UTF-8', ...headers },
         });
       }
-    }
 
-    // ---------- 主页 ----------
-    if (path === '/') {
-      return new Response(htmlContent, {
-        headers: { 'Content-Type': 'text/html;charset=utf-8' },
-      });
-    }
+      // API 路由
+      if (path.startsWith('/api/')) {
+        const apiPath = path.substring(4); // 去掉 '/api'
+        let body = {};
+        if (method === 'POST' || method === 'PUT') {
+          try {
+            body = await request.json();
+          } catch (e) {
+            // 忽略
+          }
+        }
 
-    return new Response('Not Found', { status: 404 });
-  },
-};
+        // 文件树
+        if (apiPath === '/tree' && method === 'GET') {
+          const tree = await getTree(env);
+          return jsonResponse({ tree }, headers);
+        }
+        if (apiPath === '/tree' && method === 'PUT') {
+          if (body.tree) {
+            await putTree(env, body.tree);
+            return jsonResponse({ success: true }, headers);
+          }
+          return jsonResponse({ error: 'Invalid tree' }, headers, 400);
+        }
 
-// ---------- 前端 HTML（完全使用事件委托，所有函数挂载到 window，确保稳定） ----------
-const htmlContent = `<!DOCTYPE html>
-<html lang="zh">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>云盘</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #f0f4f8; padding: 16px; min-height: 100vh; display: flex; justify-content: center; }
-    .app { max-width: 800px; width: 100%; }
-    .card { background: #ffffff; border-radius: 20px; padding: 20px; box-shadow: 0 8px 30px rgba(0,0,0,0.08); margin-bottom: 20px; }
-    .header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 18px; }
-    .header h1 { font-size: 24px; font-weight: 600; color: #1e293b; }
-    .header-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-    .btn { padding: 8px 16px; border: none; border-radius: 12px; font-size: 14px; font-weight: 500; cursor: pointer; transition: 0.2s; background: #f1f5f9; color: #1e293b; display: inline-flex; align-items: center; gap: 4px; }
-    .btn:active { transform: scale(0.96); }
-    .btn-primary { background: #3b82f6; color: white; }
-    .btn-primary:hover { background: #2563eb; }
-    .btn-success { background: #22c55e; color: white; }
-    .btn-success:hover { background: #16a34a; }
-    .btn-danger { background: #ef4444; color: white; }
-    .btn-danger:hover { background: #dc2626; }
-    .btn-outline { background: transparent; border: 1px solid #cbd5e1; }
-    .btn-sm { padding: 4px 10px; font-size: 12px; border-radius: 8px; }
-    .breadcrumb { display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 14px; color: #64748b; margin-bottom: 16px; padding: 8px 0; border-bottom: 1px solid #e2e8f0; }
-    .breadcrumb span { cursor: pointer; }
-    .breadcrumb span:hover { color: #3b82f6; text-decoration: underline; }
-    .file-grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
-    .file-item { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; background: #f8fafc; border-radius: 12px; transition: 0.15s; flex-wrap: wrap; gap: 8px; }
-    .file-item:hover { background: #f1f5f9; }
-    .file-info { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
-    .file-info .icon { font-size: 20px; }
-    .file-info .name { font-weight: 500; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
-    .file-info .name:hover { color: #3b82f6; }
-    .file-info .meta { font-size: 12px; color: #94a3b8; margin-left: auto; white-space: nowrap; }
-    .file-actions { display: flex; gap: 6px; flex-wrap: wrap; }
-    .empty-state { text-align: center; color: #94a3b8; padding: 40px 0; }
-    .empty-state .icon { font-size: 48px; margin-bottom: 12px; }
-    .task-panel { margin-top: 16px; border-top: 1px solid #e2e8f0; padding-top: 16px; display: none; }
-    .task-panel.open { display: block; }
-    .task-item { background: #f8fafc; padding: 10px 14px; border-radius: 10px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
-    .progress-bar { width: 80px; height: 6px; background: #e2e8f0; border-radius: 4px; overflow: hidden; display: inline-block; }
-    .progress-bar .fill { height: 100%; background: #3b82f6; width: 0%; }
-    .modal { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(15,23,42,0.5); align-items: center; justify-content: center; padding: 20px; z-index: 999; }
-    .modal.open { display: flex; }
-    .modal-content { background: white; border-radius: 20px; padding: 28px 24px; max-width: 420px; width: 100%; box-shadow: 0 20px 60px rgba(0,0,0,0.2); }
-    .modal-content h2 { font-size: 20px; margin-bottom: 16px; }
-    .modal-content input { width: 100%; padding: 10px 14px; border: 1px solid #d1d5db; border-radius: 12px; font-size: 16px; margin-bottom: 12px; background: #f8fafc; }
-    .modal-content .btn-group { display: flex; gap: 8px; justify-content: flex-end; }
-    @media (min-width: 600px) { .file-grid { grid-template-columns: 1fr 1fr; } }
-    @media (max-width: 480px) { .header h1 { font-size: 20px; } .file-item { flex-direction: column; align-items: stretch; } .file-actions { justify-content: flex-end; } .btn { padding: 6px 12px; font-size: 13px; } }
-  </style>
-</head>
-<body>
-<div class="app">
-  <div class="card">
-    <div class="header">
-      <h1>📁 云盘</h1>
-      <div class="header-actions">
-        <button id="btnUpload" class="btn btn-primary">+ 上传</button>
-        <button id="btnNewFile" class="btn btn-success">📄 新建</button>
-        <button id="btnTasks" class="btn btn-outline">📋 任务</button>
-        <button id="btnMkdir" class="btn btn-outline">📁 新建文件夹</button>
-      </div>
-    </div>
-    <div class="breadcrumb" id="breadcrumb"></div>
-    <div class="file-grid" id="fileList"></div>
-  </div>
-  <div class="card task-panel" id="taskPanel">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-      <h3 style="font-weight:500;">任务列表</h3>
-      <span style="font-size:12px;color:#94a3b8;">自动刷新</span>
-    </div>
-    <div id="taskList"></div>
-  </div>
-</div>
+        // 单文件上传
+        if (apiPath === '/upload/single' && method === 'POST') {
+          const { fileId, fileName, uploadPath, base64, mimeType, size } = body;
+          if (!fileId || !fileName || !base64) {
+            return jsonResponse({ error: 'Missing fields' }, headers, 400);
+          }
+          try {
+            await storeSingleFile(env, fileId, base64);
+            await addFileToTree(env, uploadPath, fileName, fileId, size, mimeType, 1, 0);
+            await addTask(env, 'upload', fileName, 'completed', 100);
+            return jsonResponse({ success: true }, headers);
+          } catch (e) {
+            return jsonResponse({ error: e.message }, headers, 500);
+          }
+        }
 
-<!-- 上传模态框 -->
-<div class="modal" id="uploadModal">
-  <div class="modal-content">
-    <h2>上传文件/文件夹</h2>
-    <p style="font-size:14px;color:#64748b;margin-bottom:8px;">目标路径：<span id="uploadPathDisplay">/</span></p>
-    <input type="file" id="fileInput" multiple webkitdirectory>
-    <div class="btn-group">
-      <button id="doUploadBtn" class="btn btn-primary">开始上传</button>
-      <button id="cancelUploadBtn" class="btn btn-outline">取消</button>
-    </div>
-  </div>
-</div>
+        // 分片上传初始化
+        if (apiPath === '/upload/init' && method === 'POST') {
+          const { fileId, fileName, uploadPath, chunks, chunkSize, mimeType, size } = body;
+          if (!fileId || !fileName || !chunks) {
+            return jsonResponse({ error: 'Missing fields' }, headers, 400);
+          }
+          const taskId = await addTask(env, 'upload', fileName, 'processing', 0);
+          // 存储元数据
+          await env.FILE_STRUCTURE_KV.put('meta:' + fileId, JSON.stringify({
+            fileName,
+            uploadPath,
+            mimeType,
+            size,
+            chunkSize,
+            taskId
+          }));
+          return jsonResponse({ success: true, taskId }, headers);
+        }
 
-<!-- 新建文件模态框 -->
-<div class="modal" id="newFileModal">
-  <div class="modal-content">
-    <h2>新建空白文件</h2>
-    <p style="font-size:14px;color:#64748b;margin-bottom:8px;">在 <span id="newFilePathDisplay">/</span> 下创建</p>
-    <input type="text" id="newFileName" placeholder="文件名（如 readme.txt）" value="新文件.txt">
-    <div class="btn-group">
-      <button id="doCreateBtn" class="btn btn-success">创建</button>
-      <button id="cancelCreateBtn" class="btn btn-outline">取消</button>
-    </div>
-  </div>
-</div>
+        // 分片上传
+        if (apiPath === '/upload/chunk' && method === 'POST') {
+          const { fileId, chunkIndex, base64 } = body;
+          if (!fileId || chunkIndex === undefined || !base64) {
+            return jsonResponse({ error: 'Missing fields' }, headers, 400);
+          }
+          try {
+            await storeChunk(env, fileId, chunkIndex, base64);
+            return jsonResponse({ success: true }, headers);
+          } catch (e) {
+            return jsonResponse({ error: e.message }, headers, 500);
+          }
+        }
 
-<script>
-// 全局变量
-var currentPath = '/';
-var fileItems = [];
+        // 分片上传完成
+        if (apiPath === '/upload/complete' && method === 'POST') {
+          const { fileId, chunks } = body;
+          if (!fileId || !chunks) {
+            return jsonResponse({ error: 'Missing fields' }, headers, 400);
+          }
+          const metaKey = 'meta:' + fileId;
+          const meta = await env.FILE_STRUCTURE_KV.get(metaKey, 'json');
+          if (!meta) {
+            return jsonResponse({ error: 'Upload metadata not found' }, headers, 400);
+          }
+          const { fileName, uploadPath, mimeType, size, chunkSize, taskId } = meta;
+          await addFileToTree(env, uploadPath, fileName, fileId, size, mimeType, chunks, chunkSize || 0);
+          await env.FILE_STRUCTURE_KV.delete(metaKey);
+          if (taskId) {
+            await updateTask(env, taskId, 'completed', 100);
+          }
+          return jsonResponse({ success: true }, headers);
+        }
 
-// ---------- 核心功能（全部暴露到 window） ----------
-window.refresh = function() {
-  fetch('/api/list?path=' + encodeURIComponent(currentPath))
-    .then(function(res) { return res.json(); })
-    .then(function(data) {
-      fileItems = data.items || [];
-      renderBreadcrumb();
-      renderList();
-    })
-    .catch(function(e) { console.error(e); });
-};
+        // 删除文件内容
+        if (apiPath === '/delete-content' && method === 'POST') {
+          const { fileId, chunks } = body;
+          if (!fileId) {
+            return jsonResponse({ error: 'Missing fileId' }, headers, 400);
+          }
+          try {
+            await deleteFileContent(env, fileId, chunks);
+            return jsonResponse({ success: true }, headers);
+          } catch (e) {
+            return jsonResponse({ error: e.message }, headers, 500);
+          }
+        }
 
-function renderBreadcrumb() {
-  var parts = currentPath.split('/').filter(function(p) { return p; });
-  var html = '<span data-path="/">🏠 根目录</span>';
-  var acc = '';
-  for (var i = 0; i < parts.length; i++) {
-    acc += '/' + parts[i];
-    html += ' <span>›</span> <span data-path="' + acc + '">' + parts[i] + '</span>';
-  }
-  var el = document.getElementById('breadcrumb');
-  el.innerHTML = html;
-  // 事件委托给父容器，不需要单独绑定
-}
+        // 预览文件（返回 Base64）
+        if (apiPath === '/preview' && method === 'GET') {
+          const filePath = url.searchParams.get('path');
+          if (!filePath) {
+            return jsonResponse({ error: 'Missing path' }, headers, 400);
+          }
+          const tree = await getTree(env);
+          const item = findItemByPathInTree(tree, filePath);
+          if (!item || item.type !== 'file') {
+            return jsonResponse({ error: 'File not found' }, headers, 404);
+          }
+          try {
+            const base64 = await getFileContentBase64(env, item);
+            return jsonResponse({ base64 }, headers);
+          } catch (e) {
+            return jsonResponse({ error: e.message }, headers, 500);
+          }
+        }
 
-function renderList() {
-  var container = document.getElementById('fileList');
-  if (fileItems.length === 0) {
-    container.innerHTML = '<div class="empty-state"><div class="icon">📂</div><p>此目录为空</p></div>';
-    return;
-  }
-  var html = '';
-  for (var i = 0; i < fileItems.length; i++) {
-    var item = fileItems[i];
-    var icon = item.isDir ? '📁' : '📄';
-    var size = item.isDir ? '' : (item.size / 1024).toFixed(1) + ' KB';
-    var date = item.uploadedAt ? new Date(item.uploadedAt).toLocaleString() : '';
-    var fullPath = currentPath === '/' ? '/' + item.name : currentPath + '/' + item.name;
-    html += '<div class="file-item" data-path="' + fullPath + '" data-isdir="' + item.isDir + '">' +
-      '<div class="file-info">' +
-        '<span class="icon">' + icon + '</span>' +
-        '<span class="name">' + item.name + '</span>' +
-        '<span class="meta">' + size + ' ' + date + '</span>' +
-      '</div>' +
-      '<div class="file-actions">' +
-        (item.isDir ? '<button class="btn btn-sm btn-outline action-open" data-path="' + fullPath + '">打开</button>' :
-                      '<a href="/file' + fullPath + '" target="_blank" class="btn btn-sm btn-primary">下载</a>') +
-        '<button class="btn btn-sm btn-outline action-rename" data-path="' + fullPath + '">✏️</button>' +
-        '<button class="btn btn-sm btn-danger action-delete" data-path="' + fullPath + '">🗑️</button>' +
-      '</div>' +
-    '</div>';
-  }
-  container.innerHTML = html;
-}
+        // 下载文件（二进制流）
+        if (apiPath === '/download' && method === 'GET') {
+          const fileId = url.searchParams.get('fileId');
+          if (!fileId) {
+            return jsonResponse({ error: 'Missing fileId' }, headers, 400);
+          }
+          const tree = await getTree(env);
+          const item = findItemById(tree, fileId);
+          if (!item || item.type !== 'file') {
+            return jsonResponse({ error: 'File not found' }, headers, 404);
+          }
+          try {
+            const buffer = await getFileArrayBuffer(env, item);
+            return new Response(buffer, {
+              headers: {
+                'Content-Type': item.mimeType || 'application/octet-stream',
+                'Content-Disposition': 'attachment; filename="' + encodeURIComponent(item.name) + '"',
+                ...headers,
+              },
+            });
+          } catch (e) {
+            return jsonResponse({ error: e.message }, headers, 500);
+          }
+        }
 
-// 事件委托（监听 fileList 的点击）
-document.getElementById('fileList').addEventListener('click', function(e) {
-  var target = e.target.closest('button');
-  if (!target) {
-    // 点击文件名打开目录（如果是文件夹）
-    var nameEl = e.target.closest('.name');
-    if (nameEl) {
-      var parent = nameEl.closest('.file-item');
-      if (parent && parent.getAttribute('data-isdir') === 'true') {
-        window.navigateTo(parent.getAttribute('data-path'));
+        // 获取文本内容（用于编辑）
+        if (apiPath === '/file-content' && method === 'GET') {
+          const filePath = url.searchParams.get('path');
+          if (!filePath) {
+            return jsonResponse({ error: 'Missing path' }, headers, 400);
+          }
+          const tree = await getTree(env);
+          const item = findItemByPathInTree(tree, filePath);
+          if (!item || item.type !== 'file') {
+            return jsonResponse({ error: 'File not found' }, headers, 404);
+          }
+          try {
+            const base64 = await getFileContentBase64(env, item);
+            return jsonResponse({ base64 }, headers);
+          } catch (e) {
+            return jsonResponse({ error: e.message }, headers, 500);
+          }
+        }
+
+        // 保存文本编辑
+        if (apiPath === '/save-content' && method === 'POST') {
+          const { path, base64, fileId } = body;
+          if (!path || !base64 || !fileId) {
+            return jsonResponse({ error: 'Missing fields' }, headers, 400);
+          }
+          const tree = await getTree(env);
+          const item = findItemById(tree, fileId);
+          if (!item) {
+            return jsonResponse({ error: 'File not found' }, headers, 404);
+          }
+          try {
+            // 删除旧内容
+            await deleteFileContent(env, fileId, item.chunks);
+            // 存储新内容
+            await storeSingleFile(env, fileId, base64);
+            // 更新元数据
+            item.size = base64.length * 3 / 4;
+            item.chunks = 1;
+            item.chunkSize = 0;
+            item.updatedAt = Date.now();
+            await putTree(env, tree);
+            return jsonResponse({ success: true }, headers);
+          } catch (e) {
+            return jsonResponse({ error: e.message }, headers, 500);
+          }
+        }
+
+        // 创建分享
+        if (apiPath === '/share' && method === 'POST') {
+          const { fileId } = body;
+          if (!fileId) {
+            return jsonResponse({ error: 'Missing fileId' }, headers, 400);
+          }
+          const shareId = crypto.randomUUID();
+          await env.FILE_STRUCTURE_KV.put('share:' + shareId, fileId);
+          return jsonResponse({ shareId }, headers);
+        }
+
+        // 离线下载
+        if (apiPath === '/offline' && method === 'POST') {
+          const { url, savePath } = body;
+          if (!url || !savePath) {
+            return jsonResponse({ error: 'Missing url or savePath' }, headers, 400);
+          }
+          const taskId = await addTask(env, 'download', url, 'processing', 0);
+          // 异步处理
+          ctx.waitUntil(handleOfflineDownload(env, url, savePath, taskId));
+          return jsonResponse({ success: true, taskId }, headers);
+        }
+
+        // 任务列表
+        if (apiPath === '/tasks' && method === 'GET') {
+          const tasks = await env.TASK_KV.get('tasks', 'json') || [];
+          return jsonResponse({ tasks }, headers);
+        }
+
+        // 分享链接访问（/s/:shareId）
+        if (path.startsWith('/s/')) {
+          const shareId = path.substring(3);
+          const fileId = await env.FILE_STRUCTURE_KV.get('share:' + shareId);
+          if (!fileId) {
+            return new Response('分享链接不存在', { status: 404, headers });
+          }
+          // 重定向到下载
+          return Response.redirect(new URL('/api/download?fileId=' + fileId, url.origin), 302);
+        }
+
+        // 未匹配的 API 路径
+        return jsonResponse({ error: 'Not found' }, headers, 404);
       }
+
+      // 其他路径
+      return new Response('Not found', { status: 404, headers });
+    } catch (e) {
+      return jsonResponse({ error: e.message }, headers, 500);
     }
-    return;
   }
-  var path = target.getAttribute('data-path');
-  if (!path) return;
-  if (target.classList.contains('action-open')) {
-    window.navigateTo(path);
-  } else if (target.classList.contains('action-rename')) {
-    window.renameItem(path);
-  } else if (target.classList.contains('action-delete')) {
-    window.deleteItem(path);
-  }
-});
-
-// 面包屑导航点击（事件委托）
-document.getElementById('breadcrumb').addEventListener('click', function(e) {
-  var span = e.target.closest('span[data-path]');
-  if (span) {
-    window.navigateTo(span.getAttribute('data-path'));
-  }
-});
-
-// 导航
-window.navigateTo = function(path) {
-  currentPath = path;
-  window.refresh();
 };
-
-// 新建文件夹
-window.mkdir = function() {
-  var name = prompt('请输入新文件夹名称');
-  if (!name) return;
-  fetch('/api/mkdir', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: currentPath, name: name })
-  }).then(function(r) {
-    if (r.ok) window.refresh();
-    else alert('创建失败');
-  });
-};
-
-// 重命名
-window.renameItem = function(fullPath) {
-  var newName = prompt('请输入新名称', fullPath.split('/').pop());
-  if (!newName) return;
-  fetch('/api/rename', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ oldPath: fullPath, newName: newName })
-  }).then(function(r) {
-    if (r.ok) window.refresh();
-    else alert('重命名失败');
-  });
-};
-
-// 删除
-window.deleteItem = function(fullPath) {
-  if (!confirm('确定要删除 "' + fullPath + '" 吗？')) return;
-  fetch('/api/delete', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: fullPath })
-  }).then(function(r) {
-    if (r.ok) window.refresh();
-    else alert('删除失败');
-  });
-};
-
-// 上传
-window.showUpload = function() {
-  document.getElementById('uploadPathDisplay').textContent = currentPath;
-  document.getElementById('uploadModal').classList.add('open');
-};
-
-window.doUpload = function() {
-  var input = document.getElementById('fileInput');
-  var files = input.files;
-  if (files.length === 0) return alert('请选择文件');
-  var path = currentPath;
-  var promises = [];
-  for (var i = 0; i < files.length; i++) {
-    var fd = new FormData();
-    fd.append('file', files[i]);
-    fd.append('path', path);
-    promises.push(fetch('/api/upload', { method: 'POST', body: fd }));
-  }
-  Promise.all(promises).then(function() {
-    window.closeModal('uploadModal');
-    window.refresh();
-  }).catch(function(e) { alert('上传失败：' + e.message); });
-};
-
-// 新建文件
-window.showNewFile = function() {
-  document.getElementById('newFilePathDisplay').textContent = currentPath;
-  document.getElementById('newFileModal').classList.add('open');
-};
-
-window.doCreateFile = function() {
-  var name = document.getElementById('newFileName').value.trim();
-  if (!name) return alert('请输入文件名');
-  fetch('/api/create_file', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: currentPath, name: name })
-  }).then(function(r) {
-    if (r.ok) {
-      window.closeModal('newFileModal');
-      window.refresh();
-    } else {
-      r.text().then(function(text) { alert('创建失败：' + text); });
-    }
-  });
-};
-
-// 任务面板
-window.toggleTasks = function() {
-  var panel = document.getElementById('taskPanel');
-  panel.classList.toggle('open');
-  if (panel.classList.contains('open')) window.refreshTasks();
-};
-
-window.refreshTasks = function() {
-  fetch('/api/tasks')
-    .then(function(res) { return res.json(); })
-    .then(function(data) {
-      var list = document.getElementById('taskList');
-      if (!data.tasks || data.tasks.length === 0) {
-        list.innerHTML = '<div style="color:#94a3b8;text-align:center;padding:12px;">暂无任务</div>';
-        return;
-      }
-      var html = '';
-      for (var i = 0; i < data.tasks.length; i++) {
-        var t = data.tasks[i];
-        var statusMap = { 'pending': '⏸️ 等待', 'running': '⏳ 运行中', 'completed': '✅ 完成', 'failed': '❌ 失败' };
-        var statusText = statusMap[t.status] || t.status;
-        var progress = t.progress || 0;
-        html += '<div class="task-item">' +
-          '<span>' + (t.url || '任务') + ' (' + progress + '%)</span>' +
-          '<span><span class="progress-bar"><span class="fill" style="width:' + progress + '%"></span></span> ' + statusText + '</span>' +
-        '</div>';
-      }
-      list.innerHTML = html;
-    })
-    .catch(function(e) { console.error(e); });
-};
-
-window.closeModal = function(id) {
-  document.getElementById(id).classList.remove('open');
-};
-
-// 按钮绑定（使用 addEventListener）
-document.addEventListener('DOMContentLoaded', function() {
-  document.getElementById('btnUpload').addEventListener('click', window.showUpload);
-  document.getElementById('btnNewFile').addEventListener('click', window.showNewFile);
-  document.getElementById('btnTasks').addEventListener('click', window.toggleTasks);
-  document.getElementById('btnMkdir').addEventListener('click', window.mkdir);
-  document.getElementById('doUploadBtn').addEventListener('click', window.doUpload);
-  document.getElementById('cancelUploadBtn').addEventListener('click', function() { window.closeModal('uploadModal'); });
-  document.getElementById('doCreateBtn').addEventListener('click', window.doCreateFile);
-  document.getElementById('cancelCreateBtn').addEventListener('click', function() { window.closeModal('newFileModal'); });
-
-  // 初始化
-  window.refresh();
-  window.refreshTasks();
-  setInterval(window.refresh, 5000);
-  setInterval(window.refreshTasks, 3000);
-});
-</script>
-</body>
-</html>`;
