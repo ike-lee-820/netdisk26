@@ -609,7 +609,10 @@ const HTML = `
     }
 
     // ==================== 下载/分享 ====================
-    function downloadFile(fileId) { window.location.href = "/api/download?fileId=" + encodeURIComponent(fileId); }
+    function downloadFile(fileId) { 
+      // 后端会自动处理 GitHub 文件的代理重定向
+      window.location.href = "/api/download?fileId=" + encodeURIComponent(fileId); 
+    }
     function shareFile(fileId) { api("/api/share", { method:"POST", body: { fileId: fileId } }).then(function(data) { var link = location.origin + "/s/" + data.shareId; showModal('<h2>分享链接</h2><div class="share-link-box">' + link + '</div><button class="btn btn-primary" onclick="closeModal()">关闭</button>'); }); }
 
     // ==================== 在线解压 ====================
@@ -735,7 +738,11 @@ const HTML = `
         '<div class="preview-container" id="previewContainer"></div>';
       document.getElementById("downloadDetail").onclick = function() { downloadFile(item.id); };
       if (document.getElementById("shareDetail")) document.getElementById("shareDetail").onclick = function() { shareFile(item.id); };
-      if (document.getElementById("directLinkDetail")) document.getElementById("directLinkDetail").onclick = function() { var link = location.origin + "/d/" + item.id; showModal('<h2>直链</h2><div class="share-link-box">' + link + '</div><button class="btn btn-primary" onclick="closeModal()">关闭</button>'); };
+      if (document.getElementById("directLinkDetail")) document.getElementById("directLinkDetail").onclick = function() { 
+        // 后端 /d/ 路由会自动重定向到代理加速链接
+        var link = location.origin + "/d/" + item.id; 
+        showModal('<h2>直链</h2><div class="share-link-box">' + link + '</div><p style="font-size:12px;color:var(--text-secondary);margin-top:8px;">GitHub 存储的文件会自动通过代理加速访问</p><button class="btn btn-primary" onclick="closeModal()">关闭</button>'); 
+      };
       if (document.getElementById("renameDetail")) document.getElementById("renameDetail").onclick = function() { showRenameModal(item.id); };
       if (document.getElementById("deleteDetail")) document.getElementById("deleteDetail").onclick = function() { deleteItem(item.id); };
       if (document.getElementById("editDetail")) document.getElementById("editDetail").onclick = editDetailText;
@@ -770,7 +777,7 @@ const HTML = `
     }
 
     function loadLrcFromFile(item) { var lrcName = item.name.replace(/\.[^.]+$/, "") + ".lrc"; var items = getCurrentFolderItems(); var lrcItem = null; for (var i = 0; i < items.length; i++) { if (items[i].name === lrcName) { lrcItem = items[i]; break; } } if (lrcItem) api("/api/file-content?path=" + encodeURIComponent(joinPath(currentPath, lrcItem.name))).then(function(data) { if (data.base64) displayLyrics(atob(data.base64)); else document.getElementById("lyricsContainer").style.display = "none"; }); else document.getElementById("lyricsContainer").style.display = "none"; }
-    function displayLyrics(lyrics) { var container = document.getElementById("lyricsContainer"); container.style.display = "block"; container.innerHTML = ""; var hasTimestamps = /\[\d{2}:\d{2}(\.\d+)?\]/.test(lyrics); if (hasTimestamps) { lyricLines = []; var lines = lyrics.split(""); for (var i = 0; i < lines.length; i++) { var line = lines[i].trim(); var timeMatch = line.match(/\[(\d{2}):(\d{2})(\.\d+)?\]/); if (timeMatch) { var minutes = parseInt(timeMatch[1]); var seconds = parseFloat(timeMatch[2] + (timeMatch[3] || "")); var text = line.replace(/\[.*?\]/g, "").trim(); if (text) lyricLines.push({ time: minutes * 60 + seconds, text: text }); } } lyricLines.sort(function(a,b){return a.time-b.time}); for (var j = 0; j < lyricLines.length; j++) { var div = document.createElement("div"); div.className = "lyric-line"; div.setAttribute("data-time", lyricLines[j].time); div.textContent = lyricLines[j].text; container.appendChild(div); } } else { container.textContent = lyrics; container.style.whiteSpace = "pre-wrap"; } }
+    function displayLyrics(lyrics) { var container = document.getElementById("lyricsContainer"); container.style.display = "block"; container.innerHTML = ""; var hasTimestamps = /\[\d{2}:\d{2}(\.\d+)?\]/.test(lyrics); if (hasTimestamps) { lyricLines = []; var lines = lyrics.split("\n"); for (var i = 0; i < lines.length; i++) { var line = lines[i].trim(); var timeMatch = line.match(/\[(\d{2}):(\d{2})(\.\d+)?\]/); if (timeMatch) { var minutes = parseInt(timeMatch[1]); var seconds = parseFloat(timeMatch[2] + (timeMatch[3] || "")); var text = line.replace(/\[.*?\]/g, "").trim(); if (text) lyricLines.push({ time: minutes * 60 + seconds, text: text }); } } lyricLines.sort(function(a,b){return a.time-b.time}); for (var j = 0; j < lyricLines.length; j++) { var div = document.createElement("div"); div.className = "lyric-line"; div.setAttribute("data-time", lyricLines[j].time); div.textContent = lyricLines[j].text; container.appendChild(div); } } else { container.textContent = lyrics; container.style.whiteSpace = "pre-wrap"; } }
     function highlightLyric(currentTime) { if (!lyricLines || lyricLines.length === 0) return; var lines = document.querySelectorAll(".lyric-line"); var activeIndex = -1; for (var i = 0; i < lyricLines.length; i++) { if (currentTime >= lyricLines[i].time) activeIndex = i; else break; } for (var j = 0; j < lines.length; j++) { if (j === activeIndex) { lines[j].classList.add("active"); lines[j].scrollIntoView({ block: "center", behavior: "smooth" }); } else lines[j].classList.remove("active"); } }
 
     function editFile(fileId) { var item = findItemInTree(fileTree, fileId); if (item) { openDetail(item); editDetailText(); } }
@@ -778,7 +785,298 @@ const HTML = `
     function saveDetailText() { var editor = window._editor; if (!editor) return; var html = editor.getHtml(); var base64 = btoa(unescape(encodeURIComponent(html))); var item = currentDetailItem; if (item) api("/api/save-content", { method:"POST", body: { path: joinPath(currentPath, item.name), base64: base64, fileId: item.id } }).then(function() { closeModal(); loadTree(); showToast("保存成功"); renderDetail(); }).catch(function(e) { showToast("保存失败: " + e.message); }); }
 
 
-    // ==================== 密码验证 ====================
+    
+
+// ==================== GitHub 存储函数 ====================
+
+// 生成 SSID（仓库名）基于文件 ID
+// 生成代理加速的 raw URL
+function getProxyUrl(repoName, path, branch) {
+  branch = branch || 'main';
+  if (GITHUB_CONFIG.useProxy) {
+    // v6.gh-proxy.com 代理格式: https://v6.gh-proxy.com/github.com/{user}/{repo}/raw/{branch}/{path}
+    return `${GITHUB_CONFIG.proxyBase}/${GITHUB_CONFIG.username}/${repoName}/raw/${branch}/${path}`;
+  }
+  return `${GITHUB_CONFIG.rawBase}/${GITHUB_CONFIG.username}/${repoName}/${branch}/${path}`;
+}
+
+function getRepoName(fileId) {
+  // 使用文件 ID 的前 8 位作为仓库名，确保唯一且短
+  return 'cd-' + fileId.replace(/[^a-zA-Z0-9]/g, '').substring(0, 8).toLowerCase();
+}
+
+// 检查 GitHub 仓库是否存在
+async function githubRepoExists(repoName) {
+  try {
+    const res = await fetch(`${GITHUB_CONFIG.apiBase}/repos/${GITHUB_CONFIG.username}/${repoName}`, {
+      headers: { 'Authorization': `token ${GITHUB_CONFIG.token}`, 'Accept': 'application/vnd.github.v3+json' }
+    });
+    return res.status === 200;
+  } catch (e) { return false; }
+}
+
+// 创建 GitHub 仓库（私有）
+async function githubCreateRepo(repoName) {
+  const res = await fetch(`${GITHUB_CONFIG.apiBase}/user/repos`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `token ${GITHUB_CONFIG.token}`,
+      'Accept': 'application/vnd.github.v3+json',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      name: repoName,
+      private: true,
+      auto_init: true,
+      description: 'Cloud drive file storage'
+    })
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error('GitHub create repo failed: ' + err);
+  }
+  return await res.json();
+}
+
+// 获取仓库信息
+async function githubGetRepo(repoName) {
+  const res = await fetch(`${GITHUB_CONFIG.apiBase}/repos/${GITHUB_CONFIG.username}/${repoName}`, {
+    headers: { 'Authorization': `token ${GITHUB_CONFIG.token}`, 'Accept': 'application/vnd.github.v3+json' }
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error('GitHub get repo failed: ' + res.status);
+  return await res.json();
+}
+
+// 上传文件到 GitHub（使用 Contents API）
+async function githubUploadFile(repoName, path, contentBase64, message) {
+  // 先检查文件是否存在（需要 sha 来更新）
+  let sha = null;
+  try {
+    const checkRes = await fetch(`${GITHUB_CONFIG.apiBase}/repos/${GITHUB_CONFIG.username}/${repoName}/contents/${path}`, {
+      headers: { 'Authorization': `token ${GITHUB_CONFIG.token}`, 'Accept': 'application/vnd.github.v3+json' }
+    });
+    if (checkRes.status === 200) {
+      const data = await checkRes.json();
+      sha = data.sha;
+    }
+  } catch (e) {}
+
+  const body = {
+    message: message || 'Upload file',
+    content: contentBase64
+  };
+  if (sha) body.sha = sha;
+
+  const res = await fetch(`${GITHUB_CONFIG.apiBase}/repos/${GITHUB_CONFIG.username}/${repoName}/contents/${path}`, {
+    method: 'PUT',
+    headers: {
+      'Authorization': `token ${GITHUB_CONFIG.token}`,
+      'Accept': 'application/vnd.github.v3+json',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error('GitHub upload failed: ' + err);
+  }
+  return await res.json();
+}
+
+// 获取文件内容（raw）
+async function githubGetFileRaw(repoName, path, branch) {
+  branch = branch || 'main';
+  // 优先使用代理加速
+  const proxyUrl = getProxyUrl(repoName, path, branch);
+  try {
+    const res = await fetch(proxyUrl);
+    if (res.ok) return await res.arrayBuffer();
+  } catch (e) {
+    console.error('Proxy fetch failed, trying direct:', e.message);
+  }
+  // 代理失败，回退到直连
+  const directUrl = `${GITHUB_CONFIG.rawBase}/${GITHUB_CONFIG.username}/${repoName}/${branch}/${path}`;
+  const res = await fetch(directUrl, {
+    headers: { 'Authorization': `token ${GITHUB_CONFIG.token}` }
+  });
+  if (!res.ok) throw new Error('GitHub raw fetch failed: ' + res.status);
+  return await res.arrayBuffer();
+}
+
+// 获取文件内容（API，用于获取 sha 等元数据）
+async function githubGetFileApi(repoName, path) {
+  const res = await fetch(`${GITHUB_CONFIG.apiBase}/repos/${GITHUB_CONFIG.username}/${repoName}/contents/${path}`, {
+    headers: { 'Authorization': `token ${GITHUB_CONFIG.token}`, 'Accept': 'application/vnd.github.v3+json' }
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error('GitHub get file failed: ' + res.status);
+  return await res.json();
+}
+
+// 删除文件
+async function githubDeleteFile(repoName, path, sha, message) {
+  const res = await fetch(`${GITHUB_CONFIG.apiBase}/repos/${GITHUB_CONFIG.username}/${repoName}/contents/${path}`, {
+    method: 'DELETE',
+    headers: {
+      'Authorization': `token ${GITHUB_CONFIG.token}`,
+      'Accept': 'application/vnd.github.v3+json',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ message: message || 'Delete file', sha })
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error('GitHub delete failed: ' + err);
+  }
+  return true;
+}
+
+// 获取仓库大小信息
+async function githubGetRepoSize(repoName) {
+  const repo = await githubGetRepo(repoName);
+  if (!repo) return 0;
+  return repo.size * 1024; // GitHub 返回的是 KB
+}
+
+// 主存储函数：优先 GitHub，失败回退到 KV
+async function storeFileContent(env, fileId, base64, chunkIndex, isChunk) {
+  const repoName = getRepoName(fileId);
+  const path = isChunk ? `chunk_${chunkIndex}.bin` : 'file.bin';
+
+  // 尝试 GitHub 存储
+  try {
+    // 确保仓库存在
+    let exists = await githubRepoExists(repoName);
+    if (!exists) {
+      await githubCreateRepo(repoName);
+    }
+
+    // 检查仓库大小
+    const repoSize = await githubGetRepoSize(repoName);
+    const contentSize = base64.length * 0.75; // base64 转 bytes 约 3/4
+    if (repoSize + contentSize > GITHUB_CONFIG.maxRepoSize) {
+      throw new Error('Repo size limit approaching');
+    }
+
+    // 上传文件
+    await githubUploadFile(repoName, path, base64, isChunk ? `Upload chunk ${chunkIndex}` : 'Upload file');
+
+    // 记录存储位置到 KV
+    const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + fileId, 'json') || {};
+    if (isChunk) {
+      if (!storageMap.chunks) storageMap.chunks = {};
+      storageMap.chunks[chunkIndex] = { type: 'github', repo: repoName, path };
+    } else {
+      storageMap.single = { type: 'github', repo: repoName, path };
+    }
+    await env.FILE_STRUCTURE_KV.put('storage:' + fileId, JSON.stringify(storageMap));
+
+    return { type: 'github', repo: repoName, path };
+  } catch (e) {
+    console.error('GitHub store failed, falling back to KV:', e.message);
+    // 回退到 KV 存储
+    if (isChunk) {
+      await storeChunk(env, fileId, chunkIndex, base64);
+    } else {
+      await storeSingleFile(env, fileId, base64);
+    }
+    // 记录回退到 KV
+    const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + fileId, 'json') || {};
+    if (isChunk) {
+      if (!storageMap.chunks) storageMap.chunks = {};
+      storageMap.chunks[chunkIndex] = { type: 'kv' };
+    } else {
+      storageMap.single = { type: 'kv' };
+    }
+    await env.FILE_STRUCTURE_KV.put('storage:' + fileId, JSON.stringify(storageMap));
+    return { type: 'kv' };
+  }
+}
+
+// 主读取函数：优先 GitHub，回退到 KV
+async function getFileContent(env, item, chunkIndex) {
+  const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + item.id, 'json') || {};
+
+  if (item.chunks <= 1) {
+    // 单文件
+    const single = storageMap.single;
+    if (single && single.type === 'github') {
+      try {
+        return await githubGetFileRaw(single.repo, single.path);
+      } catch (e) {
+        console.error('GitHub read failed, falling back to KV:', e.message);
+      }
+    }
+    // 回退到 KV
+    return await getFileArrayBuffer(env, item);
+  } else {
+    // 分片
+    const chunkInfo = storageMap.chunks && storageMap.chunks[chunkIndex];
+    if (chunkInfo && chunkInfo.type === 'github') {
+      try {
+        return await githubGetFileRaw(chunkInfo.repo, chunkInfo.path);
+      } catch (e) {
+        console.error('GitHub chunk read failed, falling back to KV:', e.message);
+      }
+    }
+    // 回退到 KV（读取单个分片）
+    const kvMap = await env.FILE_STRUCTURE_KV.get('kvmap:' + item.id, 'json');
+    const storedIndex = kvMap && kvMap.chunks && kvMap.chunks[chunkIndex] !== undefined
+      ? kvMap.chunks[chunkIndex]
+      : getKvIndex(item.id, chunkIndex, true);
+    const kv = env[FILE_KV_BINDINGS[storedIndex]];
+    let buffer = await kv.get('f:' + item.id + ':chunk:' + chunkIndex, 'arrayBuffer');
+    if (!buffer) {
+      for (let j = 0; j < KV_COUNT; j++) {
+        if (j === storedIndex) continue;
+        const fallbackKv = env[FILE_KV_BINDINGS[j]];
+        buffer = await fallbackKv.get('f:' + item.id + ':chunk:' + chunkIndex, 'arrayBuffer');
+        if (buffer) break;
+      }
+    }
+    if (!buffer) throw new Error('Missing chunk ' + chunkIndex);
+    return buffer;
+  }
+}
+
+// 删除文件内容（GitHub 和 KV）
+async function deleteFileContentAll(env, fileId, chunks) {
+  const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + fileId, 'json') || {};
+
+  // 删除 GitHub 上的文件
+  if (storageMap.single && storageMap.single.type === 'github') {
+    try {
+      const fileData = await githubGetFileApi(storageMap.single.repo, storageMap.single.path);
+      if (fileData && fileData.sha) {
+        await githubDeleteFile(storageMap.single.repo, storageMap.single.path, fileData.sha);
+      }
+    } catch (e) { console.error('GitHub delete single failed:', e.message); }
+  }
+
+  if (storageMap.chunks) {
+    for (const idx in storageMap.chunks) {
+      const chunkInfo = storageMap.chunks[idx];
+      if (chunkInfo.type === 'github') {
+        try {
+          const fileData = await githubGetFileApi(chunkInfo.repo, chunkInfo.path);
+          if (fileData && fileData.sha) {
+            await githubDeleteFile(chunkInfo.repo, chunkInfo.path, fileData.sha);
+          }
+        } catch (e) { console.error('GitHub delete chunk failed:', e.message); }
+      }
+    }
+  }
+
+  // 删除 KV 上的内容
+  await deleteFileContent(env, fileId, chunks);
+
+  // 清理存储映射
+  await env.FILE_STRUCTURE_KV.delete('storage:' + fileId);
+}
+
+// ==================== 密码验证 ====================
     var AUTH_TOKEN_KEY = "cloud_auth_token";
     var AUTH_API = "/api/auth";
 
@@ -1017,6 +1315,7 @@ const SHARE_HTML = `
       document.getElementById("fileMeta").innerHTML = '<span>大小: ' + formatSize(item.size) + '</span> · <span>类型: ' + (item.mimeType || "未知") + '</span>';
 
       var downloadBtn = document.getElementById("downloadBtn");
+      // 走 /api/download 让后端自动处理代理重定向
       downloadBtn.href = "/api/download?fileId=" + encodeURIComponent(item.id);
       downloadBtn.setAttribute("download", item.name);
 
@@ -1061,33 +1360,29 @@ const SHARE_HTML = `
 
 // ==================== 后端逻辑 ====================
 const FILE_KV_BINDINGS = [
-  'FILE_KV_1',   // 67519f416f114d1dbf883a88a8e0c916
-  'FILE_KV_2',   // da2510c5259b4fe7b540976e60531433
-  'FILE_KV_3',   // 53cac170bfe04444b1e89091a18eb6af
-  'FILE_KV_4',   // 4a308b54fc384b53bcb1013c23f8405e
-  'FILE_KV_5',   // cbbd9f1364244d42a2db53a2d7d53daa
-  'FILE_KV_6',   // 18c11dbaad7348cdbc7ea0b1a6d8c7f3
-  'FILE_KV_7',   // 1e9c20f7512740b6a486ec18bfd2f65a
-  'FILE_KV_8',   // 49634a2b619d49a0a610d9d164d73102
-  'FILE_KV_9',   // a9764913087b4b7ebe2f69b1ad5210dd
-  'FILE_KV_10',  // 7702c3214f9d4e71af5a71d70b179510
-  'FILE_KV_11',  // 1c87f7013c0f4cc5863c9374f338d609
-  'FILE_KV_12',  // 46d03cabe6914229a2dc9dc6449aedba
-  'FILE_KV_13',  // cbf8d07e45134f12a0a66ecba30360c2
-  'FILE_KV_14',  // 8ba21c5e43b54806b542360a3e597dd5
-  'FILE_KV_15',  // 1cdbcd88664d478ab55c7bffd52887f8
-  'FILE_KV_16',  // 6d90fca508fa43ed8983001529fb1c99
-  'FILE_KV_17',  // 04b3bc41c39843e89d9b8a9875e59c1d
-  'FILE_KV_18',  // 63997068114048c4ac5dd24bacd9dfe1
-  'FILE_KV_19',  // 2466a70fffc74a7ba683a7887d7f9048
-  'FILE_KV_20',  // 36a509744d8e4cdb922f1fb256006a2f
-  'FILE_KV_21',
-  'FILE_KV_22',
-  'FILE_KV_23',
-  'FILE_KV_24',
-  'FILE_KV_25'
+  'FILE_KV_1',
+  'FILE_KV_2',
+  'FILE_KV_3',
+  'FILE_KV_4',
+  'FILE_KV_5'
 ];
 const KV_COUNT = FILE_KV_BINDINGS.length;
+
+// ==================== GitHub 存储配置 ====================
+// 优先使用 GitHub 存储文件，KV 作为备用
+const GITHUB_CONFIG = {
+  token: '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',
+  username: 'ikecode26',
+  apiBase: 'https://api.github.com',
+  rawBase: 'https://raw.githubusercontent.com',
+  proxyBase: 'https://v6.gh-proxy.com/github.com',
+  useProxy: true, // 下载/预览/直链优先使用代理
+  maxRepoSize: 900 * 1024 * 1024, // 900MB 单个仓库限制（GitHub 1GB 警告线）
+  chunkSize: 80 * 1024 * 1024,    // 80MB 每片，GitHub 限制 100MB
+};
+
+// GitHub 存储状态跟踪（存在 KV 中）
+// repo:{ssid} -> { size, fileCount, createdAt }
 
 function jsonResponse(data, headers = {}, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -1186,16 +1481,19 @@ async function addFileToTree(env, uploadPath, fileName, fileId, size, mimeType, 
 }
 
 async function storeSingleFile(env, fileId, base64) {
+  // 优先使用 GitHub 存储
+  const result = await storeFileContent(env, fileId, base64, null, false);
+  if (result.type === 'github') return; // GitHub 存储成功
+
+  // GitHub 失败，回退到 KV
   const arrayBuffer = base64ToArrayBuffer(base64);
   const startIndex = getKvIndex(fileId);
   let lastError = null;
-  // 从计算的KV开始，依次尝试所有KV直到成功
   for (let i = 0; i < KV_COUNT; i++) {
     const kvIndex = (startIndex + i) % KV_COUNT;
     const kv = env[FILE_KV_BINDINGS[kvIndex]];
     try {
       await kv.put('f:' + fileId, arrayBuffer);
-      // 记录实际存储的KV索引到元数据
       await env.FILE_STRUCTURE_KV.put('kvmap:' + fileId, JSON.stringify({ kvIndex, type: 'single' }));
       return;
     } catch (e) {
@@ -1208,8 +1506,12 @@ async function storeSingleFile(env, fileId, base64) {
 }
 
 async function storeChunk(env, fileId, chunkIndex, base64) {
+  // 优先使用 GitHub 存储分片
+  const result = await storeFileContent(env, fileId, base64, chunkIndex, true);
+  if (result.type === 'github') return; // GitHub 存储成功
+
+  // GitHub 失败，回退到 KV
   const arrayBuffer = base64ToArrayBuffer(base64);
-  // 多分片优先分散存储：基于chunkIndex取模，确保不同分片尽量在不同KV
   const startIndex = getKvIndex(fileId, chunkIndex, true);
   let lastError = null;
   for (let i = 0; i < KV_COUNT; i++) {
@@ -1217,7 +1519,6 @@ async function storeChunk(env, fileId, chunkIndex, base64) {
     const kv = env[FILE_KV_BINDINGS[kvIndex]];
     try {
       await kv.put('f:' + fileId + ':chunk:' + chunkIndex, arrayBuffer);
-      // 记录每个分片实际存储的KV索引
       const kvMap = await env.FILE_STRUCTURE_KV.get('kvmap:' + fileId, 'json') || { chunks: {} };
       if (!kvMap.chunks) kvMap.chunks = {};
       kvMap.chunks[chunkIndex] = kvIndex;
@@ -1233,23 +1534,31 @@ async function storeChunk(env, fileId, chunkIndex, base64) {
 }
 
 async function getFileArrayBuffer(env, item) {
-  // 读取kvmap获取实际存储位置
-  const kvMap = await env.FILE_STRUCTURE_KV.get('kvmap:' + item.id, 'json');
+  // 优先从 GitHub 读取
+  const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + item.id, 'json') || {};
 
   if (item.chunks <= 1) {
-    // 单文件：优先使用kvmap记录的KV，失败则遍历所有KV
+    // 单文件
+    if (storageMap.single && storageMap.single.type === 'github') {
+      try {
+        return await githubGetFileRaw(storageMap.single.repo, storageMap.single.path);
+      } catch (e) {
+        console.error('GitHub read failed, falling back to KV:', e.message);
+      }
+    }
+    // 回退到 KV
+    const kvMap = await env.FILE_STRUCTURE_KV.get('kvmap:' + item.id, 'json');
     const storedIndex = kvMap && kvMap.kvIndex !== undefined ? kvMap.kvIndex : getKvIndex(item.id);
     const kv = env[FILE_KV_BINDINGS[storedIndex]];
     let buffer = await kv.get('f:' + item.id, 'arrayBuffer');
     if (buffer) return buffer;
-    // 如果没找到，可能是迁移过，遍历所有KV
     for (let i = 0; i < KV_COUNT; i++) {
       if (i === storedIndex) continue;
       const fallbackKv = env[FILE_KV_BINDINGS[i]];
       buffer = await fallbackKv.get('f:' + item.id, 'arrayBuffer');
       if (buffer) return buffer;
     }
-    throw new Error('File not found in any KV: ' + item.id);
+    throw new Error('File not found: ' + item.id);
   }
 
   // 多分片文件
@@ -1258,21 +1567,35 @@ async function getFileArrayBuffer(env, item) {
   const result = new Uint8Array(totalLength);
   let offset = 0;
   for (let i = 0; i < chunks; i++) {
-    // 优先使用kvmap中记录的分片KV位置
-    const storedIndex = kvMap && kvMap.chunks && kvMap.chunks[i] !== undefined 
-      ? kvMap.chunks[i] 
-      : getKvIndex(item.id, i, true);
-    const kv = env[FILE_KV_BINDINGS[storedIndex]];
-    let chunkBuffer = await kv.get('f:' + item.id + ':chunk:' + i, 'arrayBuffer');
-    if (!chunkBuffer) {
-      // 如果没找到，遍历所有KV查找该分片
-      for (let j = 0; j < KV_COUNT; j++) {
-        if (j === storedIndex) continue;
-        const fallbackKv = env[FILE_KV_BINDINGS[j]];
-        chunkBuffer = await fallbackKv.get('f:' + item.id + ':chunk:' + i, 'arrayBuffer');
-        if (chunkBuffer) break;
+    let chunkBuffer = null;
+
+    // 优先从 GitHub 读取分片
+    if (storageMap.chunks && storageMap.chunks[i] && storageMap.chunks[i].type === 'github') {
+      try {
+        chunkBuffer = await githubGetFileRaw(storageMap.chunks[i].repo, storageMap.chunks[i].path);
+      } catch (e) {
+        console.error('GitHub chunk read failed:', e.message);
       }
     }
+
+    // 回退到 KV
+    if (!chunkBuffer) {
+      const kvMap = await env.FILE_STRUCTURE_KV.get('kvmap:' + item.id, 'json');
+      const storedIndex = kvMap && kvMap.chunks && kvMap.chunks[i] !== undefined 
+        ? kvMap.chunks[i] 
+        : getKvIndex(item.id, i, true);
+      const kv = env[FILE_KV_BINDINGS[storedIndex]];
+      chunkBuffer = await kv.get('f:' + item.id + ':chunk:' + i, 'arrayBuffer');
+      if (!chunkBuffer) {
+        for (let j = 0; j < KV_COUNT; j++) {
+          if (j === storedIndex) continue;
+          const fallbackKv = env[FILE_KV_BINDINGS[j]];
+          chunkBuffer = await fallbackKv.get('f:' + item.id + ':chunk:' + i, 'arrayBuffer');
+          if (chunkBuffer) break;
+        }
+      }
+    }
+
     if (!chunkBuffer) throw new Error('Missing chunk ' + i + ' for file ' + item.id);
     const chunkBytes = new Uint8Array(chunkBuffer);
     result.set(chunkBytes, offset);
@@ -1282,12 +1605,36 @@ async function getFileArrayBuffer(env, item) {
 }
 
 async function deleteFileContent(env, fileId, chunks) {
+  // 先删除 GitHub 上的内容
+  const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + fileId, 'json') || {};
+  if (storageMap.single && storageMap.single.type === 'github') {
+    try {
+      const fileData = await githubGetFileApi(storageMap.single.repo, storageMap.single.path);
+      if (fileData && fileData.sha) {
+        await githubDeleteFile(storageMap.single.repo, storageMap.single.path, fileData.sha);
+      }
+    } catch (e) { console.error('GitHub delete single failed:', e.message); }
+  }
+  if (storageMap.chunks) {
+    for (const idx in storageMap.chunks) {
+      const chunkInfo = storageMap.chunks[idx];
+      if (chunkInfo.type === 'github') {
+        try {
+          const fileData = await githubGetFileApi(chunkInfo.repo, chunkInfo.path);
+          if (fileData && fileData.sha) {
+            await githubDeleteFile(chunkInfo.repo, chunkInfo.path, fileData.sha);
+          }
+        } catch (e) { console.error('GitHub delete chunk failed:', e.message); }
+      }
+    }
+  }
+
+  // 删除 KV 上的内容
   const kvMap = await env.FILE_STRUCTURE_KV.get('kvmap:' + fileId, 'json');
   if (chunks <= 1) {
     const storedIndex = kvMap && kvMap.kvIndex !== undefined ? kvMap.kvIndex : getKvIndex(fileId);
     const kv = env[FILE_KV_BINDINGS[storedIndex]];
     await kv.delete('f:' + fileId);
-    // 同时清理可能存在的冗余副本
     for (let i = 0; i < KV_COUNT; i++) {
       if (i === storedIndex) continue;
       try { await env[FILE_KV_BINDINGS[i]].delete('f:' + fileId); } catch(e) {}
@@ -1299,15 +1646,15 @@ async function deleteFileContent(env, fileId, chunks) {
         : getKvIndex(fileId, i, true);
       const kv = env[FILE_KV_BINDINGS[storedIndex]];
       await kv.delete('f:' + fileId + ':chunk:' + i);
-      // 同时清理可能存在的冗余副本
       for (let j = 0; j < KV_COUNT; j++) {
         if (j === storedIndex) continue;
         try { await env[FILE_KV_BINDINGS[j]].delete('f:' + fileId + ':chunk:' + i); } catch(e) {}
       }
     }
   }
-  // 清理kvmap
+  // 清理kvmap和storage映射
   await env.FILE_STRUCTURE_KV.delete('kvmap:' + fileId);
+  await env.FILE_STRUCTURE_KV.delete('storage:' + fileId);
 }
 
 async function addTask(env, type, name, status, progress) {
@@ -1352,19 +1699,25 @@ async function handleOfflineDownload(env, url, savePath, taskId) {
       if (parts.length > 0 && parts[parts.length - 1]) fileName = decodeURIComponent(parts[parts.length - 1]);
     }
     const fileId = 'f_' + Date.now() + '_' + Math.random().toString(36).substr(2,8);
-    const startIndex = getKvIndex(fileId);
-    let stored = false;
-    for (let i = 0; i < KV_COUNT; i++) {
-      const kvIndex = (startIndex + i) % KV_COUNT;
-      const kv = env[FILE_KV_BINDINGS[kvIndex]];
-      try {
-        await kv.put('f:' + fileId, arrayBuffer);
-        await env.FILE_STRUCTURE_KV.put('kvmap:' + fileId, JSON.stringify({ kvIndex, type: 'single' }));
-        stored = true;
-        break;
-      } catch (e) { continue; }
+    // 优先使用 GitHub 存储
+    const base64 = arrayBufferToBase64(arrayBuffer);
+    const result = await storeFileContent(env, fileId, base64, null, false);
+    if (result.type === 'kv') {
+      // GitHub 失败，使用 KV
+      const startIndex = getKvIndex(fileId);
+      let stored = false;
+      for (let i = 0; i < KV_COUNT; i++) {
+        const kvIndex = (startIndex + i) % KV_COUNT;
+        const kv = env[FILE_KV_BINDINGS[kvIndex]];
+        try {
+          await kv.put('f:' + fileId, arrayBuffer);
+          await env.FILE_STRUCTURE_KV.put('kvmap:' + fileId, JSON.stringify({ kvIndex, type: 'single' }));
+          stored = true;
+          break;
+        } catch (e) { continue; }
+      }
+      if (!stored) throw new Error('All KV stores failed for offline download');
     }
-    if (!stored) throw new Error('All KV stores failed for offline download');
     const mimeType = response.headers.get('content-type') || 'application/octet-stream';
     await addFileToTree(env, savePath, fileName, fileId, arrayBuffer.byteLength, mimeType, 1, 0);
     await updateTask(env, taskId, { status:'completed', progress:100 });
@@ -1373,6 +1726,294 @@ async function handleOfflineDownload(env, url, savePath, taskId) {
   }
 }
 
+// ==================== GitHub 存储函数 ====================
+
+// 生成 SSID（仓库名）基于文件 ID
+// 生成代理加速的 raw URL
+function getProxyUrl(repoName, path, branch) {
+  branch = branch || 'main';
+  if (GITHUB_CONFIG.useProxy) {
+    // v6.gh-proxy.com 代理格式: https://v6.gh-proxy.com/github.com/{user}/{repo}/raw/{branch}/{path}
+    return `${GITHUB_CONFIG.proxyBase}/${GITHUB_CONFIG.username}/${repoName}/raw/${branch}/${path}`;
+  }
+  return `${GITHUB_CONFIG.rawBase}/${GITHUB_CONFIG.username}/${repoName}/${branch}/${path}`;
+}
+
+function getRepoName(fileId) {
+  // 使用文件 ID 的前 8 位作为仓库名，确保唯一且短
+  return 'cd-' + fileId.replace(/[^a-zA-Z0-9]/g, '').substring(0, 8).toLowerCase();
+}
+
+// 检查 GitHub 仓库是否存在
+async function githubRepoExists(repoName) {
+  try {
+    const res = await fetch(`${GITHUB_CONFIG.apiBase}/repos/${GITHUB_CONFIG.username}/${repoName}`, {
+      headers: { 'Authorization': `token ${GITHUB_CONFIG.token}`, 'Accept': 'application/vnd.github.v3+json' }
+    });
+    return res.status === 200;
+  } catch (e) { return false; }
+}
+
+// 创建 GitHub 仓库（私有）
+async function githubCreateRepo(repoName) {
+  const res = await fetch(`${GITHUB_CONFIG.apiBase}/user/repos`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `token ${GITHUB_CONFIG.token}`,
+      'Accept': 'application/vnd.github.v3+json',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      name: repoName,
+      private: true,
+      auto_init: true,
+      description: 'Cloud drive file storage'
+    })
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error('GitHub create repo failed: ' + err);
+  }
+  return await res.json();
+}
+
+// 获取仓库信息
+async function githubGetRepo(repoName) {
+  const res = await fetch(`${GITHUB_CONFIG.apiBase}/repos/${GITHUB_CONFIG.username}/${repoName}`, {
+    headers: { 'Authorization': `token ${GITHUB_CONFIG.token}`, 'Accept': 'application/vnd.github.v3+json' }
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error('GitHub get repo failed: ' + res.status);
+  return await res.json();
+}
+
+// 上传文件到 GitHub（使用 Contents API）
+async function githubUploadFile(repoName, path, contentBase64, message) {
+  // 先检查文件是否存在（需要 sha 来更新）
+  let sha = null;
+  try {
+    const checkRes = await fetch(`${GITHUB_CONFIG.apiBase}/repos/${GITHUB_CONFIG.username}/${repoName}/contents/${path}`, {
+      headers: { 'Authorization': `token ${GITHUB_CONFIG.token}`, 'Accept': 'application/vnd.github.v3+json' }
+    });
+    if (checkRes.status === 200) {
+      const data = await checkRes.json();
+      sha = data.sha;
+    }
+  } catch (e) {}
+
+  const body = {
+    message: message || 'Upload file',
+    content: contentBase64
+  };
+  if (sha) body.sha = sha;
+
+  const res = await fetch(`${GITHUB_CONFIG.apiBase}/repos/${GITHUB_CONFIG.username}/${repoName}/contents/${path}`, {
+    method: 'PUT',
+    headers: {
+      'Authorization': `token ${GITHUB_CONFIG.token}`,
+      'Accept': 'application/vnd.github.v3+json',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error('GitHub upload failed: ' + err);
+  }
+  return await res.json();
+}
+
+// 获取文件内容（raw）
+async function githubGetFileRaw(repoName, path, branch) {
+  branch = branch || 'main';
+  // 优先使用代理加速
+  const proxyUrl = getProxyUrl(repoName, path, branch);
+  try {
+    const res = await fetch(proxyUrl);
+    if (res.ok) return await res.arrayBuffer();
+  } catch (e) {
+    console.error('Proxy fetch failed, trying direct:', e.message);
+  }
+  // 代理失败，回退到直连
+  const directUrl = `${GITHUB_CONFIG.rawBase}/${GITHUB_CONFIG.username}/${repoName}/${branch}/${path}`;
+  const res = await fetch(directUrl, {
+    headers: { 'Authorization': `token ${GITHUB_CONFIG.token}` }
+  });
+  if (!res.ok) throw new Error('GitHub raw fetch failed: ' + res.status);
+  return await res.arrayBuffer();
+}
+
+// 获取文件内容（API，用于获取 sha 等元数据）
+async function githubGetFileApi(repoName, path) {
+  const res = await fetch(`${GITHUB_CONFIG.apiBase}/repos/${GITHUB_CONFIG.username}/${repoName}/contents/${path}`, {
+    headers: { 'Authorization': `token ${GITHUB_CONFIG.token}`, 'Accept': 'application/vnd.github.v3+json' }
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error('GitHub get file failed: ' + res.status);
+  return await res.json();
+}
+
+// 删除文件
+async function githubDeleteFile(repoName, path, sha, message) {
+  const res = await fetch(`${GITHUB_CONFIG.apiBase}/repos/${GITHUB_CONFIG.username}/${repoName}/contents/${path}`, {
+    method: 'DELETE',
+    headers: {
+      'Authorization': `token ${GITHUB_CONFIG.token}`,
+      'Accept': 'application/vnd.github.v3+json',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ message: message || 'Delete file', sha })
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error('GitHub delete failed: ' + err);
+  }
+  return true;
+}
+
+// 获取仓库大小信息
+async function githubGetRepoSize(repoName) {
+  const repo = await githubGetRepo(repoName);
+  if (!repo) return 0;
+  return repo.size * 1024; // GitHub 返回的是 KB
+}
+
+// 主存储函数：优先 GitHub，失败回退到 KV
+async function storeFileContent(env, fileId, base64, chunkIndex, isChunk) {
+  const repoName = getRepoName(fileId);
+  const path = isChunk ? `chunk_${chunkIndex}.bin` : 'file.bin';
+
+  // 尝试 GitHub 存储
+  try {
+    // 确保仓库存在
+    let exists = await githubRepoExists(repoName);
+    if (!exists) {
+      await githubCreateRepo(repoName);
+    }
+
+    // 检查仓库大小
+    const repoSize = await githubGetRepoSize(repoName);
+    const contentSize = base64.length * 0.75; // base64 转 bytes 约 3/4
+    if (repoSize + contentSize > GITHUB_CONFIG.maxRepoSize) {
+      throw new Error('Repo size limit approaching');
+    }
+
+    // 上传文件
+    await githubUploadFile(repoName, path, base64, isChunk ? `Upload chunk ${chunkIndex}` : 'Upload file');
+
+    // 记录存储位置到 KV
+    const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + fileId, 'json') || {};
+    if (isChunk) {
+      if (!storageMap.chunks) storageMap.chunks = {};
+      storageMap.chunks[chunkIndex] = { type: 'github', repo: repoName, path };
+    } else {
+      storageMap.single = { type: 'github', repo: repoName, path };
+    }
+    await env.FILE_STRUCTURE_KV.put('storage:' + fileId, JSON.stringify(storageMap));
+
+    return { type: 'github', repo: repoName, path };
+  } catch (e) {
+    console.error('GitHub store failed, falling back to KV:', e.message);
+    // 回退到 KV 存储
+    if (isChunk) {
+      await storeChunk(env, fileId, chunkIndex, base64);
+    } else {
+      await storeSingleFile(env, fileId, base64);
+    }
+    // 记录回退到 KV
+    const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + fileId, 'json') || {};
+    if (isChunk) {
+      if (!storageMap.chunks) storageMap.chunks = {};
+      storageMap.chunks[chunkIndex] = { type: 'kv' };
+    } else {
+      storageMap.single = { type: 'kv' };
+    }
+    await env.FILE_STRUCTURE_KV.put('storage:' + fileId, JSON.stringify(storageMap));
+    return { type: 'kv' };
+  }
+}
+
+// 主读取函数：优先 GitHub，回退到 KV
+async function getFileContent(env, item, chunkIndex) {
+  const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + item.id, 'json') || {};
+
+  if (item.chunks <= 1) {
+    // 单文件
+    const single = storageMap.single;
+    if (single && single.type === 'github') {
+      try {
+        return await githubGetFileRaw(single.repo, single.path);
+      } catch (e) {
+        console.error('GitHub read failed, falling back to KV:', e.message);
+      }
+    }
+    // 回退到 KV
+    return await getFileArrayBuffer(env, item);
+  } else {
+    // 分片
+    const chunkInfo = storageMap.chunks && storageMap.chunks[chunkIndex];
+    if (chunkInfo && chunkInfo.type === 'github') {
+      try {
+        return await githubGetFileRaw(chunkInfo.repo, chunkInfo.path);
+      } catch (e) {
+        console.error('GitHub chunk read failed, falling back to KV:', e.message);
+      }
+    }
+    // 回退到 KV（读取单个分片）
+    const kvMap = await env.FILE_STRUCTURE_KV.get('kvmap:' + item.id, 'json');
+    const storedIndex = kvMap && kvMap.chunks && kvMap.chunks[chunkIndex] !== undefined
+      ? kvMap.chunks[chunkIndex]
+      : getKvIndex(item.id, chunkIndex, true);
+    const kv = env[FILE_KV_BINDINGS[storedIndex]];
+    let buffer = await kv.get('f:' + item.id + ':chunk:' + chunkIndex, 'arrayBuffer');
+    if (!buffer) {
+      for (let j = 0; j < KV_COUNT; j++) {
+        if (j === storedIndex) continue;
+        const fallbackKv = env[FILE_KV_BINDINGS[j]];
+        buffer = await fallbackKv.get('f:' + item.id + ':chunk:' + chunkIndex, 'arrayBuffer');
+        if (buffer) break;
+      }
+    }
+    if (!buffer) throw new Error('Missing chunk ' + chunkIndex);
+    return buffer;
+  }
+}
+
+// 删除文件内容（GitHub 和 KV）
+async function deleteFileContentAll(env, fileId, chunks) {
+  const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + fileId, 'json') || {};
+
+  // 删除 GitHub 上的文件
+  if (storageMap.single && storageMap.single.type === 'github') {
+    try {
+      const fileData = await githubGetFileApi(storageMap.single.repo, storageMap.single.path);
+      if (fileData && fileData.sha) {
+        await githubDeleteFile(storageMap.single.repo, storageMap.single.path, fileData.sha);
+      }
+    } catch (e) { console.error('GitHub delete single failed:', e.message); }
+  }
+
+  if (storageMap.chunks) {
+    for (const idx in storageMap.chunks) {
+      const chunkInfo = storageMap.chunks[idx];
+      if (chunkInfo.type === 'github') {
+        try {
+          const fileData = await githubGetFileApi(chunkInfo.repo, chunkInfo.path);
+          if (fileData && fileData.sha) {
+            await githubDeleteFile(chunkInfo.repo, chunkInfo.path, fileData.sha);
+          }
+        } catch (e) { console.error('GitHub delete chunk failed:', e.message); }
+      }
+    }
+  }
+
+  // 删除 KV 上的内容
+  await deleteFileContent(env, fileId, chunks);
+
+  // 清理存储映射
+  await env.FILE_STRUCTURE_KV.delete('storage:' + fileId);
+}
 
 // ==================== 密码验证 ====================
 // 从环境变量读取密码，支持多个密码（用逗号分隔）
@@ -1434,6 +2075,22 @@ export default {
         const tree = await getTree(env);
         const item = findItemById(tree, fileId);
         if (!item || item.type !== 'file') return new Response('File not found', { status: 404, headers });
+
+        // 检查是否存储在 GitHub，如果是则返回代理加速链接（302 重定向）
+        const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + fileId, 'json') || {};
+        if (storageMap.single && storageMap.single.type === 'github') {
+          const proxyUrl = getProxyUrl(storageMap.single.repo, storageMap.single.path);
+          return new Response(null, {
+            status: 302,
+            headers: {
+              'Location': proxyUrl,
+              'Content-Disposition': 'attachment; filename="' + encodeURIComponent(item.name) + '"',
+              ...headers,
+            },
+          });
+        }
+
+        // 回退到 KV 直传
         const buffer = await getFileArrayBuffer(env, item);
         return new Response(buffer, {
           headers: {
@@ -1535,6 +2192,22 @@ export default {
           const tree = await getTree(env);
           const item = findItemById(tree, fileId);
           if (!item || item.type !== 'file') return jsonResponse({ error: 'File not found' }, headers, 404);
+
+          // 检查是否存储在 GitHub，如果是则返回代理加速链接（302 重定向）
+          const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + fileId, 'json') || {};
+          if (storageMap.single && storageMap.single.type === 'github') {
+            const proxyUrl = getProxyUrl(storageMap.single.repo, storageMap.single.path);
+            return new Response(null, {
+              status: 302,
+              headers: {
+                'Location': proxyUrl,
+                'Content-Disposition': 'attachment; filename="' + encodeURIComponent(item.name) + '"',
+                ...headers,
+              },
+            });
+          }
+
+          // 回退到 KV 直传
           const buffer = await getFileArrayBuffer(env, item);
           return new Response(buffer, {
             headers: {
@@ -1552,6 +2225,22 @@ export default {
           const tree = await getTree(env);
           const item = findItemById(tree, fileId);
           if (!item || item.type !== 'file') return jsonResponse({ error: 'File not found' }, headers, 404);
+
+          // 检查是否存储在 GitHub，如果是则返回代理加速链接（302 重定向）
+          const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + fileId, 'json') || {};
+          if (storageMap.single && storageMap.single.type === 'github') {
+            const proxyUrl = getProxyUrl(storageMap.single.repo, storageMap.single.path);
+            return new Response(null, {
+              status: 302,
+              headers: {
+                'Location': proxyUrl,
+                'Cache-Control': 'public, max-age=3600',
+                ...headers,
+              },
+            });
+          }
+
+          // 回退到 KV 直传
           const buffer = await getFileArrayBuffer(env, item);
           return new Response(buffer, {
             headers: {
