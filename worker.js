@@ -777,7 +777,7 @@ const HTML = `
     }
 
     function loadLrcFromFile(item) { var lrcName = item.name.replace(/\.[^.]+$/, "") + ".lrc"; var items = getCurrentFolderItems(); var lrcItem = null; for (var i = 0; i < items.length; i++) { if (items[i].name === lrcName) { lrcItem = items[i]; break; } } if (lrcItem) api("/api/file-content?path=" + encodeURIComponent(joinPath(currentPath, lrcItem.name))).then(function(data) { if (data.base64) displayLyrics(atob(data.base64)); else document.getElementById("lyricsContainer").style.display = "none"; }); else document.getElementById("lyricsContainer").style.display = "none"; }
-    function displayLyrics(lyrics) { var container = document.getElementById("lyricsContainer"); container.style.display = "block"; container.innerHTML = ""; var hasTimestamps = /\[\d{2}:\d{2}(\.\d+)?\]/.test(lyrics); if (hasTimestamps) { lyricLines = []; var lines = lyrics.split("\n"); for (var i = 0; i < lines.length; i++) { var line = lines[i].trim(); var timeMatch = line.match(/\[(\d{2}):(\d{2})(\.\d+)?\]/); if (timeMatch) { var minutes = parseInt(timeMatch[1]); var seconds = parseFloat(timeMatch[2] + (timeMatch[3] || "")); var text = line.replace(/\[.*?\]/g, "").trim(); if (text) lyricLines.push({ time: minutes * 60 + seconds, text: text }); } } lyricLines.sort(function(a,b){return a.time-b.time}); for (var j = 0; j < lyricLines.length; j++) { var div = document.createElement("div"); div.className = "lyric-line"; div.setAttribute("data-time", lyricLines[j].time); div.textContent = lyricLines[j].text; container.appendChild(div); } } else { container.textContent = lyrics; container.style.whiteSpace = "pre-wrap"; } }
+    function displayLyrics(lyrics) { var container = document.getElementById("lyricsContainer"); container.style.display = "block"; container.innerHTML = ""; var hasTimestamps = /\[\d{2}:\d{2}(\.\d+)?\]/.test(lyrics); if (hasTimestamps) { lyricLines = []; var lines = lyrics.split(""); for (var i = 0; i < lines.length; i++) { var line = lines[i].trim(); var timeMatch = line.match(/\[(\d{2}):(\d{2})(\.\d+)?\]/); if (timeMatch) { var minutes = parseInt(timeMatch[1]); var seconds = parseFloat(timeMatch[2] + (timeMatch[3] || "")); var text = line.replace(/\[.*?\]/g, "").trim(); if (text) lyricLines.push({ time: minutes * 60 + seconds, text: text }); } } lyricLines.sort(function(a,b){return a.time-b.time}); for (var j = 0; j < lyricLines.length; j++) { var div = document.createElement("div"); div.className = "lyric-line"; div.setAttribute("data-time", lyricLines[j].time); div.textContent = lyricLines[j].text; container.appendChild(div); } } else { container.textContent = lyrics; container.style.whiteSpace = "pre-wrap"; } }
     function highlightLyric(currentTime) { if (!lyricLines || lyricLines.length === 0) return; var lines = document.querySelectorAll(".lyric-line"); var activeIndex = -1; for (var i = 0; i < lyricLines.length; i++) { if (currentTime >= lyricLines[i].time) activeIndex = i; else break; } for (var j = 0; j < lines.length; j++) { if (j === activeIndex) { lines[j].classList.add("active"); lines[j].scrollIntoView({ block: "center", behavior: "smooth" }); } else lines[j].classList.remove("active"); } }
 
     function editFile(fileId) { var item = findItemInTree(fileTree, fileId); if (item) { openDetail(item); editDetailText(); } }
@@ -795,9 +795,9 @@ function getProxyUrl(repoName, path, branch) {
   branch = branch || 'main';
   if (GITHUB_CONFIG.useProxy) {
     // v6.gh-proxy.com 代理格式: https://v6.gh-proxy.com/github.com/{user}/{repo}/raw/{branch}/{path}
-    return `${GITHUB_CONFIG.proxyBase}/${GITHUB_CONFIG.username}/${repoName}/raw/${branch}/${path}`;
+    return GITHUB_CONFIG.proxyBase + '/' + GITHUB_CONFIG.username + '/' + repoName + '/raw/' + branch + '/' + path;
   }
-  return `${GITHUB_CONFIG.rawBase}/${GITHUB_CONFIG.username}/${repoName}/${branch}/${path}`;
+  return GITHUB_CONFIG.rawBase + '/' + GITHUB_CONFIG.username + '/' + repoName + '/' + branch + '/' + path;
 }
 
 function getRepoName(fileId) {
@@ -808,8 +808,8 @@ function getRepoName(fileId) {
 // 检查 GitHub 仓库是否存在
 async function githubRepoExists(repoName, env) {
   try {
-    const res = await fetch(`${GITHUB_CONFIG.apiBase}/repos/${GITHUB_CONFIG.username}/${repoName}`, {
-      headers: { 'Authorization': `token ${getGithubToken(env)}`, 'Accept': 'application/vnd.github.v3+json' }
+    const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName, {
+      headers: { 'Authorization': "token " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json' }
     });
     return res.status === 200;
   } catch (e) { return false; }
@@ -817,10 +817,10 @@ async function githubRepoExists(repoName, env) {
 
 // 创建 GitHub 仓库（私有）
 async function githubCreateRepo(repoName, env) {
-  const res = await fetch(`${GITHUB_CONFIG.apiBase}/user/repos`, {
+  const res = await fetch(GITHUB_CONFIG.apiBase + "/user/repos", {
     method: 'POST',
     headers: {
-      'Authorization': `token ${getGithubToken(env)}`,
+      'Authorization': "token " + getGithubToken(env),
       'Accept': 'application/vnd.github.v3+json',
       'Content-Type': 'application/json'
     },
@@ -840,8 +840,8 @@ async function githubCreateRepo(repoName, env) {
 
 // 获取仓库信息
 async function githubGetRepo(repoName, env) {
-  const res = await fetch(`${GITHUB_CONFIG.apiBase}/repos/${GITHUB_CONFIG.username}/${repoName}`, {
-    headers: { 'Authorization': `token ${getGithubToken(env)}`, 'Accept': 'application/vnd.github.v3+json' }
+  const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName, {
+    headers: { 'Authorization': "token " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json' }
   });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error('GitHub get repo failed: ' + res.status);
@@ -853,8 +853,8 @@ async function githubUploadFile(repoName, path, contentBase64, message, env) {
   // 先检查文件是否存在（需要 sha 来更新）
   let sha = null;
   try {
-    const checkRes = await fetch(`${GITHUB_CONFIG.apiBase}/repos/${GITHUB_CONFIG.username}/${repoName}/contents/${path}`, {
-      headers: { 'Authorization': `token ${getGithubToken(env)}`, 'Accept': 'application/vnd.github.v3+json' }
+    const checkRes = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName + "/contents/" + path, {
+      headers: { 'Authorization': "token " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json' }
     });
     if (checkRes.status === 200) {
       const data = await checkRes.json();
@@ -868,10 +868,10 @@ async function githubUploadFile(repoName, path, contentBase64, message, env) {
   };
   if (sha) body.sha = sha;
 
-  const res = await fetch(`${GITHUB_CONFIG.apiBase}/repos/${GITHUB_CONFIG.username}/${repoName}/contents/${path}`, {
+  const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName + "/contents/" + path, {
     method: 'PUT',
     headers: {
-      'Authorization': `token ${getGithubToken(env)}`,
+      'Authorization': "token " + getGithubToken(env),
       'Accept': 'application/vnd.github.v3+json',
       'Content-Type': 'application/json'
     },
@@ -897,9 +897,9 @@ async function githubGetFileRaw(repoName, path, branch, env) {
     console.error('Proxy fetch failed, trying direct:', e.message);
   }
   // 代理失败，回退到直连
-  const directUrl = `${GITHUB_CONFIG.rawBase}/${GITHUB_CONFIG.username}/${repoName}/${branch}/${path}`;
+  const directUrl = GITHUB_CONFIG.rawBase + "/" + GITHUB_CONFIG.username + "/" + repoName + "/" + branch + "/" + path;
   const res = await fetch(directUrl, {
-    headers: { 'Authorization': `token ${getGithubToken(env)}` }
+    headers: { 'Authorization': "token " + getGithubToken(env) }
   });
   if (!res.ok) throw new Error('GitHub raw fetch failed: ' + res.status);
   return await res.arrayBuffer();
@@ -907,8 +907,8 @@ async function githubGetFileRaw(repoName, path, branch, env) {
 
 // 获取文件内容（API，用于获取 sha 等元数据）
 async function githubGetFileApi(repoName, path, env) {
-  const res = await fetch(`${GITHUB_CONFIG.apiBase}/repos/${GITHUB_CONFIG.username}/${repoName}/contents/${path}`, {
-    headers: { 'Authorization': `token ${getGithubToken(env)}`, 'Accept': 'application/vnd.github.v3+json' }
+  const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName + "/contents/" + path, {
+    headers: { 'Authorization': "token " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json' }
   });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error('GitHub get file failed: ' + res.status);
@@ -917,10 +917,10 @@ async function githubGetFileApi(repoName, path, env) {
 
 // 删除文件
 async function githubDeleteFile(repoName, path, sha, message, env) {
-  const res = await fetch(`${GITHUB_CONFIG.apiBase}/repos/${GITHUB_CONFIG.username}/${repoName}/contents/${path}`, {
+  const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName + "/contents/" + path, {
     method: 'DELETE',
     headers: {
-      'Authorization': `token ${getGithubToken(env)}`,
+      'Authorization': "token " + getGithubToken(env),
       'Accept': 'application/vnd.github.v3+json',
       'Content-Type': 'application/json'
     },
@@ -943,7 +943,7 @@ async function githubGetRepoSize(repoName, env) {
 // 主存储函数：优先 GitHub，失败回退到 KV
 async function storeFileContent(env, fileId, base64, chunkIndex, isChunk) {
   const repoName = getRepoName(fileId);
-  const path = isChunk ? `chunk_${chunkIndex}.bin` : 'file.bin';
+  const path = isChunk ? 'chunk_' + chunkIndex + '.bin' : 'file.bin';
 
   // 尝试 GitHub 存储
   try {
@@ -961,7 +961,7 @@ async function storeFileContent(env, fileId, base64, chunkIndex, isChunk) {
     }
 
     // 上传文件
-    await githubUploadFile(repoName, path, base64, isChunk ? `Upload chunk ${chunkIndex}` : 'Upload file', env);
+    await githubUploadFile(repoName, path, base64, isChunk ? 'Upload chunk ' + chunkIndex : 'Upload file', env);
 
     // 记录存储位置到 KV
     const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + fileId, 'json') || {};
@@ -1738,9 +1738,9 @@ function getProxyUrl(repoName, path, branch) {
   branch = branch || 'main';
   if (GITHUB_CONFIG.useProxy) {
     // v6.gh-proxy.com 代理格式: https://v6.gh-proxy.com/github.com/{user}/{repo}/raw/{branch}/{path}
-    return `${GITHUB_CONFIG.proxyBase}/${GITHUB_CONFIG.username}/${repoName}/raw/${branch}/${path}`;
+    return GITHUB_CONFIG.proxyBase + '/' + GITHUB_CONFIG.username + '/' + repoName + '/raw/' + branch + '/' + path;
   }
-  return `${GITHUB_CONFIG.rawBase}/${GITHUB_CONFIG.username}/${repoName}/${branch}/${path}`;
+  return GITHUB_CONFIG.rawBase + '/' + GITHUB_CONFIG.username + '/' + repoName + '/' + branch + '/' + path;
 }
 
 function getRepoName(fileId) {
@@ -1751,8 +1751,8 @@ function getRepoName(fileId) {
 // 检查 GitHub 仓库是否存在
 async function githubRepoExists(repoName, env) {
   try {
-    const res = await fetch(`${GITHUB_CONFIG.apiBase}/repos/${GITHUB_CONFIG.username}/${repoName}`, {
-      headers: { 'Authorization': `token ${getGithubToken(env)}`, 'Accept': 'application/vnd.github.v3+json' }
+    const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName, {
+      headers: { 'Authorization': "token " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json' }
     });
     return res.status === 200;
   } catch (e) { return false; }
@@ -1760,10 +1760,10 @@ async function githubRepoExists(repoName, env) {
 
 // 创建 GitHub 仓库（私有）
 async function githubCreateRepo(repoName, env) {
-  const res = await fetch(`${GITHUB_CONFIG.apiBase}/user/repos`, {
+  const res = await fetch(GITHUB_CONFIG.apiBase + "/user/repos", {
     method: 'POST',
     headers: {
-      'Authorization': `token ${getGithubToken(env)}`,
+      'Authorization': "token " + getGithubToken(env),
       'Accept': 'application/vnd.github.v3+json',
       'Content-Type': 'application/json'
     },
@@ -1783,8 +1783,8 @@ async function githubCreateRepo(repoName, env) {
 
 // 获取仓库信息
 async function githubGetRepo(repoName, env) {
-  const res = await fetch(`${GITHUB_CONFIG.apiBase}/repos/${GITHUB_CONFIG.username}/${repoName}`, {
-    headers: { 'Authorization': `token ${getGithubToken(env)}`, 'Accept': 'application/vnd.github.v3+json' }
+  const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName, {
+    headers: { 'Authorization': "token " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json' }
   });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error('GitHub get repo failed: ' + res.status);
@@ -1796,8 +1796,8 @@ async function githubUploadFile(repoName, path, contentBase64, message, env) {
   // 先检查文件是否存在（需要 sha 来更新）
   let sha = null;
   try {
-    const checkRes = await fetch(`${GITHUB_CONFIG.apiBase}/repos/${GITHUB_CONFIG.username}/${repoName}/contents/${path}`, {
-      headers: { 'Authorization': `token ${getGithubToken(env)}`, 'Accept': 'application/vnd.github.v3+json' }
+    const checkRes = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName + "/contents/" + path, {
+      headers: { 'Authorization': "token " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json' }
     });
     if (checkRes.status === 200) {
       const data = await checkRes.json();
@@ -1811,10 +1811,10 @@ async function githubUploadFile(repoName, path, contentBase64, message, env) {
   };
   if (sha) body.sha = sha;
 
-  const res = await fetch(`${GITHUB_CONFIG.apiBase}/repos/${GITHUB_CONFIG.username}/${repoName}/contents/${path}`, {
+  const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName + "/contents/" + path, {
     method: 'PUT',
     headers: {
-      'Authorization': `token ${getGithubToken(env)}`,
+      'Authorization': "token " + getGithubToken(env),
       'Accept': 'application/vnd.github.v3+json',
       'Content-Type': 'application/json'
     },
@@ -1840,9 +1840,9 @@ async function githubGetFileRaw(repoName, path, branch, env) {
     console.error('Proxy fetch failed, trying direct:', e.message);
   }
   // 代理失败，回退到直连
-  const directUrl = `${GITHUB_CONFIG.rawBase}/${GITHUB_CONFIG.username}/${repoName}/${branch}/${path}`;
+  const directUrl = GITHUB_CONFIG.rawBase + "/" + GITHUB_CONFIG.username + "/" + repoName + "/" + branch + "/" + path;
   const res = await fetch(directUrl, {
-    headers: { 'Authorization': `token ${getGithubToken(env)}` }
+    headers: { 'Authorization': "token " + getGithubToken(env) }
   });
   if (!res.ok) throw new Error('GitHub raw fetch failed: ' + res.status);
   return await res.arrayBuffer();
@@ -1850,8 +1850,8 @@ async function githubGetFileRaw(repoName, path, branch, env) {
 
 // 获取文件内容（API，用于获取 sha 等元数据）
 async function githubGetFileApi(repoName, path, env) {
-  const res = await fetch(`${GITHUB_CONFIG.apiBase}/repos/${GITHUB_CONFIG.username}/${repoName}/contents/${path}`, {
-    headers: { 'Authorization': `token ${getGithubToken(env)}`, 'Accept': 'application/vnd.github.v3+json' }
+  const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName + "/contents/" + path, {
+    headers: { 'Authorization': "token " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json' }
   });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error('GitHub get file failed: ' + res.status);
@@ -1860,10 +1860,10 @@ async function githubGetFileApi(repoName, path, env) {
 
 // 删除文件
 async function githubDeleteFile(repoName, path, sha, message, env) {
-  const res = await fetch(`${GITHUB_CONFIG.apiBase}/repos/${GITHUB_CONFIG.username}/${repoName}/contents/${path}`, {
+  const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName + "/contents/" + path, {
     method: 'DELETE',
     headers: {
-      'Authorization': `token ${getGithubToken(env)}`,
+      'Authorization': "token " + getGithubToken(env),
       'Accept': 'application/vnd.github.v3+json',
       'Content-Type': 'application/json'
     },
@@ -1886,7 +1886,7 @@ async function githubGetRepoSize(repoName, env) {
 // 主存储函数：优先 GitHub，失败回退到 KV
 async function storeFileContent(env, fileId, base64, chunkIndex, isChunk) {
   const repoName = getRepoName(fileId);
-  const path = isChunk ? `chunk_${chunkIndex}.bin` : 'file.bin';
+  const path = isChunk ? 'chunk_' + chunkIndex + '.bin' : 'file.bin';
 
   // 尝试 GitHub 存储
   try {
@@ -1904,7 +1904,7 @@ async function storeFileContent(env, fileId, base64, chunkIndex, isChunk) {
     }
 
     // 上传文件
-    await githubUploadFile(repoName, path, base64, isChunk ? `Upload chunk ${chunkIndex}` : 'Upload file', env);
+    await githubUploadFile(repoName, path, base64, isChunk ? 'Upload chunk ' + chunkIndex : 'Upload file', env);
 
     // 记录存储位置到 KV
     const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + fileId, 'json') || {};
