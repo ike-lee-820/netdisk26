@@ -338,7 +338,7 @@ export default {
   },
 };
 
-// ---------- 前端 HTML（完全使用 addEventListener，无内联事件，安全可靠） ----------
+// ---------- 前端 HTML（完全使用事件委托，所有函数挂载到 window，确保稳定） ----------
 const htmlContent = `<!DOCTYPE html>
 <html lang="zh">
 <head>
@@ -401,6 +401,7 @@ const htmlContent = `<!DOCTYPE html>
         <button id="btnUpload" class="btn btn-primary">+ 上传</button>
         <button id="btnNewFile" class="btn btn-success">📄 新建</button>
         <button id="btnTasks" class="btn btn-outline">📋 任务</button>
+        <button id="btnMkdir" class="btn btn-outline">📁 新建文件夹</button>
       </div>
     </div>
     <div class="breadcrumb" id="breadcrumb"></div>
@@ -442,217 +443,206 @@ const htmlContent = `<!DOCTYPE html>
 </div>
 
 <script>
-(function() {
-  'use strict';
+// 全局变量
+var currentPath = '/';
+var fileItems = [];
 
-  var currentPath = '/';
-  var fileItems = [];
-
-  // DOM 引用
-  var breadcrumb = document.getElementById('breadcrumb');
-  var fileList = document.getElementById('fileList');
-  var taskPanel = document.getElementById('taskPanel');
-  var taskList = document.getElementById('taskList');
-  var uploadModal = document.getElementById('uploadModal');
-  var uploadPathDisplay = document.getElementById('uploadPathDisplay');
-  var fileInput = document.getElementById('fileInput');
-  var newFileModal = document.getElementById('newFileModal');
-  var newFilePathDisplay = document.getElementById('newFilePathDisplay');
-  var newFileName = document.getElementById('newFileName');
-
-  // 辅助函数
-  function closeModal(id) {
-    document.getElementById(id).classList.remove('open');
-  }
-
-  // 刷新文件列表
-  async function refresh() {
-    try {
-      var resp = await fetch('/api/list?path=' + encodeURIComponent(currentPath));
-      var data = await resp.json();
+// ---------- 核心功能（全部暴露到 window） ----------
+window.refresh = function() {
+  fetch('/api/list?path=' + encodeURIComponent(currentPath))
+    .then(function(res) { return res.json(); })
+    .then(function(data) {
       fileItems = data.items || [];
       renderBreadcrumb();
       renderList();
-    } catch(e) { console.error(e); }
+    })
+    .catch(function(e) { console.error(e); });
+};
+
+function renderBreadcrumb() {
+  var parts = currentPath.split('/').filter(function(p) { return p; });
+  var html = '<span data-path="/">🏠 根目录</span>';
+  var acc = '';
+  for (var i = 0; i < parts.length; i++) {
+    acc += '/' + parts[i];
+    html += ' <span>›</span> <span data-path="' + acc + '">' + parts[i] + '</span>';
   }
+  var el = document.getElementById('breadcrumb');
+  el.innerHTML = html;
+  // 事件委托给父容器，不需要单独绑定
+}
 
-  function renderBreadcrumb() {
-    var parts = currentPath.split('/').filter(function(p) { return p; });
-    var html = '<span data-path="/">🏠 根目录</span>';
-    var acc = '';
-    for (var i = 0; i < parts.length; i++) {
-      var p = parts[i];
-      acc += '/' + p;
-      html += ' <span>›</span> <span data-path="' + acc + '">' + p + '</span>';
-    }
-    breadcrumb.innerHTML = html;
-    // 绑定点击事件
-    breadcrumb.querySelectorAll('span[data-path]').forEach(function(el) {
-      el.addEventListener('click', function() {
-        navigateTo(el.getAttribute('data-path'));
-      });
-    });
+function renderList() {
+  var container = document.getElementById('fileList');
+  if (fileItems.length === 0) {
+    container.innerHTML = '<div class="empty-state"><div class="icon">📂</div><p>此目录为空</p></div>';
+    return;
   }
-
-  function navigateTo(path) {
-    currentPath = path;
-    refresh();
+  var html = '';
+  for (var i = 0; i < fileItems.length; i++) {
+    var item = fileItems[i];
+    var icon = item.isDir ? '📁' : '📄';
+    var size = item.isDir ? '' : (item.size / 1024).toFixed(1) + ' KB';
+    var date = item.uploadedAt ? new Date(item.uploadedAt).toLocaleString() : '';
+    var fullPath = currentPath === '/' ? '/' + item.name : currentPath + '/' + item.name;
+    html += '<div class="file-item" data-path="' + fullPath + '" data-isdir="' + item.isDir + '">' +
+      '<div class="file-info">' +
+        '<span class="icon">' + icon + '</span>' +
+        '<span class="name">' + item.name + '</span>' +
+        '<span class="meta">' + size + ' ' + date + '</span>' +
+      '</div>' +
+      '<div class="file-actions">' +
+        (item.isDir ? '<button class="btn btn-sm btn-outline action-open" data-path="' + fullPath + '">打开</button>' :
+                      '<a href="/file' + fullPath + '" target="_blank" class="btn btn-sm btn-primary">下载</a>') +
+        '<button class="btn btn-sm btn-outline action-rename" data-path="' + fullPath + '">✏️</button>' +
+        '<button class="btn btn-sm btn-danger action-delete" data-path="' + fullPath + '">🗑️</button>' +
+      '</div>' +
+    '</div>';
   }
+  container.innerHTML = html;
+}
 
-  function renderList() {
-    if (fileItems.length === 0) {
-      fileList.innerHTML = '<div class="empty-state"><div class="icon">📂</div><p>此目录为空</p></div>';
-      return;
-    }
-    var html = '';
-    for (var i = 0; i < fileItems.length; i++) {
-      var item = fileItems[i];
-      var icon = item.isDir ? '📁' : '📄';
-      var size = item.isDir ? '' : (item.size / 1024).toFixed(1) + ' KB';
-      var date = item.uploadedAt ? new Date(item.uploadedAt).toLocaleString() : '';
-      var fullPath = currentPath === '/' ? '/' + item.name : currentPath + '/' + item.name;
-      var actionsHtml = '';
-      if (item.isDir) {
-        actionsHtml = '<button class="btn btn-sm btn-outline open-dir" data-path="' + fullPath + '">打开</button>';
-      } else {
-        actionsHtml = '<a href="/file' + fullPath + '" target="_blank" class="btn btn-sm btn-primary">下载</a>';
-      }
-      actionsHtml += '<button class="btn btn-sm btn-outline rename-btn" data-path="' + fullPath + '">✏️</button>';
-      actionsHtml += '<button class="btn btn-sm btn-danger delete-btn" data-path="' + fullPath + '">🗑️</button>';
-      html += '<div class="file-item" data-path="' + fullPath + '" data-isdir="' + item.isDir + '">' +
-        '<div class="file-info">' +
-          '<span class="icon">' + icon + '</span>' +
-          '<span class="name">' + item.name + '</span>' +
-          '<span class="meta">' + size + ' ' + date + '</span>' +
-        '</div>' +
-        '<div class="file-actions">' + actionsHtml + '</div>' +
-      '</div>';
-    }
-    fileList.innerHTML = html;
-
-    // 绑定事件
-    fileList.querySelectorAll('.open-dir').forEach(function(btn) {
-      btn.addEventListener('click', function() {
-        navigateTo(this.getAttribute('data-path'));
-      });
-    });
-    fileList.querySelectorAll('.rename-btn').forEach(function(btn) {
-      btn.addEventListener('click', function() {
-        renameItem(this.getAttribute('data-path'));
-      });
-    });
-    fileList.querySelectorAll('.delete-btn').forEach(function(btn) {
-      btn.addEventListener('click', function() {
-        deleteItem(this.getAttribute('data-path'));
-      });
-    });
-    // 点击文件名也可打开目录
-    fileList.querySelectorAll('.file-item .name').forEach(function(el) {
-      var parent = el.closest('.file-item');
+// 事件委托（监听 fileList 的点击）
+document.getElementById('fileList').addEventListener('click', function(e) {
+  var target = e.target.closest('button');
+  if (!target) {
+    // 点击文件名打开目录（如果是文件夹）
+    var nameEl = e.target.closest('.name');
+    if (nameEl) {
+      var parent = nameEl.closest('.file-item');
       if (parent && parent.getAttribute('data-isdir') === 'true') {
-        el.style.cursor = 'pointer';
-        el.addEventListener('click', function() {
-          navigateTo(parent.getAttribute('data-path'));
-        });
+        window.navigateTo(parent.getAttribute('data-path'));
       }
-    });
-  }
-
-  // 新建文件夹（弹出对话框）
-  window.mkdir = function() {
-    var name = prompt('请输入新文件夹名称');
-    if (!name) return;
-    fetch('/api/mkdir', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: currentPath, name: name })
-    }).then(function(r) {
-      if (r.ok) refresh();
-      else alert('创建失败');
-    });
-  };
-
-  // 重命名
-  function renameItem(fullPath) {
-    var newName = prompt('请输入新名称', fullPath.split('/').pop());
-    if (!newName) return;
-    fetch('/api/rename', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ oldPath: fullPath, newName: newName })
-    }).then(function(r) {
-      if (r.ok) refresh();
-      else alert('重命名失败');
-    });
-  }
-
-  // 删除
-  function deleteItem(fullPath) {
-    if (!confirm('确定要删除 "' + fullPath + '" 吗？')) return;
-    fetch('/api/delete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: fullPath })
-    }).then(function(r) {
-      if (r.ok) refresh();
-      else alert('删除失败');
-    });
-  }
-
-  // 上传
-  function showUpload() {
-    uploadPathDisplay.textContent = currentPath;
-    uploadModal.classList.add('open');
-  }
-
-  async function doUpload() {
-    var files = fileInput.files;
-    if (files.length === 0) return alert('请选择文件');
-    var path = currentPath;
-    for (var i = 0; i < files.length; i++) {
-      var fd = new FormData();
-      fd.append('file', files[i]);
-      fd.append('path', path);
-      await fetch('/api/upload', { method: 'POST', body: fd });
     }
-    closeModal('uploadModal');
-    refresh();
+    return;
   }
-
-  // 新建文件
-  function showNewFile() {
-    newFilePathDisplay.textContent = currentPath;
-    newFileModal.classList.add('open');
+  var path = target.getAttribute('data-path');
+  if (!path) return;
+  if (target.classList.contains('action-open')) {
+    window.navigateTo(path);
+  } else if (target.classList.contains('action-rename')) {
+    window.renameItem(path);
+  } else if (target.classList.contains('action-delete')) {
+    window.deleteItem(path);
   }
+});
 
-  async function doCreateFile() {
-    var name = newFileName.value.trim();
-    if (!name) return alert('请输入文件名');
-    var resp = await fetch('/api/create_file', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: currentPath, name: name })
-    });
-    if (resp.ok) {
-      closeModal('newFileModal');
-      refresh();
+// 面包屑导航点击（事件委托）
+document.getElementById('breadcrumb').addEventListener('click', function(e) {
+  var span = e.target.closest('span[data-path]');
+  if (span) {
+    window.navigateTo(span.getAttribute('data-path'));
+  }
+});
+
+// 导航
+window.navigateTo = function(path) {
+  currentPath = path;
+  window.refresh();
+};
+
+// 新建文件夹
+window.mkdir = function() {
+  var name = prompt('请输入新文件夹名称');
+  if (!name) return;
+  fetch('/api/mkdir', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: currentPath, name: name })
+  }).then(function(r) {
+    if (r.ok) window.refresh();
+    else alert('创建失败');
+  });
+};
+
+// 重命名
+window.renameItem = function(fullPath) {
+  var newName = prompt('请输入新名称', fullPath.split('/').pop());
+  if (!newName) return;
+  fetch('/api/rename', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ oldPath: fullPath, newName: newName })
+  }).then(function(r) {
+    if (r.ok) window.refresh();
+    else alert('重命名失败');
+  });
+};
+
+// 删除
+window.deleteItem = function(fullPath) {
+  if (!confirm('确定要删除 "' + fullPath + '" 吗？')) return;
+  fetch('/api/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: fullPath })
+  }).then(function(r) {
+    if (r.ok) window.refresh();
+    else alert('删除失败');
+  });
+};
+
+// 上传
+window.showUpload = function() {
+  document.getElementById('uploadPathDisplay').textContent = currentPath;
+  document.getElementById('uploadModal').classList.add('open');
+};
+
+window.doUpload = function() {
+  var input = document.getElementById('fileInput');
+  var files = input.files;
+  if (files.length === 0) return alert('请选择文件');
+  var path = currentPath;
+  var promises = [];
+  for (var i = 0; i < files.length; i++) {
+    var fd = new FormData();
+    fd.append('file', files[i]);
+    fd.append('path', path);
+    promises.push(fetch('/api/upload', { method: 'POST', body: fd }));
+  }
+  Promise.all(promises).then(function() {
+    window.closeModal('uploadModal');
+    window.refresh();
+  }).catch(function(e) { alert('上传失败：' + e.message); });
+};
+
+// 新建文件
+window.showNewFile = function() {
+  document.getElementById('newFilePathDisplay').textContent = currentPath;
+  document.getElementById('newFileModal').classList.add('open');
+};
+
+window.doCreateFile = function() {
+  var name = document.getElementById('newFileName').value.trim();
+  if (!name) return alert('请输入文件名');
+  fetch('/api/create_file', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: currentPath, name: name })
+  }).then(function(r) {
+    if (r.ok) {
+      window.closeModal('newFileModal');
+      window.refresh();
     } else {
-      alert('创建失败：' + (await resp.text()));
+      r.text().then(function(text) { alert('创建失败：' + text); });
     }
-  }
+  });
+};
 
-  // 任务
-  function toggleTasks() {
-    taskPanel.classList.toggle('open');
-    if (taskPanel.classList.contains('open')) refreshTasks();
-  }
+// 任务面板
+window.toggleTasks = function() {
+  var panel = document.getElementById('taskPanel');
+  panel.classList.toggle('open');
+  if (panel.classList.contains('open')) window.refreshTasks();
+};
 
-  async function refreshTasks() {
-    try {
-      var resp = await fetch('/api/tasks');
-      var data = await resp.json();
+window.refreshTasks = function() {
+  fetch('/api/tasks')
+    .then(function(res) { return res.json(); })
+    .then(function(data) {
+      var list = document.getElementById('taskList');
       if (!data.tasks || data.tasks.length === 0) {
-        taskList.innerHTML = '<div style="color:#94a3b8;text-align:center;padding:12px;">暂无任务</div>';
+        list.innerHTML = '<div style="color:#94a3b8;text-align:center;padding:12px;">暂无任务</div>';
         return;
       }
       var html = '';
@@ -666,28 +656,32 @@ const htmlContent = `<!DOCTYPE html>
           '<span><span class="progress-bar"><span class="fill" style="width:' + progress + '%"></span></span> ' + statusText + '</span>' +
         '</div>';
       }
-      taskList.innerHTML = html;
-    } catch(e) { console.error(e); }
-  }
+      list.innerHTML = html;
+    })
+    .catch(function(e) { console.error(e); });
+};
 
-  // 绑定按钮事件
-  document.getElementById('btnUpload').addEventListener('click', showUpload);
-  document.getElementById('btnNewFile').addEventListener('click', showNewFile);
-  document.getElementById('btnTasks').addEventListener('click', toggleTasks);
-  document.getElementById('doUploadBtn').addEventListener('click', doUpload);
-  document.getElementById('cancelUploadBtn').addEventListener('click', function() { closeModal('uploadModal'); });
-  document.getElementById('doCreateBtn').addEventListener('click', doCreateFile);
-  document.getElementById('cancelCreateBtn').addEventListener('click', function() { closeModal('newFileModal'); });
+window.closeModal = function(id) {
+  document.getElementById(id).classList.remove('open');
+};
+
+// 按钮绑定（使用 addEventListener）
+document.addEventListener('DOMContentLoaded', function() {
+  document.getElementById('btnUpload').addEventListener('click', window.showUpload);
+  document.getElementById('btnNewFile').addEventListener('click', window.showNewFile);
+  document.getElementById('btnTasks').addEventListener('click', window.toggleTasks);
+  document.getElementById('btnMkdir').addEventListener('click', window.mkdir);
+  document.getElementById('doUploadBtn').addEventListener('click', window.doUpload);
+  document.getElementById('cancelUploadBtn').addEventListener('click', function() { window.closeModal('uploadModal'); });
+  document.getElementById('doCreateBtn').addEventListener('click', window.doCreateFile);
+  document.getElementById('cancelCreateBtn').addEventListener('click', function() { window.closeModal('newFileModal'); });
 
   // 初始化
-  refresh();
-  refreshTasks();
-  setInterval(refresh, 5000);
-  setInterval(refreshTasks, 3000);
-
-  // 暴露 mkdir 给全局
-  window.mkdir = window.mkdir;
-})();
+  window.refresh();
+  window.refreshTasks();
+  setInterval(window.refresh, 5000);
+  setInterval(window.refreshTasks, 3000);
+});
 </script>
 </body>
 </html>`;
