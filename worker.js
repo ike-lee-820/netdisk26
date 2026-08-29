@@ -56,6 +56,7 @@ const HTML = `<!DOCTYPE html>
             align-items:center; justify-content:center; font-size:20px; flex-shrink:0;
             background:var(--accent-light); margin-top:4px;
         }
+        .file-icon.folder { background:#fef3c7; }
         .file-info { flex:1; min-width:0; display:flex; flex-direction:column; gap:4px; }
         .file-name { font-size:14px; font-weight:600; word-break:break-all; }
         .file-meta { font-size:11px; color:var(--text-secondary); display:flex; gap:8px; flex-wrap:wrap; }
@@ -106,6 +107,28 @@ const HTML = `<!DOCTYPE html>
             background:#f9fafb; border:1px solid var(--border); border-radius:8px; padding:10px;
             font-size:12px; word-break:break-all; margin:8px 0; user-select:all;
         }
+        .task-panel {
+            position:fixed; top:0; right:0; bottom:0; width:320px; max-width:90vw;
+            background:var(--card); z-index:250; box-shadow:-4px 0 20px rgba(0,0,0,0.1);
+            transform:translateX(100%); transition:transform 0.3s ease; overflow-y:auto; padding:16px;
+        }
+        .task-panel.open { transform:translateX(0); }
+        .task-panel-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
+        .task-item {
+            padding:10px; border-radius:var(--radius-sm); background:#f9fafb;
+            margin-bottom:8px; border:1px solid var(--border);
+        }
+        .task-name { font-size:13px; font-weight:600; word-break:break-all; }
+        .task-status { font-size:11px; color:var(--text-secondary); margin-top:4px; }
+        .progress-bar { height:4px; background:#e5e7eb; border-radius:2px; margin-top:6px; overflow:hidden; }
+        .progress-fill { height:100%; background:var(--accent); border-radius:2px; }
+        .progress-fill.completed { background:var(--success); }
+        .progress-fill.failed { background:var(--danger); }
+        .task-backdrop {
+            position:fixed; inset:0; background:rgba(0,0,0,0.3); z-index:240;
+            opacity:0; pointer-events:none; transition:opacity 0.3s;
+        }
+        .task-backdrop.open { opacity:1; pointer-events:auto; }
         @media (max-width:480px) {
             .file-item { padding:10px 12px; }
             .btn-text { padding:3px 8px; font-size:11px; }
@@ -119,14 +142,25 @@ const HTML = `<!DOCTYPE html>
     </div>
     <div class="file-list" id="fileList"></div>
     <button class="fab" id="fabBtn" title="添加">+</button>
+    <div class="task-backdrop" id="taskBackdrop"></div>
+    <div class="task-panel" id="taskPanel">
+        <div class="task-panel-header">
+            <h3>任务列表</h3>
+            <button class="btn-text" id="closeTaskBtn">关闭</button>
+        </div>
+        <div id="taskList"></div>
+    </div>
     <div id="modalContainer"></div>
     <div id="toastContainer"></div>
     <script>
+        // 全局变量
         var API_BASE = '';
         var currentPath = '/';
         var fileTree = null;
+        var tasks = [];
         var pendingUploads = [];
 
+        // 工具函数
         function showToast(msg, duration) {
             duration = duration || 2000;
             var container = document.getElementById('toastContainer');
@@ -183,11 +217,12 @@ const HTML = `<!DOCTYPE html>
 
         function api(path, options) {
             options = options || {};
-            return fetch(API_BASE + path, {
+            var fetchOptions = {
                 method: options.method || 'GET',
                 headers: { 'Content-Type': 'application/json' },
-                body: options.body ? JSON.stringify(options.body) : undefined
-            }).then(function(res) {
+            };
+            if (options.body) fetchOptions.body = JSON.stringify(options.body);
+            return fetch(API_BASE + path, fetchOptions).then(function(res) {
                 return res.json().then(function(data) {
                     if (!res.ok && data.error) throw new Error(data.error);
                     return data;
@@ -221,6 +256,32 @@ const HTML = `<!DOCTYPE html>
             return cleanBase + name;
         }
 
+        function findItemInTree(tree, itemId) {
+            if (!tree) return null;
+            if (tree.id === itemId) return tree;
+            if (tree.children) {
+                for (var i = 0; i < tree.children.length; i++) {
+                    var found = findItemInTree(tree.children[i], itemId);
+                    if (found) return found;
+                }
+            }
+            return null;
+        }
+
+        function removeItemFromTree(tree, itemId) {
+            if (!tree || !tree.children) return false;
+            var idx = tree.children.findIndex(function(c) { return c.id === itemId; });
+            if (idx !== -1) {
+                tree.children.splice(idx, 1);
+                return true;
+            }
+            for (var i = 0; i < tree.children.length; i++) {
+                if (removeItemFromTree(tree.children[i], itemId)) return true;
+            }
+            return false;
+        }
+
+        // 渲染
         function renderBreadcrumb() {
             var container = document.getElementById('breadcrumb');
             container.innerHTML = '';
@@ -280,8 +341,7 @@ const HTML = `<!DOCTYPE html>
                         if (item.type === 'folder') {
                             navigateTo(joinPath(currentPath, item.name));
                         } else {
-                            // 简单预览：下载或提示
-                            showToast('请使用下载按钮');
+                            showToast('点击操作按钮下载或分享');
                         }
                     };
                 })(item);
@@ -312,6 +372,7 @@ const HTML = `<!DOCTYPE html>
             return api('/api/tree', { method:'PUT', body: { tree: fileTree } });
         }
 
+        // 模态框
         function showModal(html) {
             var container = document.getElementById('modalContainer');
             container.innerHTML = '<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">' + html + '</div></div>';
@@ -321,6 +382,7 @@ const HTML = `<!DOCTYPE html>
             document.getElementById('modalContainer').innerHTML = '';
         }
 
+        // 新建文件夹
         function showNewFolderModal() {
             showModal('<h2>新建文件夹</h2><input type="text" id="newFolderName" placeholder="文件夹名称"><div class="btn-row"><button class="btn btn-secondary" onclick="closeModal()">取消</button><button class="btn btn-primary" onclick="createFolder()">创建</button></div>');
         }
@@ -348,6 +410,7 @@ const HTML = `<!DOCTYPE html>
             });
         }
 
+        // 上传
         function showUploadModal() {
             showModal('<h2>上传文件</h2><input type="file" id="fileInput" multiple><div class="btn-row"><button class="btn btn-secondary" onclick="closeModal()">取消</button><button class="btn btn-primary" onclick="startUpload()">开始上传</button></div>');
         }
@@ -376,32 +439,24 @@ const HTML = `<!DOCTYPE html>
         }
 
         function uploadSingleFile(file, fileName, uploadPath) {
-            var CHUNK_THRESHOLD = 15 * 1024 * 1024; // 15MB
             var fileId = generateId();
             return arrayBufferToBase64(file).then(function(base64) {
-                if (file.size <= CHUNK_THRESHOLD) {
-                    return api('/api/upload/single', {
-                        method:'POST',
-                        body: { fileId: fileId, fileName: fileName, uploadPath: uploadPath, base64: base64, mimeType: file.type || 'application/octet-stream', size: file.size }
-                    });
-                } else {
-                    // 简化：大文件也单次上传（可能超出KV限制，但暂不处理分片）
-                    return api('/api/upload/single', {
-                        method:'POST',
-                        body: { fileId: fileId, fileName: fileName, uploadPath: uploadPath, base64: base64, mimeType: file.type || 'application/octet-stream', size: file.size }
-                    });
-                }
+                return api('/api/upload/single', {
+                    method:'POST',
+                    body: { fileId: fileId, fileName: fileName, uploadPath: uploadPath, base64: base64, mimeType: file.type || 'application/octet-stream', size: file.size }
+                });
             });
         }
 
+        // 重命名
         function renameItem(itemId, oldName, type) {
-            showModal('<h2>重命名</h2><input type="text" id="renameInput" value="' + oldName + '"><div class="btn-row"><button class="btn btn-secondary" onclick="closeModal()">取消</button><button class="btn btn-primary" onclick="doRename(\'' + itemId + '\',\'' + type + '\')">确定</button></div>');
+            showModal('<h2>重命名</h2><input type="text" id="renameInput" value="' + oldName + '"><div class="btn-row"><button class="btn btn-secondary" onclick="closeModal()">取消</button><button class="btn btn-primary" onclick="doRename(\'' + itemId + '\')">确定</button></div>');
         }
 
-        function doRename(itemId, type) {
+        function doRename(itemId) {
             var newName = document.getElementById('renameInput').value.trim();
             if (!newName) { showToast('请输入新名称'); return; }
-            var item = findItemById(fileTree, itemId);
+            var item = findItemInTree(fileTree, itemId);
             if (!item) { showToast('未找到文件'); return; }
             item.name = newName;
             item.updatedAt = Date.now();
@@ -412,22 +467,10 @@ const HTML = `<!DOCTYPE html>
             });
         }
 
-        function findItemById(tree, id) {
-            if (!tree) return null;
-            if (tree.id === id) return tree;
-            if (tree.children) {
-                for (var i = 0; i < tree.children.length; i++) {
-                    var found = findItemById(tree.children[i], id);
-                    if (found) return found;
-                }
-            }
-            return null;
-        }
-
+        // 删除
         function deleteItem(itemId, name, type) {
             if (confirm('确定要删除 ' + name + ' 吗？')) {
-                // 删除文件内容
-                var item = findItemById(fileTree, itemId);
+                var item = findItemInTree(fileTree, itemId);
                 if (item && item.type === 'file' && item.chunks > 0) {
                     api('/api/delete-content', { method:'POST', body: { fileId: item.id, chunks: item.chunks } }).catch(function(){});
                 }
@@ -439,19 +482,7 @@ const HTML = `<!DOCTYPE html>
             }
         }
 
-        function removeItemFromTree(tree, itemId) {
-            if (!tree || !tree.children) return false;
-            var idx = tree.children.findIndex(function(c) { return c.id === itemId; });
-            if (idx !== -1) {
-                tree.children.splice(idx, 1);
-                return true;
-            }
-            for (var i = 0; i < tree.children.length; i++) {
-                if (removeItemFromTree(tree.children[i], itemId)) return true;
-            }
-            return false;
-        }
-
+        // 下载与分享
         function downloadFile(fileId, fileName) {
             window.location.href = '/api/download?fileId=' + encodeURIComponent(fileId);
         }
@@ -463,14 +494,82 @@ const HTML = `<!DOCTYPE html>
             });
         }
 
+        // 离线下载
+        function showOfflineDownloadModal() {
+            showModal('<h2>离线下载</h2><input type="url" id="offlineUrl" placeholder="https://example.com/file.zip"><div class="btn-row"><button class="btn btn-secondary" onclick="closeModal()">取消</button><button class="btn btn-primary" onclick="startOfflineDownload()">开始下载</button></div>');
+        }
+
+        function startOfflineDownload() {
+            var url = document.getElementById('offlineUrl').value.trim();
+            if (!url) { showToast('请输入下载链接'); return; }
+            var savePath = currentPath;
+            closeModal();
+            api('/api/offline', { method:'POST', body: { url: url, savePath: savePath } }).then(function() {
+                showToast('离线下载任务已创建');
+                loadTasks();
+            }).catch(function(e) {
+                showToast('创建任务失败: ' + e.message);
+            });
+        }
+
+        // 任务管理
+        function loadTasks() {
+            return api('/api/tasks').then(function(data) {
+                tasks = data.tasks || [];
+                renderTasks();
+            });
+        }
+
+        function renderTasks() {
+            var container = document.getElementById('taskList');
+            if (tasks.length === 0) {
+                container.innerHTML = '<p style="text-align:center;color:var(--text-secondary);padding:20px;">暂无任务</p>';
+                return;
+            }
+            container.innerHTML = '';
+            var sorted = tasks.slice().sort(function(a, b) { return (b.createdAt || 0) - (a.createdAt || 0); });
+            for (var i = 0; i < sorted.length; i++) {
+                var task = sorted[i];
+                var statusClass = task.status === 'completed' ? 'completed' : task.status === 'failed' ? 'failed' : '';
+                var statusText = task.status === 'completed' ? '完成' : task.status === 'failed' ? '失败' : task.status === 'processing' ? '处理中' : '等待中';
+                var div = document.createElement('div');
+                div.className = 'task-item';
+                div.innerHTML = '<div class="task-name">' + (task.type === 'upload' ? '上传' : '下载') + ' ' + (task.name || task.url || '未知') + '</div>' +
+                    '<div class="task-status">' + statusText + (task.progress ? ' · ' + Math.round(task.progress) + '%' : '') + '</div>' +
+                    '<div class="progress-bar"><div class="progress-fill ' + statusClass + '" style="width:' + (task.progress || 0) + '%"></div></div>';
+                container.appendChild(div);
+            }
+        }
+
+        function openTaskPanel() {
+            document.getElementById('taskPanel').classList.add('open');
+            document.getElementById('taskBackdrop').classList.add('open');
+            loadTasks();
+        }
+
+        function closeTaskPanel() {
+            document.getElementById('taskPanel').classList.remove('open');
+            document.getElementById('taskBackdrop').classList.remove('open');
+        }
+
+        // 初始化
         function init() {
             loadTree();
+            loadTasks();
             document.getElementById('fabBtn').onclick = function() {
                 showModal('<h2>添加</h2><div style="display:flex;flex-direction:column;gap:8px;">' +
                     '<button class="btn btn-primary" onclick="closeModal();showUploadModal()">上传文件</button>' +
                     '<button class="btn btn-secondary" onclick="closeModal();showNewFolderModal()">新建文件夹</button>' +
+                    '<button class="btn btn-secondary" onclick="closeModal();showOfflineDownloadModal()">离线下载</button>' +
+                    '<button class="btn btn-secondary" onclick="closeModal();openTaskPanel()">查看任务</button>' +
                     '</div>');
             };
+            document.getElementById('closeTaskBtn').onclick = closeTaskPanel;
+            document.getElementById('taskBackdrop').onclick = closeTaskPanel;
+            // 定时刷新任务
+            setInterval(function() {
+                loadTasks();
+            }, 5000);
         }
 
         init();
@@ -507,13 +606,6 @@ function base64ToArrayBuffer(base64) {
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   return bytes.buffer;
-}
-
-function arrayBufferToBase64(arrayBuffer) {
-  const bytes = new Uint8Array(arrayBuffer);
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary);
 }
 
 function getKvIndex(fileId, chunkIndex = null) {
@@ -581,7 +673,6 @@ async function getFileArrayBuffer(env, item) {
     const kv = env[FILE_KV_BINDINGS[kvIndex]];
     return await kv.get('f:' + item.id, 'arrayBuffer');
   }
-  // 分片合并（此简化版不支持，但保留逻辑）
   const chunks = item.chunks;
   const totalLength = item.size;
   const result = new Uint8Array(totalLength);
@@ -609,6 +700,55 @@ async function deleteFileContent(env, fileId, chunks) {
       const kv = env[FILE_KV_BINDINGS[kvIndex]];
       await kv.delete('f:' + fileId + ':chunk:' + i);
     }
+  }
+}
+
+async function addTask(env, type, name, status, progress) {
+  const tasks = await env.TASK_KV.get('tasks', 'json') || [];
+  const task = { id: crypto.randomUUID(), type, name, status, progress, createdAt: Date.now(), updatedAt: Date.now() };
+  tasks.push(task);
+  await env.TASK_KV.put('tasks', JSON.stringify(tasks));
+  return task.id;
+}
+
+async function updateTask(env, taskId, status, progress) {
+  const tasks = await env.TASK_KV.get('tasks', 'json') || [];
+  const idx = tasks.findIndex(t => t.id === taskId);
+  if (idx !== -1) {
+    tasks[idx].status = status;
+    tasks[idx].progress = progress;
+    tasks[idx].updatedAt = Date.now();
+    await env.TASK_KV.put('tasks', JSON.stringify(tasks));
+  }
+}
+
+async function handleOfflineDownload(env, url, savePath, taskId) {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error('下载失败: HTTP ' + response.status);
+    const contentLength = parseInt(response.headers.get('content-length') || '0');
+    if (contentLength > 25 * 1024 * 1024) throw new Error('文件过大');
+    const arrayBuffer = await response.arrayBuffer();
+    if (arrayBuffer.byteLength === 0) throw new Error('空文件');
+    let fileName = 'download_' + Date.now();
+    const disposition = response.headers.get('content-disposition');
+    if (disposition) {
+      const match = disposition.match(/filename="?([^"]+)"?/i);
+      if (match) fileName = match[1];
+    } else {
+      const urlObj = new URL(url);
+      const parts = urlObj.pathname.split('/');
+      if (parts.length > 0 && parts[parts.length - 1]) fileName = decodeURIComponent(parts[parts.length - 1]);
+    }
+    const fileId = 'f_' + Date.now() + '_' + Math.random().toString(36).substr(2,8);
+    const kvIndex = getKvIndex(fileId);
+    const kv = env[FILE_KV_BINDINGS[kvIndex]];
+    await kv.put('f:' + fileId, arrayBuffer);
+    const mimeType = response.headers.get('content-type') || 'application/octet-stream';
+    await addFileToTree(env, savePath, fileName, fileId, arrayBuffer.byteLength, mimeType, 1, 0);
+    await updateTask(env, taskId, 'completed', 100);
+  } catch (e) {
+    await updateTask(env, taskId, 'failed', 0);
   }
 }
 
@@ -650,6 +790,7 @@ export default {
           try {
             await storeSingleFile(env, fileId, base64);
             await addFileToTree(env, uploadPath, fileName, fileId, size, mimeType, 1, 0);
+            await addTask(env, 'upload', fileName, 'completed', 100);
             return jsonResponse({ success: true }, headers);
           } catch (e) { return jsonResponse({ error: e.message }, headers, 500); }
         }
@@ -683,6 +824,19 @@ export default {
           const shareId = crypto.randomUUID();
           await env.FILE_STRUCTURE_KV.put('share:' + shareId, fileId);
           return jsonResponse({ shareId }, headers);
+        }
+
+        if (apiPath === '/offline' && method === 'POST') {
+          const { url, savePath } = body;
+          if (!url || !savePath) return jsonResponse({ error: 'Missing url or savePath' }, headers, 400);
+          const taskId = await addTask(env, 'download', url, 'processing', 0);
+          ctx.waitUntil(handleOfflineDownload(env, url, savePath, taskId));
+          return jsonResponse({ success: true, taskId }, headers);
+        }
+
+        if (apiPath === '/tasks' && method === 'GET') {
+          const tasks = await env.TASK_KV.get('tasks', 'json') || [];
+          return jsonResponse({ tasks }, headers);
         }
 
         return jsonResponse({ error: 'Not found' }, headers, 404);
