@@ -1,1415 +1,1231 @@
-// worker.js - 修复版（GitHub仓库创建重试+下载直链跳转+分享免密码）
-const HTML = `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>云盘</title>
-<link rel="stylesheet" href="https://unpkg.com/@wangeditor/editor@latest/dist/css/style.css">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mui-player@latest/dist/mui-player.min.css">
-<script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.5/dist/jsmediatags.min.js"><\/script>
-<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"><\/script>
-<style>
-:root{--bg:#f5f7fa;--card:#fff;--text:#1a1a2e;--text-secondary:#6b7280;--accent:#4f6ef7;--accent-light:#eef1ff;--danger:#ef4444;--success:#10b981;--border:#e5e7eb;--shadow:0 2px 8px rgba(0,0,0,0.06);--radius:12px;--radius-sm:8px}
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;padding-bottom:80px;-webkit-tap-highlight-color:transparent}
-.header{position:sticky;top:0;background:var(--card);padding:0 16px;height:52px;display:flex;align-items:center;z-index:100;box-shadow:0 1px 3px rgba(0,0,0,0.05);border-bottom:1px solid var(--border)}
-.header h1{font-size:18px;font-weight:700;flex-shrink:0;margin-right:12px;color:var(--accent)}
-.refresh-btn{background:none;border:none;font-size:20px;cursor:pointer;padding:4px 8px;color:var(--text-secondary);flex-shrink:0}
-.breadcrumb{display:flex;align-items:center;flex-wrap:nowrap;overflow-x:auto;gap:4px;font-size:13px;-webkit-overflow-scrolling:touch;flex:1}
-.breadcrumb span{white-space:nowrap;padding:4px 6px;border-radius:4px;cursor:pointer;color:var(--text-secondary);flex-shrink:0}
-.breadcrumb span:hover,.breadcrumb span.current{color:var(--accent);background:var(--accent-light)}
-.breadcrumb .sep{color:#ccc;cursor:default;padding:0 2px}
-.file-list{padding:12px 16px;max-width:800px;margin:0 auto}
-.file-item{background:var(--card);border-radius:var(--radius);padding:12px 14px;margin-bottom:8px;display:flex;align-items:flex-start;gap:12px;box-shadow:var(--shadow);border:1px solid var(--border);cursor:pointer}
-.file-icon{width:40px;height:40px;border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;background:var(--accent-light);margin-top:4px}
-.file-icon.folder{background:#fef3c7}
-.file-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
-.file-name{font-size:14px;font-weight:600;word-break:break-all}
-.file-meta{font-size:11px;color:var(--text-secondary);display:flex;gap:8px;flex-wrap:wrap}
-.file-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
-.btn-text{padding:4px 10px;font-size:12px;border:1px solid var(--border);background:#f9fafb;border-radius:6px;cursor:pointer;color:var(--text-secondary)}
-.btn-text:hover{background:var(--accent-light);color:var(--accent)}
-.btn-text.danger:hover{background:#fee2e2;color:var(--danger)}
-.fab{position:fixed;bottom:24px;right:24px;width:56px;height:56px;border-radius:50%;background:var(--accent);color:#fff;border:none;font-size:28px;cursor:pointer;box-shadow:0 4px 16px rgba(79,110,247,0.4);z-index:200;display:flex;align-items:center;justify-content:center}
-.task-fab{position:fixed;bottom:24px;right:92px;width:48px;height:48px;border-radius:50%;background:#fff;color:var(--accent);border:1px solid var(--border);font-size:20px;cursor:pointer;box-shadow:var(--shadow);z-index:200;display:flex;align-items:center;justify-content:center}
-.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:300;display:flex;align-items:center;justify-content:center}
-.modal{background:var(--card);border-radius:16px;padding:20px;width:90%;max-width:420px;max-height:85vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.15)}
-.modal h2{font-size:17px;margin-bottom:16px;font-weight:700}
-.modal input[type="text"],.modal input[type="url"]{width:100%;padding:10px 14px;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-size:14px;outline:none;margin-bottom:12px;background:#fafbfc}
-.modal .btn-row{display:flex;gap:8px;margin-top:8px}
-.btn{padding:10px 16px;border-radius:var(--radius-sm);border:none;font-size:14px;font-weight:600;cursor:pointer;flex:1;text-align:center}
-.btn-primary{background:var(--accent);color:#fff}
-.btn-secondary{background:#f3f4f6;color:var(--text)}
-.btn-danger{background:var(--danger);color:#fff}
-.empty-state{text-align:center;padding:60px 20px;color:var(--text-secondary)}
-.empty-state .icon{font-size:48px;margin-bottom:12px}
-.toast{position:fixed;bottom:90px;left:50%;transform:translateX(-50%);background:#1f2937;color:#fff;padding:10px 20px;border-radius:8px;font-size:13px;z-index:500;pointer-events:none;max-width:90vw}
-.share-link-box{background:#f9fafb;border:1px solid var(--border);border-radius:8px;padding:10px;font-size:12px;word-break:break-all;margin:8px 0;user-select:all}
-.task-panel{position:fixed;top:0;right:0;bottom:0;width:320px;max-width:90vw;background:var(--card);z-index:250;box-shadow:-4px 0 20px rgba(0,0,0,0.1);transform:translateX(100%);transition:transform 0.3s ease;overflow-y:auto;padding:16px}
-.task-panel.open{transform:translateX(0)}
-.task-panel-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
-.task-item{padding:10px;border-radius:var(--radius-sm);background:#f9fafb;margin-bottom:8px;border:1px solid var(--border)}
-.task-name{font-size:13px;font-weight:600;word-break:break-all}
-.task-status{font-size:11px;color:var(--text-secondary);margin-top:4px}
-.progress-bar{height:4px;background:#e5e7eb;border-radius:2px;margin-top:6px;overflow:hidden}
-.progress-fill{height:100%;background:var(--accent);transition:width 0.3s ease}
-.progress-fill.completed{background:var(--success)}
-.progress-fill.failed{background:var(--danger)}
-.progress-fill.cancelled{background:#9ca3af}
-.task-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.3);z-index:240;opacity:0;pointer-events:none;transition:opacity 0.3s}
-.task-backdrop.open{opacity:1;pointer-events:auto}
-.detail-page{max-width:800px;margin:0 auto;padding:16px}
-.detail-card{background:var(--card);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow);border:1px solid var(--border)}
-.detail-header{display:flex;align-items:center;gap:12px;margin-bottom:16px}
-.detail-title{font-size:18px;font-weight:700;word-break:break-all}
-.detail-meta{font-size:13px;color:var(--text-secondary);margin-bottom:16px}
-.detail-actions{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
-.preview-container{margin-top:16px}
-.preview-container img{max-width:100%;border-radius:8px}
-.preview-container video,.preview-container audio{width:100%;border-radius:8px}
-.text-preview{white-space:pre-wrap;word-break:break-all;font-family:monospace;background:#f9fafb;padding:12px;border-radius:8px;max-height:400px;overflow-y:auto}
-.editor-wrapper{border:1px solid #ccc;z-index:100}
-.toolbar-container{border-bottom:1px solid #ccc}
-.editor-container{height:400px}
-.hidden{display:none!important}
-.music-player{display:flex;flex-direction:column;gap:12px;padding:12px;background:#f9fafb;border-radius:8px}
-.music-cover{width:120px;height:120px;border-radius:8px;object-fit:cover;background:#e5e7eb;margin:0 auto}
-.music-info{text-align:center}
-.music-title{font-size:16px;font-weight:700}
-.music-artist{font-size:13px;color:var(--text-secondary)}
-.music-album{font-size:12px;color:var(--text-secondary)}
-.lyrics-container{max-height:200px;overflow-y:auto;text-align:center;font-size:13px;line-height:1.8;padding:8px;background:#fff;border-radius:8px}
-.lyric-line{transition:all 0.3s;cursor:default}
-.lyric-line.active{color:var(--accent);font-weight:700;transform:scale(1.05)}
-.share-readonly-badge{display:inline-block;background:var(--accent-light);color:var(--accent);padding:2px 8px;border-radius:4px;font-size:12px;margin-left:8px}
-.task-actions{display:flex;gap:6px;margin-top:8px}
-.task-actions .btn-text{font-size:11px;padding:3px 8px}
-.upload-progress-overlay{position:fixed;bottom:0;left:0;right:0;background:var(--card);padding:12px 16px;box-shadow:0 -2px 10px rgba(0,0,0,0.08);z-index:180;transform:translateY(100%);transition:transform 0.3s ease}
-.upload-progress-overlay.show{transform:translateY(0)}
-.upload-progress-bar{height:6px;background:#e5e7eb;border-radius:3px;overflow:hidden;margin-top:8px}
-.upload-progress-fill{height:100%;background:var(--accent);transition:width 0.2s ease}
-.upload-progress-info{display:flex;justify-content:space-between;font-size:13px;color:var(--text-secondary)}.upload-speed{font-size:11px;color:var(--text-secondary);margin-top:4px;text-align:right}
-@media(max-width:480px){.file-item{padding:10px 12px}.btn-text{padding:3px 8px;font-size:11px}}
-</style>
-</head>
-<body>
-<div class="header"><h1>云盘</h1><button class="refresh-btn" id="refreshBtn">⟳</button><div class="breadcrumb" id="breadcrumb"></div><button class="refresh-btn" id="logoutBtn" title="退出登录" style="font-size:16px">🔓</button></div>
-<div id="mainView"><div class="file-list" id="fileList"></div><button class="fab" id="fabBtn">+</button><button class="task-fab" id="taskFabBtn" title="任务列表">📋</button></div>
-<div id="detailView" class="hidden"><div class="detail-page"><button class="btn btn-secondary" id="backBtn" style="margin-bottom:12px">返回</button><div class="detail-card" id="detailCard"></div></div></div>
-<div class="task-backdrop" id="taskBackdrop"></div><div class="task-panel" id="taskPanel"><div class="task-panel-header"><h3>任务列表</h3><button class="btn-text" id="closeTaskBtn">关闭</button></div><div id="taskList"></div></div>
-<div id="modalContainer"></div><div id="toastContainer"></div>
-<div class="upload-progress-overlay" id="uploadProgressOverlay"><div class="upload-progress-info"><span id="uploadProgressText">准备上传...</span><span id="uploadProgressPercent">0%</span></div><div class="upload-progress-bar"><div class="upload-progress-fill" id="uploadProgressFill" style="width:0%"></div></div><div class="upload-speed" id="uploadSpeed"></div><div class="btn-row" style="margin-top:10px"><button class="btn btn-danger" id="cancelUploadBtn" style="flex:0 0 auto;padding:6px 12px;font-size:12px">取消上传</button></div></div>
-<script src="https://unpkg.com/@wangeditor/editor@latest/dist/index.js"><\/script>
-<script src="https://cdn.jsdelivr.net/npm/mui-player@latest/dist/mui-player.min.js"><\/script>
-<script>
-var API_BASE="",currentPath="/",fileTree=null,tasks=[],currentView="list",currentDetailItem=null,currentAudio=null,lyricLines=[],isShareReadonly=false,activeUploads={};
-function showToast(msg,d){d=d||2000;var c=document.getElementById("toastContainer"),t=document.createElement("div");t.className="toast";t.textContent=msg;c.appendChild(t);setTimeout(function(){t.remove()},d)}
-function formatSize(b){if(b===0)return"0 B";if(!b)return"-";var k=1024,s=["B","KB","MB","GB","TB"],i=Math.floor(Math.log(b)/Math.log(k));return parseFloat((b/Math.pow(k,i)).toFixed(1))+" "+s[i]}function formatSpeed(bps){if(bps===0)return"0 B/s";if(!bps)return"";var k=1024,s=["B/s","KB/s","MB/s","GB/s"],i=Math.floor(Math.log(bps)/Math.log(k));return parseFloat((bps/Math.pow(k,i)).toFixed(1))+" "+s[i]}
-function formatTime(ts){if(!ts)return"-";var d=new Date(ts);return d.toLocaleString("zh-CN",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})}
-function getFileIcon(item){if(item.type==="folder")return"📁";var ext=(item.name.split(".").pop()||"").toLowerCase();if(["jpg","jpeg","png","gif","webp","svg","bmp","ico"].indexOf(ext)!==-1)return"🖼️";if(["mp4","webm","avi","mov","mkv","flv","a3v8"].indexOf(ext)!==-1)return"🎬";if(["mp3","wav","ogg","flac","m4a"].indexOf(ext)!==-1)return"🎵";if(["txt","md","json","js","ts","css","html","xml","yml","yaml","log"].indexOf(ext)!==-1)return"📄";if(["zip","rar","7z","tar","gz","bz2"].indexOf(ext)!==-1)return"📦";if(["pdf","doc","docx","xls","xlsx","ppt","pptx"].indexOf(ext)!==-1)return"📑";return"📎"}
-function getIconClass(item){if(item.type==="folder")return"folder";var ext=(item.name.split(".").pop()||"").toLowerCase();if(["jpg","jpeg","png","gif","webp","svg","bmp","ico"].indexOf(ext)!==-1)return"image";if(["mp4","webm","avi","mov","mkv","flv","a3v8"].indexOf(ext)!==-1)return"video";if(["txt","md","json","js","ts","css","html","xml"].indexOf(ext)!==-1)return"text";return""}
-function generateId(){return"f_"+Date.now()+"_"+Math.random().toString(36).substr(2,8)}
-function readChunkAsBase64(blob){return new Promise(function(resolve,reject){var reader=new FileReader();reader.onload=function(){resolve(reader.result.split(",")[1])};reader.onerror=reject;reader.readAsDataURL(blob)})}
-function api(path,options){options=options||{};var fetchOptions={method:options.method||"GET",headers:{"Content-Type":"application/json"}};var token=localStorage.getItem(AUTH_TOKEN_KEY);if(token){fetchOptions.headers["X-Auth-Token"]=token;if(options.body)options.body.token=token}if(options.body)fetchOptions.body=JSON.stringify(options.body);return fetch(API_BASE+path,fetchOptions).then(function(res){if(res.status===401){localStorage.removeItem(AUTH_TOKEN_KEY);showAuthModal();return Promise.reject(new Error("需要重新登录"))}var ct=res.headers.get("content-type")||"";if(!ct.includes("application/json")){return res.text().then(function(t){throw new Error("服务器错误 ("+res.status+"): "+(t.substring(0,200)||"未知错误"))})}return res.json().then(function(data){if(!res.ok&&data.error)throw new Error(data.error);return data})}).catch(function(err){if(err.name==="TypeError"&&err.message.includes("fetch"))throw new Error("网络请求失败");throw err})}
-function getCurrentFolderItems(){if(!fileTree||!fileTree.children)return[];var parts=currentPath.split("/").filter(Boolean),current=fileTree;for(var i=0;i<parts.length;i++){var found=null;if(current.children){for(var j=0;j<current.children.length;j++){if(current.children[j].name===parts[i]&&current.children[j].type==="folder"){found=current.children[j];break}}}if(!found)return[];current=found}return current.children||[]}
-function joinPath(base,name){var cleanBase=base.endsWith("/")?base:base+"/";if(name.startsWith("/"))return name;return cleanBase+name}
-function findItemInTree(tree,itemId){if(!tree)return null;if(tree.id===itemId)return tree;if(tree.children){for(var i=0;i<tree.children.length;i++){var found=findItemInTree(tree.children[i],itemId);if(found)return found}}return null}
-function removeItemFromTree(tree,itemId){if(!tree||!tree.children)return false;var idx=tree.children.findIndex(function(c){return c.id===itemId});if(idx!==-1){tree.children.splice(idx,1);return true}for(var i=0;i<tree.children.length;i++){if(removeItemFromTree(tree.children[i],itemId))return true}return false}
-function escapeHtml(text){var div=document.createElement("div");div.textContent=text;return div.innerHTML}
-function renderBreadcrumb(){var container=document.getElementById("breadcrumb");container.innerHTML="";var parts=currentPath.split("/").filter(Boolean);var rootSpan=document.createElement("span");rootSpan.textContent="根目录";rootSpan.className=currentPath==="/"?"current":"";rootSpan.onclick=function(){navigateTo("/")};container.appendChild(rootSpan);var accumulated="";for(var i=0;i<parts.length;i++){accumulated+="/"+parts[i];var sep=document.createElement("span");sep.className="sep";sep.textContent=">";container.appendChild(sep);var span=document.createElement("span");span.textContent=parts[i];span.className=accumulated===currentPath?"current":"";span.onclick=(function(path){return function(){navigateTo(path)}})(accumulated);container.appendChild(span)}}
-function renderFileList(){var container=document.getElementById("fileList");var items=getCurrentFolderItems();container.innerHTML="";if(items.length===0){container.innerHTML='<div class="empty-state"><div class="icon">📂</div><p>此文件夹为空</p></div>';return}var sortedItems=items.slice().sort(function(a,b){if(a.type!==b.type)return a.type==="folder"?-1:1;return a.name.localeCompare(b.name)});for(var i=0;i<sortedItems.length;i++){var item=sortedItems[i];var div=document.createElement("div");div.className="file-item";div.setAttribute("data-id",item.id);div.setAttribute("data-type",item.type);var iconClass=getIconClass(item);var actionsHtml="";if(item.type==="file"){actionsHtml+='<button class="btn-text" data-action="download">下载</button>';actionsHtml+='<button class="btn-text" data-action="share">分享</button>';var ext=(item.name.split(".").pop()||"").toLowerCase();if(["txt","md","json","js","ts","css","html","xml","log"].indexOf(ext)!==-1)actionsHtml+='<button class="btn-text" data-action="edit">编辑</button>';if(["zip"].indexOf(ext)!==-1)actionsHtml+='<button class="btn-text" data-action="extract">解压</button>'}actionsHtml+='<button class="btn-text" data-action="rename">重命名</button>';actionsHtml+='<button class="btn-text danger" data-action="delete">删除</button>';div.innerHTML='<div class="file-icon '+iconClass+'">'+getFileIcon(item)+'</div><div class="file-info"><div class="file-name">'+item.name+'</div><div class="file-meta"><span>'+(item.type==="folder"?"文件夹":formatSize(item.size))+'</span><span>'+formatTime(item.updatedAt||item.createdAt)+'</span>'+(item.type==="file"&&item.chunks>1?'<span>分片</span>':'')+'</div><div class="file-actions">'+actionsHtml+'</div></div>';container.appendChild(div)}}
-function navigateTo(path){if(!path.startsWith("/"))path="/"+path;currentPath=path;currentView="list";document.getElementById("mainView").classList.remove("hidden");document.getElementById("detailView").classList.add("hidden");renderBreadcrumb();renderFileList();if(history.state&&history.state.path===path)return;history.pushState({path:path},"",path==="/"?"/":path)}
-function loadTree(){return api("/api/tree").then(function(data){fileTree=data.tree||{name:"/",type:"folder",children:[]};renderFileList();renderBreadcrumb()}).catch(function(){fileTree={name:"/",type:"folder",children:[]};renderFileList();renderBreadcrumb()})}
-function saveTree(){return api("/api/tree",{method:"PUT",body:{tree:fileTree}})}
-function refreshFileList(){loadTree().then(function(){if(currentView==="list"){renderFileList();renderBreadcrumb()}})}
-document.addEventListener("click",function(e){var target=e.target;var btn=target.closest(".btn-text");if(btn){var itemDiv=btn.closest(".file-item");if(itemDiv){e.stopPropagation();var id=itemDiv.getAttribute("data-id");var type=itemDiv.getAttribute("data-type");var action=btn.getAttribute("data-action");if(action==="download")downloadFile(id);else if(action==="share")shareFile(id);else if(action==="rename")showRenameModal(id);else if(action==="delete")deleteItem(id);else if(action==="edit")editFile(id);else if(action==="extract")extractZip(id)}return}var itemDiv=target.closest(".file-item");if(itemDiv){var id=itemDiv.getAttribute("data-id");var type=itemDiv.getAttribute("data-type");if(type==="folder"){var folderItem=findItemInTree(fileTree,id);if(folderItem)navigateTo(joinPath(currentPath,folderItem.name))}else{var fileItem=findItemInTree(fileTree,id);if(fileItem)openDetail(fileItem)}}});
-function showModal(html){var container=document.getElementById("modalContainer");container.innerHTML='<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'+html+"</div></div>"}
-function closeModal(){document.getElementById("modalContainer").innerHTML=""}
-function showNewFolderModal(){showModal('<h2>新建文件夹</h2><input type="text" id="newFolderName" placeholder="文件夹名称"><div class="btn-row"><button class="btn btn-secondary" id="cancelBtn">取消</button><button class="btn btn-primary" id="confirmBtn">创建</button></div>');document.getElementById("cancelBtn").onclick=closeModal;document.getElementById("confirmBtn").onclick=createFolder}
-function createFolder(){var name=document.getElementById("newFolderName").value.trim();if(!name){showToast("请输入文件夹名称");return}var items=getCurrentFolderItems();for(var i=0;i<items.length;i++){if(items[i].name===name){showToast("同名文件已存在");return}}var newFolder={id:generateId(),name:name,type:"folder",children:[],createdAt:Date.now(),updatedAt:Date.now()};var target=fileTree;var parts=currentPath.split("/").filter(Boolean);for(var j=0;j<parts.length;j++){target=target.children.find(function(c){return c.name===parts[j]&&c.type==="folder"})}if(!target.children)target.children=[];target.children.push(newFolder);saveTree().then(function(){closeModal();renderFileList();showToast("文件夹已创建")})}
-function showNewFileModal(){showModal('<h2>新建文本文件</h2><input type="text" id="newFileName" placeholder="文件名（如 note.txt）"><div class="btn-row"><button class="btn btn-secondary" id="cancelBtn">取消</button><button class="btn btn-primary" id="confirmBtn">创建</button></div>');document.getElementById("cancelBtn").onclick=closeModal;document.getElementById("confirmBtn").onclick=createNewFile}
-function createNewFile(){var name=document.getElementById("newFileName").value.trim();if(!name){showToast("请输入文件名");return}var items=getCurrentFolderItems();for(var i=0;i<items.length;i++){if(items[i].name===name){showToast("同名文件已存在");return}}var fileId=generateId();var newFile={id:fileId,name:name,type:"file",size:0,mimeType:"text/plain",chunks:0,chunkSize:0,createdAt:Date.now(),updatedAt:Date.now()};var target=fileTree;var parts=currentPath.split("/").filter(Boolean);for(var j=0;j<parts.length;j++){target=target.children.find(function(c){return c.name===parts[j]&&c.type==="folder"})}if(!target.children)target.children=[];target.children.push(newFile);saveTree().then(function(){closeModal();renderFileList();showToast("文件已创建")})}
-function showRenameModal(itemId){var item=findItemInTree(fileTree,itemId);if(!item)return;showModal('<h2>重命名</h2><input type="text" id="renameInput" value="'+item.name+'"><div class="btn-row"><button class="btn btn-secondary" id="cancelBtn">取消</button><button class="btn btn-primary" id="confirmBtn">确定</button></div>');document.getElementById("cancelBtn").onclick=closeModal;document.getElementById("confirmBtn").onclick=function(){doRename(itemId)}}
-function doRename(itemId){var newName=document.getElementById("renameInput").value.trim();if(!newName){showToast("请输入新名称");return}var item=findItemInTree(fileTree,itemId);if(!item){showToast("未找到文件");return}item.name=newName;item.updatedAt=Date.now();saveTree().then(function(){closeModal();renderFileList();showToast("重命名成功");if(currentView==="detail"&&currentDetailItem&&currentDetailItem.id===itemId)renderDetail()})}
-function deleteItem(itemId){var item=findItemInTree(fileTree,itemId);if(!item)return;if(!confirm("确定要删除 "+item.name+" 吗？"))return;if(item.type==="file"&&item.chunks>0){api("/api/delete-content",{method:"POST",body:{fileId:item.id,chunks:item.chunks}}).catch(function(){})}removeItemFromTree(fileTree,itemId);saveTree().then(function(){renderFileList();showToast("已删除");if(currentView==="detail"&&currentDetailItem&&currentDetailItem.id===itemId)closeDetail()})}
-function showUploadModal(){showModal('<h2>上传文件</h2><input type="file" id="fileInput" multiple><div class="btn-row"><button class="btn btn-secondary" id="cancelBtn">取消</button><button class="btn btn-primary" id="uploadBtn">开始上传</button></div>');document.getElementById("cancelBtn").onclick=closeModal;document.getElementById("uploadBtn").onclick=startUploadFiles}
-function showFolderUploadModal(){showModal('<h2>上传文件夹</h2><input type="file" id="folderInput" webkitdirectory directory multiple><div style="font-size:12px;color:var(--text-secondary);margin-bottom:12px">提示：选择文件夹上传整个目录</div><div class="btn-row"><button class="btn btn-secondary" id="cancelBtn">取消</button><button class="btn btn-primary" id="uploadBtn">开始上传</button></div>');document.getElementById("cancelBtn").onclick=closeModal;document.getElementById("uploadBtn").onclick=startUploadFolder}
-function showUploadProgress(text,percent,speed){var overlay=document.getElementById("uploadProgressOverlay");overlay.classList.add("show");if(text)document.getElementById("uploadProgressText").textContent=text;if(percent!==undefined){document.getElementById("uploadProgressFill").style.width=percent+"%";document.getElementById("uploadProgressPercent").textContent=Math.round(percent)+"%"}if(speed!==undefined){document.getElementById("uploadSpeed").textContent=speed?formatSpeed(speed):""}}
-function hideUploadProgress(){document.getElementById("uploadProgressOverlay").classList.remove("show");document.getElementById("uploadProgressFill").style.width="0%";document.getElementById("uploadProgressPercent").textContent="0%";document.getElementById("uploadSpeed").textContent=""}
-function startUploadFiles(){var input=document.getElementById("fileInput");if(!input.files||input.files.length===0){showToast("请选择文件");return}var files=Array.from(input.files);var uploadPath=currentPath;closeModal();var fileList=[];for(var i=0;i<files.length;i++){var f=files[i];fileList.push({file:f,name:f.name,folderPath:uploadPath,size:f.size})}var totalSize=fileList.reduce(function(sum,e){return sum+e.size},0);var uploadedSize=0;var lastTime=Date.now(),lastUploaded=0;api("/api/task/create",{method:"POST",body:{type:"upload",name:"上传 "+fileList.length+" 个文件"}}).then(function(taskData){var taskId=taskData.taskId;activeUploads[taskId]={cancelled:false};showUploadProgress("准备上传 "+fileList.length+" 个文件...",0,0);document.getElementById("cancelUploadBtn").onclick=function(){activeUploads[taskId].cancelled=true};var queue=Promise.resolve();var completed=0;for(var i=0;i<fileList.length;i++){(function(entry,index){queue=queue.then(function(){if(activeUploads[taskId].cancelled)return Promise.reject(new Error("用户取消"));return uploadSingleFileOptimized(entry.file,entry.name,entry.folderPath,taskId,function(fileProgress){var currentUploaded=uploadedSize+entry.size*fileProgress;var overall=(currentUploaded/totalSize)*100;var now=Date.now();var elapsed=(now-lastTime)/1000;if(elapsed>0.5){var speed=(currentUploaded-lastUploaded)/elapsed;lastTime=now;lastUploaded=currentUploaded;showUploadProgress("上传中 "+(index+1)+"/"+fileList.length+" - "+entry.name,overall,speed)}else{showUploadProgress("上传中 "+(index+1)+"/"+fileList.length+" - "+entry.name,overall)}}).then(function(){uploadedSize+=entry.size;completed++;var overall=(uploadedSize/totalSize)*100;showUploadProgress("上传中 "+completed+"/"+fileList.length,overall,0);return api("/api/task/update",{method:"POST",body:{taskId:taskId,progress:Math.round(overall)}})})})})(fileList[i],i)}queue.then(function(){if(activeUploads[taskId].cancelled){api("/api/task/update",{method:"POST",body:{taskId:taskId,status:"cancelled",progress:Math.round((uploadedSize/totalSize)*100)}});showToast("上传已取消")}else{api("/api/task/update",{method:"POST",body:{taskId:taskId,progress:100,status:"completed"}});showToast("上传完成")}hideUploadProgress();delete activeUploads[taskId];loadTree();loadTasks()}).catch(function(e){if(e.message==="用户取消"){api("/api/task/update",{method:"POST",body:{taskId:taskId,status:"cancelled",progress:Math.round((uploadedSize/totalSize)*100)}});showToast("上传已取消")}else{api("/api/task/update",{method:"POST",body:{taskId:taskId,status:"failed",error:e.message}});showToast("上传失败: "+e.message)}hideUploadProgress();delete activeUploads[taskId]})})}
-function startUploadFolder(){var input=document.getElementById("folderInput");if(!input.files||input.files.length===0){showToast("请选择文件夹");return}var files=Array.from(input.files);var uploadPath=currentPath;closeModal();var fileList=[];for(var i=0;i<files.length;i++){var f=files[i];var relativePath=f.webkitRelativePath||f.name;var pathParts=relativePath.split("/");var fileName=pathParts.pop();var folderPath=pathParts.length>0?uploadPath+"/"+pathParts.join("/"):uploadPath;folderPath=folderPath.replace(/\\+/g,"/");fileList.push({file:f,name:fileName,folderPath:folderPath,size:f.size})}var totalSize=fileList.reduce(function(sum,e){return sum+e.size},0);var uploadedSize=0;api("/api/task/create",{method:"POST",body:{type:"upload",name:"上传文件夹 "+(files[0].webkitRelativePath?files[0].webkitRelativePath.split("/")[0]:"")}}).then(function(taskData){var taskId=taskData.taskId;activeUploads[taskId]={cancelled:false};showUploadProgress("准备上传文件夹...",0);document.getElementById("cancelUploadBtn").onclick=function(){activeUploads[taskId].cancelled=true};var queue=Promise.resolve();var completed=0;for(var i=0;i<fileList.length;i++){(function(entry,index){queue=queue.then(function(){if(activeUploads[taskId].cancelled)return Promise.reject(new Error("用户取消"));return uploadSingleFileOptimized(entry.file,entry.name,entry.folderPath,taskId,function(fileProgress){var currentUploaded=uploadedSize+entry.size*fileProgress;var overall=(currentUploaded/totalSize)*100;showUploadProgress("上传中 "+(index+1)+"/"+fileList.length+" - "+entry.name,overall)}).then(function(){uploadedSize+=entry.size;completed++;var overall=(uploadedSize/totalSize)*100;showUploadProgress("上传中 "+completed+"/"+fileList.length,overall);return api("/api/task/update",{method:"POST",body:{taskId:taskId,progress:Math.round(overall)}})})})})(fileList[i],i)}queue.then(function(){if(activeUploads[taskId].cancelled){api("/api/task/update",{method:"POST",body:{taskId:taskId,status:"cancelled",progress:Math.round((uploadedSize/totalSize)*100)}});showToast("上传已取消")}else{api("/api/task/update",{method:"POST",body:{taskId:taskId,progress:100,status:"completed"}});showToast("上传完成")}hideUploadProgress();delete activeUploads[taskId];loadTree();loadTasks()}).catch(function(e){if(e.message==="用户取消"){api("/api/task/update",{method:"POST",body:{taskId:taskId,status:"cancelled",progress:Math.round((uploadedSize/totalSize)*100)}});showToast("上传已取消")}else{api("/api/task/update",{method:"POST",body:{taskId:taskId,status:"failed",error:e.message}});showToast("上传失败: "+e.message)}hideUploadProgress();delete activeUploads[taskId]})})}
-function uploadSingleFileOptimized(file,fileName,uploadPath,taskId,onProgress){var fileId=generateId();var KV_MAX=20*1024*1024;var GITHUB_MAX=50*1024*1024;var CHUNK_SIZE=50*1024*1024;var ctrl=activeUploads[taskId];if(file.size<KV_MAX){onProgress(0.1);return readChunkAsBase64(file).then(function(base64){if(ctrl&&ctrl.cancelled)throw new Error("用户取消");onProgress(0.5);return api("/api/upload/single",{method:"POST",body:{fileId:fileId,fileName:fileName,uploadPath:uploadPath,base64:base64,mimeType:file.type||"application/octet-stream",size:file.size,storage:"kv"}})}).then(function(){onProgress(1)})}else if(file.size<=GITHUB_MAX){onProgress(0.1);return readChunkAsBase64(file).then(function(base64){if(ctrl&&ctrl.cancelled)throw new Error("用户取消");onProgress(0.5);return api("/api/upload/single",{method:"POST",body:{fileId:fileId,fileName:fileName,uploadPath:uploadPath,base64:base64,mimeType:file.type||"application/octet-stream",size:file.size,storage:"github"}})}).then(function(){onProgress(1)})}else{var chunks=Math.ceil(file.size/CHUNK_SIZE);onProgress(0.05);return api("/api/upload/init",{method:"POST",body:{fileId:fileId,fileName:fileName,uploadPath:uploadPath,chunks:chunks,chunkSize:CHUNK_SIZE,mimeType:file.type||"application/octet-stream",size:file.size}}).then(function(){var chunkQueue=Promise.resolve();for(var i=0;i<chunks;i++){(function(index){chunkQueue=chunkQueue.then(function(){if(ctrl&&ctrl.cancelled)throw new Error("用户取消");var start=index*CHUNK_SIZE;var end=Math.min(start+CHUNK_SIZE,file.size);var slice=file.slice(start,end);return readChunkAsBase64(slice).then(function(chunkBase64){if(ctrl&&ctrl.cancelled)throw new Error("用户取消");return api("/api/upload/chunk",{method:"POST",body:{fileId:fileId,chunkIndex:index,base64:chunkBase64}})}).then(function(){onProgress((index+1)/chunks)})})})(i)}return chunkQueue.then(function(){if(ctrl&&ctrl.cancelled)throw new Error("用户取消");return api("/api/upload/complete",{method:"POST",body:{fileId:fileId,chunks:chunks}})})})}}
-// 下载改为直接跳转直链 /d/{fileId}
-function downloadFile(fileId){window.open("/d/"+encodeURIComponent(fileId),"_blank")}
-function shareFile(fileId){api("/api/share",{method:"POST",body:{fileId:fileId}}).then(function(data){var link=location.origin+"/s/"+data.shareId;showModal('<h2>分享链接</h2><div class="share-link-box">'+link+'</div><button class="btn btn-primary" onclick="closeModal()">关闭</button>')})}
-function extractZip(fileId){var item=findItemInTree(fileTree,fileId);if(!item)return;if(!confirm("确定要解压 "+item.name+" 吗？将解压到当前目录"))return;showToast("正在读取压缩包...",3000);fetch("/d/"+encodeURIComponent(fileId)).then(function(res){return res.blob()}).then(function(blob){if(typeof JSZip==="undefined"){showToast("JSZip 库未加载");return}return JSZip.loadAsync(blob)}).then(function(zip){var entries=[];zip.forEach(function(relPath,entry){entries.push({path:relPath,dir:entry.dir,async:entry.async.bind(entry)})});showToast("发现 "+entries.filter(function(e){return!e.dir}).length+" 个文件，开始解压...",3000);return api("/api/task/create",{method:"POST",body:{type:"extract",name:"解压 "+item.name}}).then(function(taskData){var taskId=taskData.taskId;activeUploads[taskId]={cancelled:false};var fileEntries=entries.filter(function(e){return!e.dir});var total=fileEntries.length;var done=0;var queue=Promise.resolve();for(var i=0;i<fileEntries.length;i++){(function(entry){queue=queue.then(function(){if(activeUploads[taskId]&&activeUploads[taskId].cancelled)return Promise.reject(new Error("用户取消"));return entry.async("blob").then(function(blob){var pathParts=entry.path.split("/");var fileName=pathParts.pop();var folderPath=currentPath+(pathParts.length>0?"/"+pathParts.join("/"):"");folderPath=folderPath.replace(/\\+/g,"/");return uploadSingleFileOptimized(new File([blob],fileName),fileName,folderPath,taskId,function(){})}).then(function(){done++;return api("/api/task/update",{method:"POST",body:{taskId:taskId,progress:Math.round((done/total)*100)}})})})})(fileEntries[i])}return queue.then(function(){return api("/api/task/update",{method:"POST",body:{taskId:taskId,progress:100,status:"completed"}})}).then(function(){showToast("解压完成");loadTree();loadTasks()})})}).catch(function(e){showToast("解压失败: "+e.message)})}
-function showOfflineDownloadModal(){showModal('<h2>离线下载</h2><input type="url" id="offlineUrl" placeholder="https://example.com/file.zip"><div class="btn-row"><button class="btn btn-secondary" id="cancelBtn">取消</button><button class="btn btn-primary" id="offlineBtn">开始下载</button></div>');document.getElementById("cancelBtn").onclick=closeModal;document.getElementById("offlineBtn").onclick=startOfflineDownload}
-function startOfflineDownload(){var url=document.getElementById("offlineUrl").value.trim();if(!url){showToast("请输入下载链接");return}closeModal();api("/api/offline",{method:"POST",body:{url:url,savePath:currentPath}}).then(function(){showToast("离线下载任务已创建");loadTasks()}).catch(function(e){showToast("创建任务失败: "+e.message)})}
-function loadTasks(){return api("/api/tasks").then(function(data){tasks=data.tasks||[];renderTasks()})}
-function renderTasks(){var container=document.getElementById("taskList");if(tasks.length===0){container.innerHTML='<p style="text-align:center;color:var(--text-secondary);padding:20px">暂无任务</p>';return}container.innerHTML="";var sorted=tasks.slice().sort(function(a,b){return(b.createdAt||0)-(a.createdAt||0)});for(var i=0;i<sorted.length;i++){var task=sorted[i];var statusClass=task.status==="completed"?"completed":task.status==="failed"?"failed":task.status==="cancelled"?"cancelled":"";var statusText=task.status==="completed"?"完成":task.status==="failed"?"失败":task.status==="cancelled"?"已取消":task.status==="processing"?"处理中":"等待中";var actionsHtml="";if(task.status==="processing")actionsHtml+='<button class="btn-text" data-task-action="cancel" data-task-id="'+task.id+'">取消</button>';if(task.status==="completed"||task.status==="failed"||task.status==="cancelled")actionsHtml+='<button class="btn-text danger" data-task-action="delete" data-task-id="'+task.id+'">删除</button>';var div=document.createElement("div");div.className="task-item";div.innerHTML='<div class="task-name">'+(task.type==="upload"?"上传":task.type==="extract"?"解压":"下载")+" "+(task.name||task.url||"未知")+'</div><div class="task-status">'+statusText+(task.progress?" · "+Math.round(task.progress)+"%":"")+'</div><div class="progress-bar"><div class="progress-fill '+statusClass+'" style="width:'+(task.progress||0)+'%"></div></div>'+(actionsHtml?'<div class="task-actions">'+actionsHtml+"</div>":"");container.appendChild(div)}container.querySelectorAll("[data-task-action]").forEach(function(btn){btn.onclick=function(){var action=this.getAttribute("data-task-action");var taskId=this.getAttribute("data-task-id");if(action==="cancel")cancelTask(taskId);else if(action==="delete")deleteTask(taskId)}})}
-function openTaskPanel(){document.getElementById("taskPanel").classList.add("open");document.getElementById("taskBackdrop").classList.add("open");loadTasks()}
-function closeTaskPanel(){document.getElementById("taskPanel").classList.remove("open");document.getElementById("taskBackdrop").classList.remove("open")}
-function cancelTask(taskId){if(activeUploads[taskId])activeUploads[taskId].cancelled=true;api("/api/task/update",{method:"POST",body:{taskId:taskId,status:"cancelled"}}).then(function(){showToast("任务已取消");loadTasks()}).catch(function(e){showToast("取消失败: "+e.message)})}
-function deleteTask(taskId){if(!confirm("确定要删除此任务记录吗？"))return;api("/api/task/delete",{method:"POST",body:{taskId:taskId}}).then(function(){showToast("任务已删除");loadTasks()}).catch(function(e){showToast("删除失败: "+e.message)})}
-function openDetail(item,updateUrl){if(updateUrl!==false){history.pushState({fileId:item.id},"","/detail?file="+item.id)}currentDetailItem=item;currentView="detail";document.getElementById("mainView").classList.add("hidden");document.getElementById("detailView").classList.remove("hidden");renderDetail()}
-function closeDetail(){history.pushState({},"",currentPath==="/"?"/":currentPath);currentView="list";currentDetailItem=null;document.getElementById("detailView").classList.add("hidden");document.getElementById("mainView").classList.remove("hidden");refreshFileList()}
-function renderDetail(){var item=currentDetailItem;var card=document.getElementById("detailCard");var actionsHtml="";if(isShareReadonly){actionsHtml='<button class="btn btn-primary" id="downloadDetail">下载</button>';var ext=(item.name.split(".").pop()||"").toLowerCase();if(["zip"].indexOf(ext)!==-1)actionsHtml+='<button class="btn btn-secondary" id="extractDetail">解压到当前目录</button>'}else{actionsHtml='<button class="btn btn-primary" id="downloadDetail">下载</button><button class="btn btn-secondary" id="shareDetail">分享</button><button class="btn btn-secondary" id="directLinkDetail">获取直链</button><button class="btn btn-secondary" id="renameDetail">重命名</button><button class="btn btn-danger" id="deleteDetail">删除</button>';var ext=(item.name.split(".").pop()||"").toLowerCase();if(["txt","md","json","js","ts","css","html","xml","log"].indexOf(ext)!==-1)actionsHtml+='<button class="btn btn-secondary" id="editDetail">编辑</button>';if(["zip"].indexOf(ext)!==-1)actionsHtml+='<button class="btn btn-secondary" id="extractDetail">解压到当前目录</button>'}var readonlyBadge=isShareReadonly?'<span class="share-readonly-badge">分享预览</span>':"";card.innerHTML='<div class="detail-header"><div class="file-icon '+getIconClass(item)+'" style="width:48px;height:48px;font-size:24px">'+getFileIcon(item)+'</div><div class="detail-title">'+item.name+readonlyBadge+'</div></div><div class="detail-meta"><span>大小: '+formatSize(item.size)+'</span> · <span>修改时间: '+formatTime(item.updatedAt||item.createdAt)+'</span> · <span>类型: '+(item.mimeType||"未知")+'</span></div><div class="detail-actions">'+actionsHtml+'</div><div class="preview-container" id="previewContainer"></div>';document.getElementById("downloadDetail").onclick=function(){downloadFile(item.id)};if(document.getElementById("shareDetail"))document.getElementById("shareDetail").onclick=function(){shareFile(item.id)};if(document.getElementById("directLinkDetail"))document.getElementById("directLinkDetail").onclick=function(){var link=location.origin+"/d/"+item.id;showModal('<h2>直链</h2><div class="share-link-box">'+link+'</div><p style="font-size:12px;color:var(--text-secondary);margin-top:8px">通过服务器代理访问，支持大文件下载</p><button class="btn btn-primary" onclick="closeModal()">关闭</button>')};if(document.getElementById("renameDetail"))document.getElementById("renameDetail").onclick=function(){showRenameModal(item.id)};if(document.getElementById("deleteDetail"))document.getElementById("deleteDetail").onclick=function(){deleteItem(item.id)};if(document.getElementById("editDetail"))document.getElementById("editDetail").onclick=editDetailText;if(document.getElementById("extractDetail"))document.getElementById("extractDetail").onclick=function(){extractZip(item.id)};loadPreview(item)}
-function loadPreview(item){var container=document.getElementById("previewContainer");var ext=(item.name.split(".").pop()||"").toLowerCase();var textExts=["txt","md","json","js","ts","css","html","xml","log"];var imageExts=["jpg","jpeg","png","gif","webp","svg","bmp","ico"];var videoExts=["mp4","webm","ogg","mov","a3v8"];var audioExts=["mp3","wav","ogg","flac","m4a"];var zipExts=["zip"];if(imageExts.indexOf(ext)!==-1)container.innerHTML='<img src="/d/'+item.id+'" alt="预览">';else if(videoExts.indexOf(ext)!==-1){container.innerHTML='<div id="video-player"></div>';if(typeof MuiPlayer!=="undefined")new MuiPlayer({container:"#video-player",title:item.name,src:"/d/"+item.id,autoplay:false,width:"100%",height:"auto"});else container.innerHTML='<video controls src="/d/'+item.id+'" style="width:100%"></video>'}else if(audioExts.indexOf(ext)!==-1){container.innerHTML='<div class="music-player"><img class="music-cover" id="musicCover" style="display:none"><div class="music-info"><div class="music-title" id="musicTitle">'+item.name+'</div><div class="music-artist" id="musicArtist"></div><div class="music-album" id="musicAlbum"></div></div><audio controls src="/d/'+item.id+'" id="musicAudio"></audio><div class="lyrics-container" id="lyricsContainer" style="display:none"></div></div>';var audioEl=document.getElementById("musicAudio");currentAudio=audioEl;audioEl.addEventListener("timeupdate",function(){highlightLyric(audioEl.currentTime)});if(typeof jsmediatags!=="undefined"){fetch("/d/"+item.id).then(res=>res.blob()).then(blob=>{jsmediatags.read(blob,{onSuccess:function(tag){var tags=tag.tags;if(tags.picture){var picture=tags.picture;var base64String="";for(var i=0;i<picture.data.length;i++)base64String+=String.fromCharCode(picture.data[i]);var coverUrl="data:"+picture.format+";base64,"+btoa(base64String);document.getElementById("musicCover").src=coverUrl;document.getElementById("musicCover").style.display="block"}if(tags.title)document.getElementById("musicTitle").textContent=tags.title;if(tags.artist)document.getElementById("musicArtist").textContent=tags.artist;if(tags.album)document.getElementById("musicAlbum").textContent=tags.album;if(tags.lyrics){var lyrics=tags.lyrics.lyrics||tags.lyrics;displayLyrics(lyrics)}else loadLrcFromFile(item)},onError:function(){loadLrcFromFile(item)}})})}else loadLrcFromFile(item)}else if(textExts.indexOf(ext)!==-1){api("/api/file-content?path="+encodeURIComponent(joinPath(currentPath,item.name))).then(function(data){if(data.base64)container.innerHTML='<div class="text-preview">'+escapeHtml(atob(data.base64))+'</div>'}).catch(function(){container.innerHTML="<p>无法加载文本预览</p>"})}else if(zipExts.indexOf(ext)!==-1)container.innerHTML='<p>ZIP 压缩包，可点击下方"解压到当前目录"按钮在线解压。</p>';else container.innerHTML="<p>该文件类型不支持预览，请下载后查看。</p>"}
-function loadLrcFromFile(item){var lrcName=item.name.replace(/\.[^.]+$/,"")+".lrc";var items=getCurrentFolderItems();var lrcItem=null;for(var i=0;i<items.length;i++){if(items[i].name===lrcName){lrcItem=items[i];break}}if(lrcItem)api("/api/file-content?path="+encodeURIComponent(joinPath(currentPath,lrcItem.name))).then(function(data){if(data.base64)displayLyrics(atob(data.base64));else document.getElementById("lyricsContainer").style.display="none"});else document.getElementById("lyricsContainer").style.display="none"}
-function displayLyrics(lyrics){var container=document.getElementById("lyricsContainer");container.style.display="block";container.innerHTML="";var hasTimestamps=/\[\d{2}:\d{2}(\.\d+)?\]/.test(lyrics);if(hasTimestamps){lyricLines=[];var lines=lyrics.split("");for(var i=0;i<lines.length;i++){var line=lines[i].trim();var timeMatch=line.match(/\[(\d{2}):(\d{2})(\.\d+)?\]/);if(timeMatch){var minutes=parseInt(timeMatch[1]);var seconds=parseFloat(timeMatch[2]+(timeMatch[3]||""));var text=line.replace(/\[.*?\]/g,"").trim();if(text)lyricLines.push({time:minutes*60+seconds,text:text})}}lyricLines.sort(function(a,b){return a.time-b.time});for(var j=0;j<lyricLines.length;j++){var div=document.createElement("div");div.className="lyric-line";div.setAttribute("data-time",lyricLines[j].time);div.textContent=lyricLines[j].text;container.appendChild(div)}}else{container.textContent=lyrics;container.style.whiteSpace="pre-wrap"}}
-function highlightLyric(currentTime){if(!lyricLines||lyricLines.length===0)return;var lines=document.querySelectorAll(".lyric-line");var activeIndex=-1;for(var i=0;i<lyricLines.length;i++){if(currentTime>=lyricLines[i].time)activeIndex=i;else break}for(var j=0;j<lines.length;j++){if(j===activeIndex){lines[j].classList.add("active");lines[j].scrollIntoView({block:"center",behavior:"smooth"})}else lines[j].classList.remove("active")}}
-function editFile(fileId){var item=findItemInTree(fileTree,fileId);if(item){openDetail(item);editDetailText()}}
-function editDetailText(){var item=currentDetailItem;if(!item)return;showModal('<h2>编辑文本</h2><div id="editor-wrapper"><div id="toolbar-container"></div><div id="editor-container"></div></div><div class="btn-row"><button class="btn btn-secondary" id="cancelEdit">取消</button><button class="btn btn-primary" id="saveEdit">保存</button></div>');document.getElementById("cancelEdit").onclick=closeModal;document.getElementById("saveEdit").onclick=saveDetailText;if(typeof window.wangEditor!=="undefined"){var createEditor=window.wangEditor.createEditor;var createToolbar=window.wangEditor.createToolbar;var editorConfig={placeholder:"请输入内容..."};var editor=createEditor({selector:"#editor-container",html:"<p><br></p>",config:editorConfig,mode:"default"});createToolbar({editor:editor,selector:"#toolbar-container",config:{},mode:"default"});api("/api/file-content?path="+encodeURIComponent(joinPath(currentPath,item.name))).then(function(data){if(data.base64)editor.setHtml(atob(data.base64))});window._editor=editor}else showToast("编辑器未加载")}
-function saveDetailText(){var editor=window._editor;if(!editor)return;var html=editor.getHtml();var base64=btoa(unescape(encodeURIComponent(html)));var item=currentDetailItem;if(item)api("/api/save-content",{method:"POST",body:{path:joinPath(currentPath,item.name),base64:base64,fileId:item.id}}).then(function(){closeModal();loadTree();showToast("保存成功");renderDetail()}).catch(function(e){showToast("保存失败: "+e.message)})}
-var AUTH_TOKEN_KEY="cloud_auth_token";
-function checkAuth(){var token=localStorage.getItem(AUTH_TOKEN_KEY);if(!token){showAuthModal();return false}api("/api/auth/verify",{method:"POST",body:{token:token}}).then(function(data){if(!data.valid){localStorage.removeItem(AUTH_TOKEN_KEY);showAuthModal()}}).catch(function(){showAuthModal()});return true}
-function onAuthSuccess(){document.getElementById("modalContainer").innerHTML="";initApp()}
-function showAuthModal(){var container=document.getElementById("modalContainer");container.innerHTML='<div class="modal-overlay" style="z-index:1000"><div class="modal"><h2>🔒 需要密码</h2><p style="color:var(--text-secondary);margin-bottom:12px;font-size:13px">请输入访问密码以继续使用云盘</p><input type="password" id="authPassword" placeholder="密码" style="margin-bottom:12px"><div id="authError" style="color:var(--danger);font-size:12px;margin-bottom:8px;display:none">密码错误</div><div class="btn-row"><button class="btn btn-primary" id="authSubmit">进入</button></div></div></div>';document.getElementById("authSubmit").onclick=doAuth;document.getElementById("authPassword").addEventListener("keypress",function(e){if(e.key==="Enter")doAuth()});document.getElementById("authPassword").focus()}
-function doAuth(){var password=document.getElementById("authPassword").value.trim();if(!password)return;api("/api/auth",{method:"POST",body:{password:password}}).then(function(data){if(data.token){localStorage.setItem(AUTH_TOKEN_KEY,data.token);onAuthSuccess()}else{document.getElementById("authError").style.display="block";document.getElementById("authPassword").value="";document.getElementById("authPassword").focus()}}).catch(function(e){document.getElementById("authError").textContent="验证失败: "+e.message;document.getElementById("authError").style.display="block"})}
-function logout(){localStorage.removeItem(AUTH_TOKEN_KEY);window.location.reload()}
-function initApp(){loadTree();loadTasks();document.getElementById("refreshBtn").onclick=refreshFileList;document.getElementById("logoutBtn").onclick=logout;document.getElementById("backBtn").onclick=closeDetail;document.getElementById("fabBtn").onclick=function(){showModal('<h2>添加</h2><div style="display:flex;flex-direction:column;gap:8px"><button class="btn btn-primary" id="menuUpload">上传文件</button><button class="btn btn-primary" id="menuUploadFolder">上传文件夹</button><button class="btn btn-secondary" id="menuNewFolder">新建文件夹</button><button class="btn btn-secondary" id="menuNewFile">新建文本文件</button><button class="btn btn-secondary" id="menuOffline">离线下载</button></div>');document.getElementById("menuUpload").onclick=function(){closeModal();showUploadModal()};document.getElementById("menuUploadFolder").onclick=function(){closeModal();showFolderUploadModal()};document.getElementById("menuNewFolder").onclick=function(){closeModal();showNewFolderModal()};document.getElementById("menuNewFile").onclick=function(){closeModal();showNewFileModal()};document.getElementById("menuOffline").onclick=function(){closeModal();showOfflineDownloadModal()}};document.getElementById("taskFabBtn").onclick=openTaskPanel;document.getElementById("closeTaskBtn").onclick=closeTaskPanel;document.getElementById("taskBackdrop").onclick=closeTaskPanel;window.addEventListener("popstate",function(e){if(e.state&&e.state.fileId){var item=findItemInTree(fileTree,e.state.fileId);if(item)openDetail(item,false);else closeDetail()}else{currentView="list";document.getElementById("detailView").classList.add("hidden");document.getElementById("mainView").classList.remove("hidden");refreshFileList()}});var params=new URLSearchParams(window.location.search);var fileId=params.get("file");if(fileId){loadTree().then(function(){var item=findItemInTree(fileTree,fileId);if(item&&item.type!=="folder")openDetail(item,false)})}setInterval(function(){var oldTasks=JSON.stringify(tasks);loadTasks().then(function(){var newTasks=JSON.stringify(tasks);if(oldTasks!==newTasks){var hasCompleted=tasks.some(function(t){return t.status==="completed"||t.status==="failed"||t.status==="cancelled"});if(hasCompleted)refreshFileList()}})},5000)}
-function tryInit(){if(checkAuth())initApp()}
-tryInit();
-<\/script>
-</body>
-</html>`;
+/**
+ * NetDisk 直链网盘 —— Cloudflare Worker
+ * =====================================================================
+ * 存储策略：
+ *   - 文件 < 10MB                  -> 保存到 KV 二进制 (FILE_KV_1..5 轮询)
+ *   - 文件 10MB ~ 80MB             -> 保存到 GitHub（以 ssid 建同名仓库）
+ *   - 文件 > 80MB                  -> GitHub 仓库，按 50MB/片 分片上传
+ *
+ * 依赖的环境变量 / 绑定：
+ *   CLOUD_PASSWORD                分享页/下载直链之外的访问密码（留空则开放）
+ *   GITHUB_TOKEN                  创建仓库与内容上传用的 GitHub PAT（需 repo 权限）
+ *   FILE_KV_1..5 / FILE_STRUCTURE_KV / TASK_KV   见 wrangler.jsonc
+ *
+ * 路由：
+ *   /           管理页（密码保护 SPA）
+ *   /s/{shareId}  分享页（仅下载+预览，无需密码）
+ *   /d/{ssid}     直链下载（无需密码，attachment）
+ *   /dl/{ssid}    直链下载别名
+ *   /p/{ssid}     内联预览（无需密码，inline）
+ *   /api/*        管理 API（需密码）
+ * =====================================================================
+ */
 
-// 分享页面专用 HTML 模板（不需要密码验证）
-const SHARE_HTML = `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>文件分享</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mui-player@latest/dist/mui-player.min.css">
-<style>
-:root{--bg:#f5f7fa;--card:#fff;--text:#1a1a2e;--text-secondary:#6b7280;--accent:#4f6ef7;--accent-light:#eef1ff;--danger:#ef4444;--success:#10b981;--border:#e5e7eb;--shadow:0 2px 8px rgba(0,0,0,0.06);--radius:12px;--radius-sm:8px}
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;padding:16px}
-.share-container{max-width:800px;margin:0 auto}
-.share-header{text-align:center;padding:20px 0}
-.share-header h1{font-size:24px;font-weight:700;color:var(--accent)}
-.share-header p{color:var(--text-secondary);margin-top:8px}
-.share-card{background:var(--card);border-radius:var(--radius);padding:24px;box-shadow:var(--shadow);border:1px solid var(--border);margin-top:16px}
-.detail-header{display:flex;align-items:center;gap:12px;margin-bottom:16px}
-.file-icon{width:48px;height:48px;border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:center;font-size:24px;flex-shrink:0;background:var(--accent-light)}
-.file-icon.folder{background:#fef3c7}
-.file-icon.image{background:#e0f2fe}
-.file-icon.video{background:#fce7f3}
-.file-icon.audio{background:#dcfce7}
-.file-icon.text{background:#f3f4f6}
-.detail-title{font-size:18px;font-weight:700;word-break:break-all}
-.detail-meta{font-size:13px;color:var(--text-secondary);margin-bottom:16px}
-.detail-actions{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}
-.btn{padding:10px 16px;border-radius:var(--radius-sm);border:none;font-size:14px;font-weight:600;cursor:pointer;text-align:center;text-decoration:none;display:inline-block}
-.btn-primary{background:var(--accent);color:#fff}
-.btn-secondary{background:#f3f4f6;color:var(--text)}
-.preview-container{margin-top:16px}
-.preview-container img{max-width:100%;border-radius:8px}
-.preview-container video,.preview-container audio{width:100%;border-radius:8px}
-.text-preview{white-space:pre-wrap;word-break:break-all;font-family:monospace;background:#f9fafb;padding:12px;border-radius:8px;max-height:400px;overflow-y:auto}
-.music-player{display:flex;flex-direction:column;gap:12px;padding:12px;background:#f9fafb;border-radius:8px}
-.music-cover{width:120px;height:120px;border-radius:8px;object-fit:cover;background:#e5e7eb;margin:0 auto}
-.music-info{text-align:center}
-.music-title{font-size:16px;font-weight:700}
-.music-artist{font-size:13px;color:var(--text-secondary)}
-.music-album{font-size:12px;color:var(--text-secondary)}
-.lyrics-container{max-height:200px;overflow-y:auto;text-align:center;font-size:13px;line-height:1.8;padding:8px;background:#fff;border-radius:8px}
-.lyric-line{transition:all 0.3s;cursor:default}
-.lyric-line.active{color:var(--accent);font-weight:700;transform:scale(1.05)}
-.footer{text-align:center;padding:20px;color:var(--text-secondary);font-size:13px}
-.footer a{color:var(--accent);text-decoration:none}
-.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#1f2937;color:#fff;padding:10px 20px;border-radius:8px;font-size:13px;z-index:500;pointer-events:none}
-@media(max-width:480px){.share-card{padding:16px}}
-</style>
-</head>
-<body>
-<div class="share-container">
-<div class="share-header"><h1>📦 文件分享</h1><p>有人分享了一个文件给你</p></div>
-<div class="share-card">
-<div class="detail-header"><div class="file-icon" id="fileIcon">📎</div><div class="detail-title" id="fileName">加载中...</div></div>
-<div class="detail-meta" id="fileMeta">加载中...</div>
-<div class="detail-actions"><a class="btn btn-primary" id="downloadBtn" href="#">下载文件</a><button class="btn btn-secondary" id="previewBtn" style="display:none">预览</button></div>
-<div class="preview-container" id="previewContainer"></div>
-</div>
-<div class="footer"><p></p></div>
-</div>
-<script src="https://cdn.jsdelivr.net/npm/mui-player@latest/dist/mui-player.min.js"><\/script>
-<script>
-var API_BASE="",currentItem=null,currentAudio=null,lyricLines=[];
-function showToast(msg,d){d=d||2000;var t=document.createElement("div");t.className="toast";t.textContent=msg;document.body.appendChild(t);setTimeout(function(){t.remove()},d)}
-function formatSize(b){if(b===0)return"0 B";if(!b)return"-";var k=1024,s=["B","KB","MB","GB","TB"],i=Math.floor(Math.log(b)/Math.log(k));return parseFloat((b/Math.pow(k,i)).toFixed(1))+" "+s[i]}function formatSpeed(bps){if(bps===0)return"0 B/s";if(!bps)return"";var k=1024,s=["B/s","KB/s","MB/s","GB/s"],i=Math.floor(Math.log(bps)/Math.log(k));return parseFloat((bps/Math.pow(k,i)).toFixed(1))+" "+s[i]}
-function formatTime(ts){if(!ts)return"-";var d=new Date(ts);return d.toLocaleString("zh-CN",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})}
-function getFileIcon(name){var ext=(name.split(".").pop()||"").toLowerCase();if(["jpg","jpeg","png","gif","webp","svg","bmp","ico"].indexOf(ext)!==-1)return"🖼️";if(["mp4","webm","avi","mov","mkv","flv","a3v8"].indexOf(ext)!==-1)return"🎬";if(["mp3","wav","ogg","flac","m4a"].indexOf(ext)!==-1)return"🎵";if(["txt","md","json","js","ts","css","html","xml","yml","yaml","log"].indexOf(ext)!==-1)return"📄";if(["zip","rar","7z","tar","gz","bz2"].indexOf(ext)!==-1)return"📦";if(["pdf","doc","docx","xls","xlsx","ppt","pptx"].indexOf(ext)!==-1)return"📑";return"📎"}
-function getIconClass(name){var ext=(name.split(".").pop()||"").toLowerCase();if(["jpg","jpeg","png","gif","webp","svg","bmp","ico"].indexOf(ext)!==-1)return"image";if(["mp4","webm","avi","mov","mkv","flv","a3v8"].indexOf(ext)!==-1)return"video";if(["mp3","wav","ogg","flac","m4a"].indexOf(ext)!==-1)return"audio";if(["txt","md","json","js","ts","css","html","xml"].indexOf(ext)!==-1)return"text";return""}
-function loadShareData(){var path=window.location.pathname;var shareId=path.replace("/s/","");fetch(API_BASE+"/api/share-info?shareId="+encodeURIComponent(shareId)).then(function(res){return res.json()}).then(function(data){if(data.error){showToast(data.error);return}currentItem=data.item;renderSharePage()}).catch(function(e){showToast("加载失败: "+e.message)})}
-function renderSharePage(){var item=currentItem;if(!item)return;document.getElementById("fileName").textContent=item.name;document.getElementById("fileIcon").textContent=getFileIcon(item.name);document.getElementById("fileIcon").className="file-icon "+getIconClass(item.name);document.getElementById("fileMeta").innerHTML='<span>大小: '+formatSize(item.size)+'</span> · <span>类型: '+(item.mimeType||"未知")+'</span>';var downloadBtn=document.getElementById("downloadBtn");downloadBtn.href="/d/"+encodeURIComponent(item.id);downloadBtn.setAttribute("download",item.name);var ext=(item.name.split(".").pop()||"").toLowerCase();var previewExts=["jpg","jpeg","png","gif","webp","svg","bmp","ico","mp4","webm","ogg","mov","a3v8","mp3","wav","ogg","flac","m4a","txt","md","json","js","ts","css","html","xml","log"];if(previewExts.indexOf(ext)!==-1){document.getElementById("previewBtn").style.display="inline-block";document.getElementById("previewBtn").onclick=function(){loadPreview(item)}}}
-function loadPreview(item){var container=document.getElementById("previewContainer");var ext=(item.name.split(".").pop()||"").toLowerCase();var textExts=["txt","md","json","js","ts","css","html","xml","log"];var imageExts=["jpg","jpeg","png","gif","webp","svg","bmp","ico"];var videoExts=["mp4","webm","ogg","mov","a3v8"];var audioExts=["mp3","wav","ogg","flac","m4a"];if(imageExts.indexOf(ext)!==-1)container.innerHTML='<img src="/d/'+item.id+'" alt="预览" style="max-width:100%;border-radius:8px">';else if(videoExts.indexOf(ext)!==-1)container.innerHTML='<video controls src="/d/'+item.id+'" style="width:100%;border-radius:8px"></video>';else if(audioExts.indexOf(ext)!==-1)container.innerHTML='<div class="music-player"><div class="music-info"><div class="music-title">'+item.name+'</div></div><audio controls src="/d/'+item.id+'" style="width:100%"></audio></div>';else if(textExts.indexOf(ext)!==-1)fetch("/api/file-content?path="+encodeURIComponent(item.name)).then(function(res){return res.json()}).then(function(data){if(data.base64)container.innerHTML='<div class="text-preview">'+atob(data.base64)+'</div>'}).catch(function(){container.innerHTML="<p>无法加载文本预览</p>"});else container.innerHTML="<p>该文件类型不支持预览，请下载后查看。</p>"}
-loadShareData();
-<\/script>
-</body>
-</html>`;
+const OWNER = 'ikecode26';
+const PART_SIZE = 50 * 1024 * 1024;          // GitHub 分片大小 50MB
+const KV_THRESHOLD = 10 * 1024 * 1024;       // 小于此值存 KV
+const KV_BINDINGS = ['FILE_KV_1', 'FILE_KV_2', 'FILE_KV_3', 'FILE_KV_4', 'FILE_KV_5'];
 
-
-// ==================== 后端逻辑 ====================
-const FILE_KV_BINDINGS = ['FILE_KV_1','FILE_KV_2','FILE_KV_3','FILE_KV_4','FILE_KV_5'];
-const KV_COUNT = FILE_KV_BINDINGS.length;
-
-// GitHub 存储配置
-const GITHUB_CONFIG = {
-  apiBase: 'https://api.github.com',
-  rawBase: 'https://raw.githubusercontent.com',
-  proxyBase: 'https://v6.gh-proxy.com/github.com',
-  useProxy: true,
-  maxRepoSize: 900 * 1024 * 1024,
-  chunkSize: 50 * 1024 * 1024,
+const MIME = {
+  '.html': 'text/html;charset=utf-8', '.htm': 'text/html;charset=utf-8', '.css': 'text/css',
+  '.js': 'text/javascript', '.mjs': 'text/javascript', '.json': 'application/json',
+  '.txt': 'text/plain;charset=utf-8', '.md': 'text/markdown;charset=utf-8',
+  '.log': 'text/plain;charset=utf-8', '.csv': 'text/csv;charset=utf-8',
+  '.xml': 'application/xml', '.svg': 'image/svg+xml',
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
+  '.webp': 'image/webp', '.ico': 'image/x-icon', '.bmp': 'image/bmp',
+  '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.m4a': 'audio/mp4',
+  '.flac': 'audio/flac', '.aac': 'audio/aac', '.mid': 'audio/midi',
+  '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime', '.mkv': 'video/x-matroska',
+  '.avi': 'video/x-msvideo', '.flv': 'video/x-flv', '.m4v': 'video/x-m4v',
+  '.zip': 'application/zip', '.rar': 'application/x-rar-compressed', '.7z': 'application/x-7z-compressed',
+  '.tar': 'application/x-tar', '.gz': 'application/gzip', '.bz2': 'application/x-bzip2',
+  '.pdf': 'application/pdf', '.doc': 'application/msword', '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls': 'application/vnd.ms-excel', '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.ppt': 'application/vnd.ms-powerpoint', '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.apk': 'application/vnd.android.package-archive', '.torrent': 'application/x-bittorrent',
+  '.epub': 'application/epub+zip', '.wasm': 'application/wasm',
 };
 
-function getGithubToken(env) { return env.GITHUB_TOKEN || ''; }
-
-function getGithubHeaders(env, extraHeaders) {
-  extraHeaders = extraHeaders || {};
-  return {
-    'Authorization': 'Bearer ' + (env.GITHUB_TOKEN || ''),
-    'Accept': 'application/vnd.github+json',
-    'X-GitHub-Api-Version': '2026-03-10',
-    'User-Agent': 'Cloudflare-Worker-CloudDrive',
-    ...extraHeaders
-  };
-}
-
-function getProxyUrl(repoName, path, branch, env) {
-  branch = branch || 'main';
-  const username = env.GITHUB_USERNAME || '';
-  if (GITHUB_CONFIG.useProxy) {
-    return GITHUB_CONFIG.proxyBase + '/' + username + '/' + repoName + '/raw/' + branch + '/' + path;
-  }
-  return GITHUB_CONFIG.rawBase + '/' + username + '/' + repoName + '/' + branch + '/' + path;
-}
-
-// 改进：使用更长的仓库名避免冲突，包含时间戳
-function getRepoName(fileId) {
-  const cleanId = fileId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
-  const timestamp = Date.now().toString(36);
-  return 'cd-' + cleanId.substring(0, 10) + '-' + timestamp;
-}
-
-// 带重试的 fetch 工具
-async function fetchWithRetry(url, options, maxRetries, delayMs) {
-  maxRetries = maxRetries || 5;
-  delayMs = delayMs || 1000;
-  let lastError = null;
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      const res = await fetch(url, options);
-      if (res.status === 404 && i < maxRetries - 1) {
-        // 404 可能是仓库还没准备好，继续重试
-        await new Promise(r => setTimeout(r, delayMs * Math.pow(2, i)));
-        continue;
-      }
-      return res;
-    } catch (e) {
-      lastError = e;
-      if (i < maxRetries - 1) {
-        await new Promise(r => setTimeout(r, delayMs * Math.pow(2, i)));
-      }
-    }
-  }
-  throw lastError || new Error('Max retries exceeded for ' + url);
-}
-
-// 检查仓库是否存在（带重试）
-async function githubRepoExists(repoName, env) {
-  try {
-    const username = env.GITHUB_USERNAME || '';
-    const res = await fetchWithRetry(
-      GITHUB_CONFIG.apiBase + '/repos/' + username + '/' + repoName,
-      { headers: getGithubHeaders(env) },
-      3, 500
-    );
-    return res.status === 200;
-  } catch (e) { return false; }
-}
-
-// 创建 GitHub 仓库（带重试和详细错误）
-async function githubCreateRepo(repoName, env) {
-  const token = env.GITHUB_TOKEN || '';
-  const username = env.GITHUB_USERNAME || '';
-  if (!token) throw new Error('GITHUB_TOKEN 环境变量未设置');
-  if (!username) throw new Error('GITHUB_USERNAME 环境变量未设置');
-
-  const headers = getGithubHeaders(env, { 'Content-Type': 'application/json' });
-
-  const res = await fetch(GITHUB_CONFIG.apiBase + '/user/repos', {
-    method: 'POST',
-    headers: headers,
-    body: JSON.stringify({
-      name: repoName,
-      private: true,
-      auto_init: true,
-      description: 'Cloud drive file storage'
-    })
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error('GitHub create repo failed: HTTP ' + res.status + ' - ' + errText);
-  }
-
-  const data = await res.json();
-
-  // 等待仓库初始化完成（auto_init 创建 README 需要时间）
-  // 指数退避等待，最多 30 秒
-  let ready = false;
-  for (let attempt = 0; attempt < 10; attempt++) {
-    await new Promise(r => setTimeout(r, 1000 * Math.pow(1.5, attempt)));
-    try {
-      const checkRes = await fetch(
-        GITHUB_CONFIG.apiBase + '/repos/' + username + '/' + repoName + '/contents/README.md',
-        { headers: getGithubHeaders(env) }
-      );
-      if (checkRes.status === 200) {
-        ready = true;
-        break;
-      }
-    } catch (e) {
-      // 继续等待
-    }
-  }
-
-  if (!ready) {
-    console.warn('Repository created but README not ready yet, proceeding anyway');
-  }
-
-  return data;
-}
-
-// 获取仓库信息
-async function githubGetRepo(repoName, env) {
-  const username = env.GITHUB_USERNAME || '';
-  const res = await fetchWithRetry(
-    GITHUB_CONFIG.apiBase + '/repos/' + username + '/' + repoName,
-    { headers: getGithubHeaders(env) },
-    3, 500
-  );
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error('GitHub get repo failed: ' + res.status);
-  return await res.json();
-}
-
-// 上传文件到 GitHub（带重试机制）
-async function githubUploadFile(repoName, path, contentBase64, message, env) {
-  const username = env.GITHUB_USERNAME || '';
-  const url = GITHUB_CONFIG.apiBase + '/repos/' + username + '/' + repoName + '/contents/' + path;
-
-  // 先检查文件是否存在（需要 sha 来更新）
-  let sha = null;
-  try {
-    const checkRes = await fetchWithRetry(url, { headers: getGithubHeaders(env) }, 3, 500);
-    if (checkRes.status === 200) {
-      const data = await checkRes.json();
-      sha = data.sha;
-    }
-  } catch (e) {}
-
-  const body = { message: message || 'Upload file', content: contentBase64 };
-  if (sha) body.sha = sha;
-
-  // 上传文件，带重试
-  let lastError = null;
-  for (let attempt = 0; attempt < 5; attempt++) {
-    try {
-      const res = await fetch(url, {
-        method: 'PUT',
-        headers: getGithubHeaders(env, { 'Content-Type': 'application/json' }),
-        body: JSON.stringify(body)
-      });
-
-      if (res.status === 404 && attempt < 4) {
-        // 仓库可能还没准备好，等待后重试
-        await new Promise(r => setTimeout(r, 2000 * Math.pow(2, attempt)));
-        continue;
-      }
-
-      if (!res.ok) {
-        const errText = await res.text();
-        throw new Error('GitHub upload failed: HTTP ' + res.status + ' - ' + errText);
-      }
-
-      return await res.json();
-    } catch (e) {
-      lastError = e;
-      if (attempt < 4) {
-        await new Promise(r => setTimeout(r, 2000 * Math.pow(2, attempt)));
-      }
-    }
-  }
-
-  throw lastError || new Error('GitHub upload failed after max retries');
-}
-
-// 获取文件 raw 内容（修复：添加 env 参数）
-
-
-// 获取 GitHub 文件的 download_url（用于直链 302 重定向，支持大文件）
-async function githubGetDownloadUrl(repoName, path, env) {
-  const username = env.GITHUB_USERNAME || '';
-  const apiUrl = GITHUB_CONFIG.apiBase + '/repos/' + username + '/' + repoName + '/contents/' + path;
-  const apiRes = await fetchWithRetry(apiUrl, { headers: getGithubHeaders(env) }, 3, 500);
-
-  if (!apiRes.ok) {
-    const errText = await apiRes.text();
-    throw new Error('GitHub API get content failed: HTTP ' + apiRes.status + ' - ' + errText);
-  }
-
-  const fileData = await apiRes.json();
-  return fileData.download_url;
-}
-
-
-// 获取文件 API 元数据
-async function githubGetFileApi(repoName, path, env) {
-  const username = env.GITHUB_USERNAME || '';
-  const res = await fetchWithRetry(
-    GITHUB_CONFIG.apiBase + '/repos/' + username + '/' + repoName + '/contents/' + path,
-    { headers: getGithubHeaders(env) },
-    3, 500
-  );
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error('GitHub get file failed: ' + res.status);
-  return await res.json();
-}
-
-// 删除文件
-async function githubDeleteFile(repoName, path, sha, message, env) {
-  const username = env.GITHUB_USERNAME || '';
-  const res = await fetch(
-    GITHUB_CONFIG.apiBase + '/repos/' + username + '/' + repoName + '/contents/' + path,
-    {
-      method: 'DELETE',
-      headers: getGithubHeaders(env, { 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ message: message || 'Delete file', sha })
-    }
-  );
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error('GitHub delete failed: ' + err);
-  }
-  return true;
-}
-
-// 获取仓库大小
-async function githubGetRepoSize(repoName, env) {
-  const repo = await githubGetRepo(repoName, env);
-  if (!repo) return 0;
-  return repo.size * 1024;
-}
-
-// 主存储函数：GitHub 存储（带完整错误处理和重试）
-async function storeFileContent(env, fileId, base64, chunkIndex, isChunk) {
-  const repoName = getRepoName(fileId);
-  const path = isChunk ? 'chunk_' + chunkIndex + '.bin' : 'file.bin';
-
-  // 确保仓库存在（带创建和重试）
-  let exists = await githubRepoExists(repoName, env);
-  if (!exists) {
-    console.log('Creating GitHub repo:', repoName);
-    await githubCreateRepo(repoName, env);
-    // 再次确认仓库存在
-    let verifyAttempts = 0;
-    while (verifyAttempts < 5) {
-      await new Promise(r => setTimeout(r, 1000));
-      exists = await githubRepoExists(repoName, env);
-      if (exists) break;
-      verifyAttempts++;
-    }
-    if (!exists) throw new Error('Failed to verify repository creation: ' + repoName);
-  }
-
-  // 检查仓库大小
-  const repoSize = await githubGetRepoSize(repoName, env);
-  const contentSize = base64.length * 0.75;
-  if (repoSize + contentSize > GITHUB_CONFIG.maxRepoSize) {
-    throw new Error('Repository size limit approaching for ' + repoName);
-  }
-
-  // 上传文件（带重试）
-  console.log('Uploading to GitHub:', repoName, path, 'size:', contentSize);
-  await githubUploadFile(repoName, path, base64, isChunk ? 'Upload chunk ' + chunkIndex : 'Upload file', env);
-
-  // 记录存储位置到 KV
-  const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + fileId, 'json') || {};
-  if (isChunk) {
-    if (!storageMap.chunks) storageMap.chunks = {};
-    storageMap.chunks[chunkIndex] = { type: 'github', repo: repoName, path };
-  } else {
-    storageMap.single = { type: 'github', repo: repoName, path };
-  }
-  await env.FILE_STRUCTURE_KV.put('storage:' + fileId, JSON.stringify(storageMap));
-
-  return { type: 'github', repo: repoName, path };
-}
-
-// ==================== 工具函数 ====================
-function jsonResponse(data, headers, status) {
-  headers = headers || {};
-  status = status || 200;
-  return new Response(JSON.stringify(data), {
-    status: status,
-    headers: { 'Content-Type': 'application/json', ...headers },
-  });
-}
-
-function corsHeaders() {
-  return {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, X-Auth-Token',
-  };
-}
-
-function base64ToArrayBuffer(base64) {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes.buffer;
-}
-
-function arrayBufferToBase64(arrayBuffer) {
-  const bytes = new Uint8Array(arrayBuffer);
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary);
-}
-
-function getKvIndex(fileId, chunkIndex, preferDistribute) {
-  let hash = 0;
-  const str = chunkIndex !== null ? fileId + ':' + chunkIndex : fileId;
-  for (let i = 0; i < str.length; i++) {
-    hash = (hash << 5) - hash + str.charCodeAt(i);
-    hash |= 0;
-  }
-  if (preferDistribute && chunkIndex !== null) {
-    return chunkIndex % KV_COUNT;
-  }
-  return Math.abs(hash) % KV_COUNT;
-}
-
-async function getTree(env) {
-  const tree = await env.FILE_STRUCTURE_KV.get('tree', 'json');
-  return tree || { name: '/', type: 'folder', children: [] };
-}
-
-async function putTree(env, tree) {
-  await env.FILE_STRUCTURE_KV.put('tree', JSON.stringify(tree));
-}
-
-function findItemById(tree, id) {
-  if (!tree) return null;
-  if (tree.id === id) return tree;
-  if (tree.children) {
-    for (const child of tree.children) {
-      const found = findItemById(child, id);
-      if (found) return found;
-    }
-  }
-  return null;
-}
-
-function findItemByPathInTree(tree, path) {
-  const parts = path.split('/').filter(Boolean);
-  let current = tree;
-  for (const part of parts) {
-    if (!current.children) return null;
-    current = current.children.find(c => c.name === part);
-    if (!current) return null;
-  }
-  return current;
-}
-
-async function addFileToTree(env, uploadPath, fileName, fileId, size, mimeType, chunks, chunkSize) {
-  const tree = await getTree(env);
-  const parts = uploadPath.split('/').filter(Boolean);
-  let current = tree;
-  for (const part of parts) {
-    let folder = current.children?.find(c => c.name === part && c.type === 'folder');
-    if (!folder) {
-      folder = { id: 'f_' + Date.now() + '_' + Math.random().toString(36).substr(2,8), name: part, type:'folder', children:[], createdAt: Date.now(), updatedAt: Date.now() };
-      if (!current.children) current.children = [];
-      current.children.push(folder);
-    }
-    current = folder;
-  }
-  const newFile = { id: fileId, name: fileName, type:'file', size, mimeType, chunks, chunkSize, createdAt: Date.now(), updatedAt: Date.now() };
-  if (!current.children) current.children = [];
-  const existingIndex = current.children.findIndex(c => c.name === fileName && c.type === 'file');
-  if (existingIndex !== -1) current.children[existingIndex] = newFile;
-  else current.children.push(newFile);
-  await putTree(env, tree);
-}
-
-async function storeSingleFile(env, fileId, base64) {
-  const arrayBuffer = base64ToArrayBuffer(base64);
-  const startIndex = getKvIndex(fileId);
-  let lastError = null;
-  for (let i = 0; i < KV_COUNT; i++) {
-    const kvIndex = (startIndex + i) % KV_COUNT;
-    const kv = env[FILE_KV_BINDINGS[kvIndex]];
-    try {
-      await kv.put('f:' + fileId, arrayBuffer);
-      await env.FILE_STRUCTURE_KV.put('kvmap:' + fileId, JSON.stringify({ kvIndex, type: 'single' }));
-      return;
-    } catch (e) {
-      lastError = e;
-      console.error('KV ' + kvIndex + ' store failed, trying next...', e.message);
-      continue;
-    }
-  }
-  throw new Error('All KV stores failed for single file: ' + (lastError ? lastError.message : 'unknown'));
-}
-
-async function storeChunk(env, fileId, chunkIndex, base64) {
-  // 优先使用 GitHub 存储分片
-  try {
-    const result = await storeFileContent(env, fileId, base64, chunkIndex, true);
-    if (result.type === 'github') return;
-  } catch (e) {
-    console.error('GitHub chunk store failed, falling back to KV:', e.message);
-  }
-
-  // GitHub 失败，回退到 KV
-  const arrayBuffer = base64ToArrayBuffer(base64);
-  const startIndex = getKvIndex(fileId, chunkIndex, true);
-  let lastError = null;
-  for (let i = 0; i < KV_COUNT; i++) {
-    const kvIndex = (startIndex + i) % KV_COUNT;
-    const kv = env[FILE_KV_BINDINGS[kvIndex]];
-    try {
-      await kv.put('f:' + fileId + ':chunk:' + chunkIndex, arrayBuffer);
-      const kvMap = await env.FILE_STRUCTURE_KV.get('kvmap:' + fileId, 'json') || { chunks: {} };
-      if (!kvMap.chunks) kvMap.chunks = {};
-      kvMap.chunks[chunkIndex] = kvIndex;
-      await env.FILE_STRUCTURE_KV.put('kvmap:' + fileId, JSON.stringify(kvMap));
-      return;
-    } catch (e) {
-      lastError = e;
-      console.error('KV ' + kvIndex + ' chunk ' + chunkIndex + ' store failed, trying next...', e.message);
-      continue;
-    }
-  }
-  throw new Error('All KV stores failed for chunk ' + chunkIndex + ': ' + (lastError ? lastError.message : 'unknown'));
-}
-
-async function getFileArrayBuffer(env, item) {
-  const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + item.id, 'json') || {};
-
-  if (item.chunks <= 1) {
-    // 单文件
-    if (storageMap.single && storageMap.single.type === 'github') {
-      try {
-        return await githubGetFileRaw(storageMap.single.repo, storageMap.single.path, null, env);
-      } catch (e) {
-        console.error('GitHub read failed, falling back to KV:', e.message);
-      }
-    }
-    // 回退到 KV
-    const kvMap = await env.FILE_STRUCTURE_KV.get('kvmap:' + item.id, 'json');
-    const storedIndex = kvMap && kvMap.kvIndex !== undefined ? kvMap.kvIndex : getKvIndex(item.id);
-    const kv = env[FILE_KV_BINDINGS[storedIndex]];
-    let buffer = await kv.get('f:' + item.id, 'arrayBuffer');
-    if (buffer) return buffer;
-    for (let i = 0; i < KV_COUNT; i++) {
-      if (i === storedIndex) continue;
-      const fallbackKv = env[FILE_KV_BINDINGS[i]];
-      buffer = await fallbackKv.get('f:' + item.id, 'arrayBuffer');
-      if (buffer) return buffer;
-    }
-    throw new Error('File not found: ' + item.id);
-  }
-
-  // 多分片文件
-  const chunks = item.chunks;
-  const totalLength = item.size;
-  const result = new Uint8Array(totalLength);
-  let offset = 0;
-  for (let i = 0; i < chunks; i++) {
-    let chunkBuffer = null;
-
-    // 优先从 GitHub 读取分片
-    if (storageMap.chunks && storageMap.chunks[i] && storageMap.chunks[i].type === 'github') {
-      try {
-        chunkBuffer = await githubGetFileRaw(storageMap.chunks[i].repo, storageMap.chunks[i].path, null, env);
-      } catch (e) {
-        console.error('GitHub chunk read failed:', e.message);
-      }
-    }
-
-    // 回退到 KV
-    if (!chunkBuffer) {
-      const kvMap = await env.FILE_STRUCTURE_KV.get('kvmap:' + item.id, 'json');
-      const storedIndex = kvMap && kvMap.chunks && kvMap.chunks[i] !== undefined 
-        ? kvMap.chunks[i] 
-        : getKvIndex(item.id, i, true);
-      const kv = env[FILE_KV_BINDINGS[storedIndex]];
-      chunkBuffer = await kv.get('f:' + item.id + ':chunk:' + i, 'arrayBuffer');
-      if (!chunkBuffer) {
-        for (let j = 0; j < KV_COUNT; j++) {
-          if (j === storedIndex) continue;
-          const fallbackKv = env[FILE_KV_BINDINGS[j]];
-          chunkBuffer = await fallbackKv.get('f:' + item.id + ':chunk:' + i, 'arrayBuffer');
-          if (chunkBuffer) break;
-        }
-      }
-    }
-
-    if (!chunkBuffer) throw new Error('Missing chunk ' + i + ' for file ' + item.id);
-    const chunkBytes = new Uint8Array(chunkBuffer);
-    result.set(chunkBytes, offset);
-    offset += chunkBytes.length;
-  }
-  return result.buffer;
-}
-
-async function deleteFileContent(env, fileId, chunks) {
-  const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + fileId, 'json') || {};
-
-  // 删除 GitHub 上的内容
-  if (storageMap.single && storageMap.single.type === 'github') {
-    try {
-      const fileData = await githubGetFileApi(storageMap.single.repo, storageMap.single.path, env);
-      if (fileData && fileData.sha) {
-        await githubDeleteFile(storageMap.single.repo, storageMap.single.path, fileData.sha, null, env);
-      }
-    } catch (e) { console.error('GitHub delete single failed:', e.message); }
-  }
-  if (storageMap.chunks) {
-    for (const idx in storageMap.chunks) {
-      const chunkInfo = storageMap.chunks[idx];
-      if (chunkInfo.type === 'github') {
-        try {
-          const fileData = await githubGetFileApi(chunkInfo.repo, chunkInfo.path, env);
-          if (fileData && fileData.sha) {
-            await githubDeleteFile(chunkInfo.repo, chunkInfo.path, fileData.sha, null, env);
-          }
-        } catch (e) { console.error('GitHub delete chunk failed:', e.message); }
-      }
-    }
-  }
-
-  // 删除 KV 上的内容
-  const kvMap = await env.FILE_STRUCTURE_KV.get('kvmap:' + fileId, 'json');
-  if (chunks <= 1) {
-    const storedIndex = kvMap && kvMap.kvIndex !== undefined ? kvMap.kvIndex : getKvIndex(fileId);
-    const kv = env[FILE_KV_BINDINGS[storedIndex]];
-    await kv.delete('f:' + fileId);
-    for (let i = 0; i < KV_COUNT; i++) {
-      if (i === storedIndex) continue;
-      try { await env[FILE_KV_BINDINGS[i]].delete('f:' + fileId); } catch(e) {}
-    }
-  } else {
-    for (let i = 0; i < chunks; i++) {
-      const storedIndex = kvMap && kvMap.chunks && kvMap.chunks[i] !== undefined 
-        ? kvMap.chunks[i] 
-        : getKvIndex(fileId, i, true);
-      const kv = env[FILE_KV_BINDINGS[storedIndex]];
-      await kv.delete('f:' + fileId + ':chunk:' + i);
-      for (let j = 0; j < KV_COUNT; j++) {
-        if (j === storedIndex) continue;
-        try { await env[FILE_KV_BINDINGS[j]].delete('f:' + fileId + ':chunk:' + i); } catch(e) {}
-      }
-    }
-  }
-  // 清理kvmap和storage映射
-  await env.FILE_STRUCTURE_KV.delete('kvmap:' + fileId);
-  await env.FILE_STRUCTURE_KV.delete('storage:' + fileId);
-}
-
-async function addTask(env, type, name, status, progress) {
-  const tasks = await env.TASK_KV.get('tasks', 'json') || [];
-  const task = { id: crypto.randomUUID(), type, name, status, progress, createdAt: Date.now(), updatedAt: Date.now() };
-  tasks.push(task);
-  await env.TASK_KV.put('tasks', JSON.stringify(tasks));
-  return task.id;
-}
-
-async function updateTask(env, taskId, updates) {
-  const tasks = await env.TASK_KV.get('tasks', 'json') || [];
-  const idx = tasks.findIndex(t => t.id === taskId);
-  if (idx !== -1) {
-    tasks[idx] = { ...tasks[idx], ...updates, updatedAt: Date.now() };
-    await env.TASK_KV.put('tasks', JSON.stringify(tasks));
-  }
-}
-
-async function deleteTask(env, taskId) {
-  const tasks = await env.TASK_KV.get('tasks', 'json') || [];
-  const filtered = tasks.filter(t => t.id !== taskId);
-  await env.TASK_KV.put('tasks', JSON.stringify(filtered));
-}
-
-async function handleOfflineDownload(env, url, savePath, taskId) {
-  try {
-    const response = await fetch(url);
-    if (!response.ok) throw new Error('下载失败: HTTP ' + response.status);
-    const contentLength = parseInt(response.headers.get('content-length') || '0');
-    if (contentLength > 25 * 1024 * 1024) throw new Error('文件过大');
-    const arrayBuffer = await response.arrayBuffer();
-    if (arrayBuffer.byteLength === 0) throw new Error('空文件');
-    let fileName = 'download_' + Date.now();
-    const disposition = response.headers.get('content-disposition');
-    if (disposition) {
-      const match = disposition.match(/filename="?([^"]+)"?/i);
-      if (match) fileName = match[1];
-    } else {
-      const urlObj = new URL(url);
-      const parts = urlObj.pathname.split('/');
-      if (parts.length > 0 && parts[parts.length - 1]) fileName = decodeURIComponent(parts[parts.length - 1]);
-    }
-    const fileId = 'f_' + Date.now() + '_' + Math.random().toString(36).substr(2,8);
-    const base64 = arrayBufferToBase64(arrayBuffer);
-    const size = arrayBuffer.byteLength;
-
-    const KV_MAX = 20 * 1024 * 1024;
-    if (size < KV_MAX) {
-      await storeSingleFile(env, fileId, base64);
-    } else {
-      await storeFileContent(env, fileId, base64, null, false);
-    }
-
-    const mimeType = response.headers.get('content-type') || 'application/octet-stream';
-    await addFileToTree(env, savePath, fileName, fileId, size, mimeType, 1, 0);
-    await updateTask(env, taskId, { status:'completed', progress:100 });
-  } catch (e) {
-    await updateTask(env, taskId, { status:'failed', error: e.message });
-  }
-}
-
-// 主读取函数：优先 GitHub，回退到 KV
-async function getFileContent(env, item, chunkIndex) {
-  const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + item.id, 'json') || {};
-
-  if (item.chunks <= 1) {
-    const single = storageMap.single;
-    if (single && single.type === 'github') {
-      try {
-        return await githubGetFileRaw(single.repo, single.path, null, env);
-      } catch (e) {
-        console.error('GitHub read failed, falling back to KV:', e.message);
-      }
-    }
-    return await getFileArrayBuffer(env, item);
-  } else {
-    const chunkInfo = storageMap.chunks && storageMap.chunks[chunkIndex];
-    if (chunkInfo && chunkInfo.type === 'github') {
-      try {
-        return await githubGetFileRaw(chunkInfo.repo, chunkInfo.path, null, env);
-      } catch (e) {
-        console.error('GitHub chunk read failed, falling back to KV:', e.message);
-      }
-    }
-    const kvMap = await env.FILE_STRUCTURE_KV.get('kvmap:' + item.id, 'json');
-    const storedIndex = kvMap && kvMap.chunks && kvMap.chunks[chunkIndex] !== undefined
-      ? kvMap.chunks[chunkIndex]
-      : getKvIndex(item.id, chunkIndex, true);
-    const kv = env[FILE_KV_BINDINGS[storedIndex]];
-    let buffer = await kv.get('f:' + item.id + ':chunk:' + chunkIndex, 'arrayBuffer');
-    if (!buffer) {
-      for (let j = 0; j < KV_COUNT; j++) {
-        if (j === storedIndex) continue;
-        const fallbackKv = env[FILE_KV_BINDINGS[j]];
-        buffer = await fallbackKv.get('f:' + item.id + ':chunk:' + chunkIndex, 'arrayBuffer');
-        if (buffer) break;
-      }
-    }
-    if (!buffer) throw new Error('Missing chunk ' + chunkIndex);
-    return buffer;
-  }
-}
-
-// 删除文件内容（GitHub 和 KV）
-async function deleteFileContentAll(env, fileId, chunks) {
-  const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + fileId, 'json') || {};
-
-  if (storageMap.single && storageMap.single.type === 'github') {
-    try {
-      const fileData = await githubGetFileApi(storageMap.single.repo, storageMap.single.path, env);
-      if (fileData && fileData.sha) {
-        await githubDeleteFile(storageMap.single.repo, storageMap.single.path, fileData.sha, null, env);
-      }
-    } catch (e) { console.error('GitHub delete single failed:', e.message); }
-  }
-
-  if (storageMap.chunks) {
-    for (const idx in storageMap.chunks) {
-      const chunkInfo = storageMap.chunks[idx];
-      if (chunkInfo.type === 'github') {
-        try {
-          const fileData = await githubGetFileApi(chunkInfo.repo, chunkInfo.path, env);
-          if (fileData && fileData.sha) {
-            await githubDeleteFile(chunkInfo.repo, chunkInfo.path, fileData.sha, null, env);
-          }
-        } catch (e) { console.error('GitHub delete chunk failed:', e.message); }
-      }
-    }
-  }
-
-  await deleteFileContent(env, fileId, chunks);
-  await env.FILE_STRUCTURE_KV.delete('storage:' + fileId);
-}
-
-// ==================== 密码验证 ====================
-function getValidPasswords(env) {
-  const pwd = env.CLOUD_PASSWORD || '';
-  if (!pwd) return [];
-  return pwd.split(',').map(p => p.trim()).filter(p => p.length > 0);
-}
-
-function verifyPassword(env, inputPassword) {
-  const validPasswords = getValidPasswords(env);
-  if (validPasswords.length === 0) return true;
-  return validPasswords.includes(inputPassword);
-}
-
-function generateToken() {
-  return crypto.randomUUID();
-}
-
-async function storeToken(env, token) {
-  const tokens = await env.FILE_STRUCTURE_KV.get('auth_tokens', 'json') || [];
-  tokens.push({ token, createdAt: Date.now() });
-  const now = Date.now();
-  const validTokens = tokens.filter(t => now - t.createdAt < 30 * 24 * 60 * 60 * 1000);
-  await env.FILE_STRUCTURE_KV.put('auth_tokens', JSON.stringify(validTokens));
-}
-
-async function verifyToken(env, token) {
-  const tokens = await env.FILE_STRUCTURE_KV.get('auth_tokens', 'json') || [];
-  const found = tokens.find(t => t.token === token);
-  if (!found) return false;
-  const now = Date.now();
-  if (now - found.createdAt > 30 * 24 * 60 * 60 * 1000) return false;
-  return true;
-}
-
-// ==================== 主入口 ====================
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
-    const method = request.method;
-    const headers = corsHeaders();
 
-    if (method === 'OPTIONS') return new Response(null, { headers });
+    if (path.startsWith('/s/'))  return serveShare(request, env, path.slice(3));
+    if (path.startsWith('/d/'))  return serveFile(request, env, path.slice(3), 'attachment');
+    if (path.startsWith('/dl/')) return serveFile(request, env, path.slice(4), 'attachment');
+    if (path.startsWith('/p/'))  return serveFile(request, env, path.slice(3), 'inline');
+    if (path.startsWith('/api/')) return handleApi(request, env, ctx, url);
 
-    try {
-      // 主页和详情页
-      if (path === '/' || path === '/index.html' || path === '/detail') {
-        return new Response(HTML, {
-          headers: { 'Content-Type': 'text/html;charset=UTF-8', ...headers },
-        });
-      }
-
-      // 直链下载 /d/{fileId} - 不需要密码验证
-      if (path.startsWith('/d/')) {
-        const fileId = path.substring(3);
-        const tree = await getTree(env);
-        const item = findItemById(tree, fileId);
-        if (!item || item.type !== 'file') return new Response('File not found', { status: 404, headers });
-
-        const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + fileId, 'json') || {};
-
-        // GitHub 存储的单文件：Worker 作为代理，通过 gh-proxy 获取后流式返回
-        if (storageMap.single && storageMap.single.type === 'github') {
-          try {
-            const proxyRes = await githubProxyFetch(storageMap.single.repo, storageMap.single.path, env);
-            return new Response(proxyRes.body, {
-              headers: {
-                'Content-Type': item.mimeType || 'application/octet-stream',
-                'Content-Disposition': 'attachment; filename="' + encodeURIComponent(item.name) + '"',
-                'Content-Length': proxyRes.headers.get('content-length') || '',
-                ...headers,
-              },
-            });
-          } catch (e) {
-            console.error('GitHub proxy fetch failed:', e.message);
-            // 回退到直接组装
-          }
-        }
-
-        // 多分片文件（GitHub 或 KV）：组装后流式返回
-        if (item.chunks > 1) {
-          const { readable, writable } = new TransformStream();
-          const writer = writable.getWriter();
-
-          ctx.waitUntil((async () => {
-            try {
-              for (let i = 0; i < item.chunks; i++) {
-                let chunkBuffer = null;
-
-                // 优先从 GitHub 读取分片
-                if (storageMap.chunks && storageMap.chunks[i] && storageMap.chunks[i].type === 'github') {
-                  try {
-                    const chunkRes = await githubProxyFetch(storageMap.chunks[i].repo, storageMap.chunks[i].path, env);
-                    chunkBuffer = await chunkRes.arrayBuffer();
-                  } catch (e) {
-                    console.error('GitHub chunk proxy fetch failed:', e.message);
-                  }
-                }
-
-                // 回退到 KV
-                if (!chunkBuffer) {
-                  const kvMap = await env.FILE_STRUCTURE_KV.get('kvmap:' + fileId, 'json');
-                  const storedIndex = kvMap && kvMap.chunks && kvMap.chunks[i] !== undefined 
-                    ? kvMap.chunks[i] 
-                    : getKvIndex(fileId, i, true);
-                  const kv = env[FILE_KV_BINDINGS[storedIndex]];
-                  chunkBuffer = await kv.get('f:' + fileId + ':chunk:' + i, 'arrayBuffer');
-                  if (!chunkBuffer) {
-                    for (let j = 0; j < KV_COUNT; j++) {
-                      if (j === storedIndex) continue;
-                      const fallbackKv = env[FILE_KV_BINDINGS[j]];
-                      chunkBuffer = await fallbackKv.get('f:' + fileId + ':chunk:' + i, 'arrayBuffer');
-                      if (chunkBuffer) break;
-                    }
-                  }
-                }
-
-                if (!chunkBuffer) throw new Error('Missing chunk ' + i);
-                await writer.write(new Uint8Array(chunkBuffer));
-              }
-            } catch (e) {
-              console.error('Stream error:', e.message);
-            } finally {
-              await writer.close();
-            }
-          })());
-
-          return new Response(readable, {
-            headers: {
-              'Content-Type': item.mimeType || 'application/octet-stream',
-              'Content-Disposition': 'attachment; filename="' + encodeURIComponent(item.name) + '"',
-              ...headers,
-            },
-          });
-        }
-
-        // KV 单文件直传
-        const buffer = await getFileArrayBuffer(env, item);
-        return new Response(buffer, {
-          headers: {
-            'Content-Type': item.mimeType || 'application/octet-stream',
-            'Content-Disposition': 'attachment; filename="' + encodeURIComponent(item.name) + '"',
-            ...headers,
-          },
-        });
-      }
-
-      // 分享页面 /s/{shareId} - 不需要密码验证
-      if (path.startsWith('/s/')) {
-        const shareId = path.substring(3);
-        const fileId = await env.FILE_STRUCTURE_KV.get('share:' + shareId);
-        if (!fileId) return new Response('Share link invalid', { status: 404, headers });
-        const tree = await getTree(env);
-        const item = findItemById(tree, fileId);
-        if (!item || item.type !== 'file') return new Response('File not found', { status: 404, headers });
-
-        // 返回分享页面 HTML（不需要密码）
-        return new Response(SHARE_HTML, {
-          headers: { 'Content-Type': 'text/html;charset=UTF-8', ...headers },
-        });
-      }
-
-      // API 路由
-      if (path.startsWith('/api/')) {
-        const apiPath = path.substring(4);
-        let body = {};
-        if (method === 'POST' || method === 'PUT') {
-          try { body = await request.json(); } catch (e) {}
-        }
-
-        // 密码验证 API（不需要主认证）
-        if (apiPath === '/auth' && method === 'POST') {
-          const { password } = body;
-          if (!password) return jsonResponse({ error: 'Missing password' }, headers, 400);
-          if (verifyPassword(env, password)) {
-            const token = generateToken();
-            await storeToken(env, token);
-            return jsonResponse({ token }, headers);
-          }
-          return jsonResponse({ error: 'Invalid password' }, headers, 401);
-        }
-
-        if (apiPath === '/auth/verify' && method === 'POST') {
-          const { token } = body;
-          if (!token) return jsonResponse({ valid: false }, headers);
-          const valid = await verifyToken(env, token);
-          return jsonResponse({ valid }, headers);
-        }
-
-        // 分享信息 API（不需要密码验证）
-        if (apiPath === '/share-info' && method === 'GET') {
-          const shareId = url.searchParams.get('shareId');
-          if (!shareId) return jsonResponse({ error: 'Missing shareId' }, headers, 400);
-          const fileId = await env.FILE_STRUCTURE_KV.get('share:' + shareId);
-          if (!fileId) return jsonResponse({ error: 'Share link invalid' }, headers, 404);
-          const tree = await getTree(env);
-          const item = findItemById(tree, fileId);
-          if (!item || item.type !== 'file') return jsonResponse({ error: 'File not found' }, headers, 404);
-          return jsonResponse({ item }, headers);
-        }
-
-        // 文件内容 API（用于分享页面文本预览，不需要密码）
-        if (apiPath === '/file-content' && method === 'GET') {
-          const filePath = url.searchParams.get('path');
-          if (!filePath) return jsonResponse({ error: 'Missing path' }, headers, 400);
-          const tree = await getTree(env);
-          const item = findItemByPathInTree(tree, filePath);
-          if (!item || item.type !== 'file') return jsonResponse({ error: 'File not found' }, headers, 404);
-          const buffer = await getFileArrayBuffer(env, item);
-          const base64 = arrayBufferToBase64(buffer);
-          return jsonResponse({ base64 }, headers);
-        }
-
-        // 认证检查（以上路由除外）
-        if (apiPath !== '/auth' && apiPath !== '/auth/verify' && apiPath !== '/share-info' && apiPath !== '/file-content') {
-          const authToken = request.headers.get('X-Auth-Token') || body.token;
-          if (!authToken || !(await verifyToken(env, authToken))) {
-            return jsonResponse({ error: 'Unauthorized' }, headers, 401);
-          }
-        }
-
-        // 获取文件树
-        if (apiPath === '/tree' && method === 'GET') {
-          const tree = await getTree(env);
-          return jsonResponse({ tree }, headers);
-        }
-
-        // 保存文件树
-        if (apiPath === '/tree' && method === 'PUT') {
-          if (body.tree) { await putTree(env, body.tree); return jsonResponse({ success: true }, headers); }
-          return jsonResponse({ error: 'Invalid tree' }, headers, 400);
-        }
-
-        // 单文件上传
-        if (apiPath === '/upload/single' && method === 'POST') {
-          const { fileId, fileName, uploadPath, base64, mimeType, size, storage } = body;
-          if (!fileId || !fileName || !base64) return jsonResponse({ error: 'Missing fields' }, headers, 400);
-          try {
-            if (storage === 'github') {
-              await storeFileContent(env, fileId, base64, null, false);
-            } else {
-              await storeSingleFile(env, fileId, base64);
-            }
-            await addFileToTree(env, uploadPath, fileName, fileId, size, mimeType, 1, 0);
-            return jsonResponse({ success: true }, headers);
-          } catch (e) { return jsonResponse({ error: e.message }, headers, 500); }
-        }
-
-        // 分片上传初始化
-        if (apiPath === '/upload/init' && method === 'POST') {
-          const { fileId, fileName, uploadPath, chunks, chunkSize, mimeType, size } = body;
-          if (!fileId || !fileName || !chunks) return jsonResponse({ error: 'Missing fields' }, headers, 400);
-          await env.FILE_STRUCTURE_KV.put('meta:' + fileId, JSON.stringify({ fileName, uploadPath, mimeType, size, chunkSize }));
-          return jsonResponse({ success: true }, headers);
-        }
-
-        // 上传分片（总是使用 GitHub）
-        if (apiPath === '/upload/chunk' && method === 'POST') {
-          const { fileId, chunkIndex, base64 } = body;
-          if (!fileId || chunkIndex === undefined || !base64) return jsonResponse({ error: 'Missing fields' }, headers, 400);
-          try {
-            await storeFileContent(env, fileId, base64, chunkIndex, true);
-            return jsonResponse({ success: true }, headers);
-          } catch (e) { return jsonResponse({ error: e.message }, headers, 500); }
-        }
-
-        // 分片上传完成
-        if (apiPath === '/upload/complete' && method === 'POST') {
-          const { fileId, chunks } = body;
-          if (!fileId || !chunks) return jsonResponse({ error: 'Missing fields' }, headers, 400);
-          const meta = await env.FILE_STRUCTURE_KV.get('meta:' + fileId, 'json');
-          if (!meta) return jsonResponse({ error: 'Upload metadata not found' }, headers, 400);
-          const { fileName, uploadPath, mimeType, size, chunkSize } = meta;
-          await addFileToTree(env, uploadPath, fileName, fileId, size, mimeType, chunks, chunkSize || 0);
-          await env.FILE_STRUCTURE_KV.delete('meta:' + fileId);
-          return jsonResponse({ success: true }, headers);
-        }
-
-        // 删除文件内容
-        if (apiPath === '/delete-content' && method === 'POST') {
-          const { fileId, chunks } = body;
-          if (!fileId) return jsonResponse({ error: 'Missing fileId' }, headers, 400);
-          try { await deleteFileContent(env, fileId, chunks); return jsonResponse({ success: true }, headers); }
-          catch (e) { return jsonResponse({ error: e.message }, headers, 500); }
-        }
-
-        // 下载文件 API（保留向后兼容）
-        if (apiPath === '/download' && method === 'GET') {
-          const fileId = url.searchParams.get('fileId');
-          if (!fileId) return jsonResponse({ error: 'Missing fileId' }, headers, 400);
-          const tree = await getTree(env);
-          const item = findItemById(tree, fileId);
-          if (!item || item.type !== 'file') return jsonResponse({ error: 'File not found' }, headers, 404);
-
-          const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + fileId, 'json') || {};
-
-          // GitHub 存储的单文件：Worker 代理模式
-          if (storageMap.single && storageMap.single.type === 'github') {
-            try {
-              const proxyRes = await githubProxyFetch(storageMap.single.repo, storageMap.single.path, env);
-              return new Response(proxyRes.body, {
-                headers: {
-                  'Content-Type': item.mimeType || 'application/octet-stream',
-                  'Content-Disposition': 'attachment; filename="' + encodeURIComponent(item.name) + '"',
-                  'Content-Length': proxyRes.headers.get('content-length') || '',
-                  ...headers,
-                },
-              });
-            } catch (e) {
-              console.error('GitHub proxy fetch failed:', e.message);
-            }
-          }
-
-          const buffer = await getFileArrayBuffer(env, item);
-          return new Response(buffer, {
-            headers: {
-              'Content-Type': item.mimeType || 'application/octet-stream',
-              'Content-Disposition': 'attachment; filename="' + encodeURIComponent(item.name) + '"',
-              ...headers,
-            },
-          });
-        }
-
-        // 图片预览 API（保留向后兼容）
-        if (apiPath === '/preview-image' && method === 'GET') {
-          const fileId = url.searchParams.get('fileId');
-          if (!fileId) return jsonResponse({ error: 'Missing fileId' }, headers, 400);
-          const tree = await getTree(env);
-          const item = findItemById(tree, fileId);
-          if (!item || item.type !== 'file') return jsonResponse({ error: 'File not found' }, headers, 404);
-
-          const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + fileId, 'json') || {};
-
-          // GitHub 存储的单文件：Worker 代理模式
-          if (storageMap.single && storageMap.single.type === 'github') {
-            try {
-              const proxyRes = await githubProxyFetch(storageMap.single.repo, storageMap.single.path, env);
-              return new Response(proxyRes.body, {
-                headers: {
-                  'Content-Type': item.mimeType || 'application/octet-stream',
-                  'Cache-Control': 'public, max-age=3600',
-                  'Content-Length': proxyRes.headers.get('content-length') || '',
-                  ...headers,
-                },
-              });
-            } catch (e) {
-              console.error('GitHub proxy fetch failed:', e.message);
-            }
-          }
-
-          const buffer = await getFileArrayBuffer(env, item);
-          return new Response(buffer, {
-            headers: {
-              'Content-Type': item.mimeType || 'application/octet-stream',
-              'Cache-Control': 'public, max-age=3600',
-              ...headers,
-            },
-          });
-        }
-
-        // 保存文件内容
-        if (apiPath === '/save-content' && method === 'POST') {
-          const { path, base64, fileId } = body;
-          if (!path || !base64 || !fileId) return jsonResponse({ error: 'Missing fields' }, headers, 400);
-          const tree = await getTree(env);
-          const item = findItemById(tree, fileId);
-          if (!item) return jsonResponse({ error: 'File not found' }, headers, 404);
-          try {
-            await deleteFileContent(env, fileId, item.chunks);
-            await storeSingleFile(env, fileId, base64);
-            item.size = base64.length * 3 / 4;
-            item.chunks = 1;
-            item.chunkSize = 0;
-            item.updatedAt = Date.now();
-            await putTree(env, tree);
-            return jsonResponse({ success: true }, headers);
-          } catch (e) { return jsonResponse({ error: e.message }, headers, 500); }
-        }
-
-        // 创建分享链接
-        if (apiPath === '/share' && method === 'POST') {
-          const { fileId } = body;
-          if (!fileId) return jsonResponse({ error: 'Missing fileId' }, headers, 400);
-          const shareId = crypto.randomUUID();
-          await env.FILE_STRUCTURE_KV.put('share:' + shareId, fileId);
-          return jsonResponse({ shareId }, headers);
-        }
-
-        // 离线下载
-        if (apiPath === '/offline' && method === 'POST') {
-          const { url, savePath } = body;
-          if (!url || !savePath) return jsonResponse({ error: 'Missing url or savePath' }, headers, 400);
-          const taskId = await addTask(env, 'download', url, 'processing', 0);
-          ctx.waitUntil(handleOfflineDownload(env, url, savePath, taskId));
-          return jsonResponse({ success: true, taskId }, headers);
-        }
-
-        // 任务相关 API
-        if (apiPath === '/task/create' && method === 'POST') {
-          const { type, name } = body;
-          if (!type || !name) return jsonResponse({ error: 'Missing fields' }, headers, 400);
-          const taskId = await addTask(env, type, name, 'processing', 0);
-          return jsonResponse({ taskId }, headers);
-        }
-
-        if (apiPath === '/task/update' && method === 'POST') {
-          const { taskId, progress, status, error } = body;
-          if (!taskId) return jsonResponse({ error: 'Missing taskId' }, headers, 400);
-          const updates = {};
-          if (progress !== undefined) updates.progress = progress;
-          if (status) updates.status = status;
-          if (error) updates.error = error;
-          await updateTask(env, taskId, updates);
-          return jsonResponse({ success: true }, headers);
-        }
-
-        if (apiPath === '/task/delete' && method === 'POST') {
-          const { taskId } = body;
-          if (!taskId) return jsonResponse({ error: 'Missing taskId' }, headers, 400);
-          await deleteTask(env, taskId);
-          return jsonResponse({ success: true }, headers);
-        }
-
-        if (apiPath === '/tasks' && method === 'GET') {
-          const tasks = await env.TASK_KV.get('tasks', 'json') || [];
-          return jsonResponse({ tasks }, headers);
-        }
-
-        return jsonResponse({ error: 'Not found' }, headers, 404);
-      }
-
-      return jsonResponse({ error: 'Not found' }, headers, 404);
-    } catch (e) {
-      console.error('Worker error:', e);
-      return jsonResponse({ error: e.message, stack: e.stack }, headers, 500);
+    if (path === '/' || path === '') {
+      return new Response(managerHTML(), { headers: { 'Content-Type': 'text/html;charset=utf-8' } });
     }
-  }
-};// 通过 gh-proxy 代理获取 GitHub 文件内容（支持大文件流式传输）
-async function githubProxyFetch(repoName, path, env) {
-  const username = env.GITHUB_USERNAME || '';
-  // 使用 gh-proxy 代理加速
-  const proxyUrl = GITHUB_CONFIG.proxyBase + '/' + username + '/' + repoName + '/raw/main/' + path;
+    return new Response('Not Found', { status: 404 });
+  },
+};
 
-  const res = await fetch(proxyUrl, {
-    headers: { 
-      'Authorization': 'Bearer ' + (env.GITHUB_TOKEN || ''),
-      'User-Agent': 'Cloudflare-Worker-CloudDrive'
-    }
+/* =====================================================================
+ * 工具函数
+ * ===================================================================== */
+function norm(p) {
+  p = ('/' + String(p || '').replace(/\\/g, '/')).replace(/\/+/g, '/');
+  if (p.length > 1 && p.endsWith('/')) p = p.slice(0, -1);
+  return p;
+}
+function dirname(p) {
+  if (!p || p === '/' || !p.includes('/')) return '/';
+  return p.slice(0, p.lastIndexOf('/')) || '/';
+}
+function basename(p) {
+  const i = p.lastIndexOf('/');
+  return i < 0 ? p : p.slice(i + 1);
+}
+function joinPath(parent, name) {
+  return norm((parent === '/' ? '/' : parent) + '/' + name);
+}
+function mimeOf(name) {
+  const i = name.lastIndexOf('.');
+  const ext = i >= 0 ? name.slice(i).toLowerCase() : '';
+  return MIME[ext] || 'application/octet-stream';
+}
+function isTextual(mime) {
+  return mime.startsWith('text/') || /json|xml|svg|javascript|markdown|javascript/.test(mime) || mime.endsWith('charset=utf-8');
+}
+function randomId(n) {
+  const c = 'abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  let s = '';
+  for (let i = 0; i < n; i++) s += c[Math.floor(Math.random() * c.length)];
+  return s;
+}
+function makeSsid() {
+  try { return crypto.randomUUID().replace(/-/g, '') + randomId(6); }
+  catch (e) { return randomId(24); }
+}
+function json(data, status) {
+  return new Response(JSON.stringify(data), {
+    status: status || 200,
+    headers: { 'Content-Type': 'application/json;charset=utf-8', 'Access-Control-Allow-Origin': '*' },
   });
+}
+function jsonErr(msg, status) {
+  return json({ ok: false, error: msg }, status || 400);
+}
+function concatBytes(list, total) {
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const b of list) { out.set(b, off); off += b.byteLength; }
+  return out;
+}
+function bytesToBase64(u8) {
+  let bin = '';
+  const chunk = 0x7fff;
+  for (let i = 0; i < u8.length; i += chunk) {
+    bin += String.fromCharCode.apply(null, u8.subarray(i, i + chunk));
+  }
+  return btoa(bin);
+}
+function authOk(request, env) {
+  if (!env.CLOUD_PASSWORD) return true;
+  const a = request.headers.get('Authorization') || '';
+  if (a.replace(/^Bearer\s+/i, '').trim() === env.CLOUD_PASSWORD) return true;
+  return (new URL(request.url).searchParams.get('pwd') === env.CLOUD_PASSWORD);
+}
+function dispatcher(name) {
+  const h = { 'hash': 0 };
+  for (let i = 0; i < name.length; i++) h.hash = (h.hash * 31 + name.charCodeAt(i)) >>> 0;
+  return KV_BINDINGS[h.hash % KV_BINDINGS.length];
+}
 
-  if (!res.ok) throw new Error('GitHub proxy fetch failed: ' + res.status);
+/* ---- 文件结构树存储 ---- */
+async function readTree(env) {
+  const raw = await env.FILE_STRUCTURE_KV.get('root');
+  const tree = raw ? JSON.parse(raw) : {};
+  if (!tree['__v']) tree['__v'] = 1; // 兼容
+  return tree;
+}
+async function writeTree(env, tree) {
+  await env.FILE_STRUCTURE_KV.put('root', JSON.stringify(tree));
+}
+async function getEntryByPath(env, path) {
+  const t = await readTree(env);
+  return t[norm(path)] || null;
+}
+async function putMeta(env, entry) {
+  if (entry.ssid) await env.FILE_STRUCTURE_KV.put('ssid:' + entry.ssid, JSON.stringify(entry));
+}
+async function delMeta(env, entry) {
+  if (entry.ssid) await env.FILE_STRUCTURE_KV.delete('ssid:' + entry.ssid);
+}
+
+/* ---- 任务读写 ---- */
+async function getTask(env, id) {
+  const raw = await env.TASK_KV.get('task:' + id);
+  return raw ? JSON.parse(raw) : null;
+}
+async function putTask(env, task) {
+  await env.TASK_KV.put('task:' + task.id, JSON.stringify(task));
+}
+async function clearTaskData(env, id) {
+  const list = await env.TASK_KV.list({ prefix: 'tdata:' + id + ':' });
+  for (let i = 0; i < list.keys.length; i++) {
+    await env.TASK_KV.delete(list.keys[i].name);
+  }
+}
+
+/* 串行化目录树读改写，避免并行上传/操作时丢失更新（同一 isolate 内互斥） */
+let _treeMutex = Promise.resolve();
+function mutateTree(env, fn) {
+  const run = _treeMutex.then(async () => {
+    const t = await readTree(env);
+    const r = await fn(t);
+    await writeTree(env, t);
+    return r;
+  });
+  _treeMutex = run.then(() => {}, () => {});
+  return run;
+}
+
+/* =====================================================================
+ * GitHub 存储层
+ * ===================================================================== */
+function ghHeaders(token, jsonBody) {
+  const h = {
+    'Authorization': 'Bearer ' + token,
+    'Accept': 'application/vnd.github+json',
+    'User-Agent': 'netdisk-worker',
+    'X-GitHub-Api-Version': '2022-11-28',
+  };
+  if (jsonBody !== false) h['Content-Type'] = 'application/json';
+  return h;
+}
+async function ghCheck(res, tip) {
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error((tip || 'GitHub 请求失败') + ' ' + res.status + ': ' + t.slice(0, 200));
+  }
   return res;
 }
 
+async function createRepo(token, ssid) {
+  const res = await fetch('https://api.github.com/user/repos', {
+    method: 'POST',
+    headers: ghHeaders(token),
+    body: JSON.stringify({ name: ssid, description: 'netdisk file', private: false, auto_init: false, has_issues: false, has_wiki: false }),
+  });
+  await ghCheck(res, '创建 GitHub 仓库失败');
+  return 'main';
+}
+async function uploadBlob(token, ssid, base64) {
+  const res = await fetch('https://api.github.com/repos/' + OWNER + '/' + ssid + '/git/blobs', {
+    method: 'POST',
+    headers: ghHeaders(token),
+    body: JSON.stringify({ content: base64, encoding: 'base64' }),
+  });
+  await ghCheck(res, '上传分片失败');
+  const j = await res.json();
+  return j.sha;
+}
+async function finalizeRepo(token, ssid, treeItems) {
+  const branch = 'main';
+  const treeRes = await fetch('https://api.github.com/repos/' + OWNER + '/' + ssid + '/git/trees', {
+    method: 'POST', headers: ghHeaders(token),
+    body: JSON.stringify({ tree: treeItems }),
+  });
+  await ghCheck(treeRes, '创建 tree 失败');
+  const treeSha = (await treeRes.json()).sha;
 
+  const commitRes = await fetch('https://api.github.com/repos/' + OWNER + '/' + ssid + '/git/commits', {
+    method: 'POST', headers: ghHeaders(token),
+    body: JSON.stringify({ message: 'upload ' + ssid, tree: treeSha, parents: [] }),
+  });
+  await ghCheck(commitRes, '创建 commit 失败');
+  const commitSha = (await commitRes.json()).sha;
+
+  const refRes = await fetch('https://api.github.com/repos/' + OWNER + '/' + ssid + '/git/refs', {
+    method: 'POST', headers: ghHeaders(token),
+    body: JSON.stringify({ ref: 'refs/heads/' + branch, sha: commitSha }),
+  });
+  await ghCheck(refRes, '更新分支失败');
+  return treeItems.map((i) => i.path);
+}
+
+/* 将整个文件字节数组保存为 GitHub 分片（每片最终以 part_N 命名） */
+async function savePartsToGithub(env, ssid, bytes) {
+  const token = env.GITHUB_TOKEN;
+  if (!token) throw new Error('未配置 GITHUB_TOKEN');
+  await createRepo(token, ssid);
+  const items = [];
+  let list = [], sum = 0;
+  const flush = async () => {
+    const p = concatBytes(list, sum);
+    const b64 = bytesToBase64(p);
+    const sha = await uploadBlob(token, ssid, b64);
+    items.push({ path: 'part_' + (items.length), mode: '100644', type: 'blob', sha });
+    list = []; sum = 0;
+  };
+  let off = 0;
+  while (off < bytes.byteLength) {
+    const len = Math.min(PART_SIZE, bytes.byteLength - off);
+    list.push(bytes.slice(off, off + len));
+    sum += len;
+    off += len;
+    if (sum >= PART_SIZE) await flush();
+  }
+  if (sum > 0) await flush();
+  const chunkPaths = await finalizeRepo(token, ssid, items);
+  return { storage: 'github', repo: ssid, chunks: chunkPaths };
+}
+
+/* 流式下载：依次取每个分片 download_url 并拼接（支持大文件、不占内存） */
+async function githubStream(env, meta) {
+  const token = env.GITHUB_TOKEN;
+  const branch = 'main';
+  const paths = (meta.chunks && meta.chunks.length) ? meta.chunks : ['part_0'];
+  let i = 0;
+  const stream = new ReadableStream({
+    async pull(controller) {
+      if (i >= paths.length) { controller.close(); return; }
+      const part = paths[i++];
+      try {
+        const info = await fetch('https://api.github.com/repos/' + OWNER + '/' + (meta.repo || meta.ssid) + '/contents/' + part + '?ref=' + branch, {
+          headers: ghHeaders(token),
+        });
+        await ghCheck(info, '获取 download_url 失败');
+        const j = await info.json();
+        if (!j.download_url) throw new Error('无 download_url');
+        const r = await fetch(j.download_url, { headers: ghHeaders(token) });
+        if (!r.ok || !r.body) throw new Error('数据源拉取失败 ' + r.status);
+        const reader = r.body.getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          controller.enqueue(value);
+        }
+      } catch (e) { controller.error(e); }
+    },
+    cancel() {},
+  });
+  return stream;
+}
+
+/* 删除单个文件的线下存储 */
+async function removeFileStorage(env, e) {
+  try {
+    if (e.storage === 'kv') {
+      const kv = env[e.kvBinding];
+      if (kv) await kv.delete(e.kvKey);
+    } else if (e.storage === 'github') {
+      await fetch('https://api.github.com/repos/' + OWNER + '/' + (e.repo || e.ssid), {
+        method: 'DELETE', headers: ghHeaders(env.GITHUB_TOKEN),
+      });
+    }
+  } catch (err) { /* 忽略线下删除失败，元数据照常清理 */ }
+}
+
+/* =====================================================================
+ * 文件分发（下载 / 直链 / 预览）
+ * ===================================================================== */
+function disposition(value, name) {
+  return value + '; filename="' + (name.replace(/"/g, '')) + '"; filename*=UTF-8\'\'' + encodeURIComponent(name);
+}
+async function serveFile(request, env, ssid, mode) {
+  const raw = await env.FILE_STRUCTURE_KV.get('ssid:' + ssid);
+  if (!raw) return new Response('文件不存在或已删除', { status: 404 });
+  const meta = JSON.parse(raw);
+  const ct = meta.mime || mimeOf(meta.name);
+
+  let body;
+  let bodyLen = null;
+  if (meta.storage === 'kv') {
+    const kv = env[meta.kvBinding];
+    const buf = await kv.get(meta.kvKey, 'arrayBuffer');
+    if (buf == null) return new Response('存储数据丢失', { status: 410 });
+    body = buf;
+    bodyLen = buf.byteLength;
+  } else {
+    body = await githubStream(env, meta);
+  }
+
+  const headers = {
+    'Content-Type': ct,
+    'Content-Disposition': disposition(mode === 'inline' ? 'inline' : 'attachment', meta.name),
+    'Access-Control-Allow-Origin': '*',
+    'Cache-Control': 'public, max-age=3600',
+  };
+  if (bodyLen != null) headers['Content-Length'] = String(bodyLen);
+  return new Response(body, { headers });
+}
+
+/* ---- 分享页 ---- */
+async function serveShare(request, env, id) {
+  const raw = await env.FILE_STRUCTURE_KV.get('share:' + id);
+  if (!raw) return new Response('分享不存在或已失效', { status: 404, headers: { 'Content-Type': 'text/html;charset=utf-8' } });
+  const share = JSON.parse(raw);
+  const metaRaw = await env.FILE_STRUCTURE_KV.get('ssid:' + share.ssid);
+  if (!metaRaw) return new Response('文件已不存在', { status: 410, headers: { 'Content-Type': 'text/html;charset=utf-8' } });
+  const meta = JSON.parse(metaRaw);
+  const html = sharePageHTML(share.id, meta);
+  return new Response(html, { headers: { 'Content-Type': 'text/html;charset=utf-8' } });
+}
+
+/* =====================================================================
+ * 管理 API
+ * ===================================================================== */
+async function handleApi(request, env, ctx, url) {
+  if (!authOk(request, env)) return jsonErr('需要密码', 401);
+
+  const route = url.pathname.slice('/api/'.length).replace(/\/$/, '');
+  const isRawChunk = route === 'task/chunk';
+  const body = (request.method === 'POST' && !isRawChunk) ? await readJson(request) : null;
+
+  switch (route) {
+    case 'list': {                 /* GET /api/list?path=/            */
+      const dir = norm(url.searchParams.get('path') || '/');
+      const tree = await readTree(env);
+      const out = [];
+      for (const [p, e] of Object.entries(tree)) {
+        if (e.parent === dir) out.push(e);
+      }
+      out.sort((a, b) => (a.type === b.type) ? a.name.localeCompare(b.name, 'zh') : (a.type === 'folder' ? -1 : 1));
+      return json({ ok: true, type: 'dir', path: dir, entries: out });
+    }
+    case 'mkdir': {                /* POST {parent,name}               */
+      try {
+        const parent = norm(body.parent || '/');
+        const name = String(body.name || '').trim();
+        if (!name) return jsonErr('名称不能为空');
+        const path = joinPath(parent, name);
+        const entry = await mutateTree(env, (tree) => {
+          if (tree[path]) throw new Error('已存在同名文件/文件夹');
+          if (tree[parent] && tree[parent].type !== 'folder') throw new Error('父路径不是文件夹');
+          const e = { name, path, parent, type: 'folder', mtime: Date.now() };
+          tree[path] = e;
+          return e;
+        });
+        return json({ ok: true, entry });
+      } catch (e) { return jsonErr(e.message); }
+    }
+    case 'mkfile': {               /* POST {parent,name,content}        */
+      try {
+        const parent = norm(body.parent || '/');
+        const name = String(body.name || '').trim();
+        if (!name) return jsonErr('名称不能为空');
+        const content = String(body.content ?? '');
+        const path = joinPath(parent, name);
+        const bytes = new TextEncoder().encode(content);
+        const entry = await mutateTree(env, async (tree) => {
+          if (tree[path]) throw new Error('已存在同名文件/文件夹');
+          const e = await storeBytes(env, { parent, name, path }, bytes, name);
+          tree[path] = e;
+          return e;
+        });
+        return json({ ok: true, entry });
+      } catch (e) { return jsonErr(e.message); }
+    }
+    case 'rename': {               /* POST {path,newName}               */
+      try {
+        const path = norm(body.path || '');
+        const newName = String(body.newName || '').trim();
+        if (!path || path === '/' || !newName) return jsonErr('参数错误');
+        if (path === newName) return json({ ok: true });
+        const newPath = joinPath(dirname(path), newName);
+        await mutateTree(env, async (tree) => {
+          const entry = tree[path];
+          if (!entry) throw new Error('路径不存在');
+          if (tree[newPath]) throw new Error('目标已存在同名项');
+          entry.name = newName; entry.path = newPath; entry.parent = dirname(newPath); entry.mtime = Date.now();
+          delete tree[path]; tree[newPath] = entry;
+          if (entry.ssid) await putMeta(env, entry);
+          const moves = [];
+          for (const p of Object.keys(tree)) {
+            if (p.startsWith(path + '/')) moves.push(p);
+          }
+          for (const p of moves) {
+            const e = tree[p];
+            delete tree[p];
+            e.path = newPath + p.slice(path.length);
+            e.parent = dirname(e.path);
+            tree[e.path] = e;
+            if (e.ssid) await putMeta(env, e);
+          }
+        });
+        return json({ ok: true });
+      } catch (e) { return jsonErr(e.message); }
+    }
+    case 'delete': {               /* POST {path}  递归删除             */
+      try {
+        const path = norm(body.path || '');
+        if (!path || path === '/') return jsonErr('不能删除根目录');
+        const deleted = await mutateTree(env, async (tree) => {
+          const targets = [];
+          for (const p of Object.keys(tree)) {
+            if (p === path || p.startsWith(path + '/')) targets.push(tree[p]);
+          }
+          if (!targets.length) throw new Error('路径不存在');
+          for (const e of targets) {
+            await removeFileStorage(env, e);
+            await delMeta(env, e);
+            delete tree[e.path];
+          }
+          return targets.length;
+        });
+        return json({ ok: true, deleted });
+      } catch (e) { return jsonErr(e.message); }
+    }
+    case 'content': {              /* GET /api/content?path=            */
+      const path = norm(url.searchParams.get('path') || '');
+      const tree = await readTree(env);
+      const entry = tree[path];
+      if (!entry || entry.type !== 'file') return jsonErr('非文件');
+      const ct = entry.mime || mimeOf(entry.name);
+      if (!isTextual(ct)) return jsonErr('非文本文件', 400);
+      const txt = await readText(env, entry);
+      return json({ ok: true, entry, content: txt });
+    }
+    case 'save': {                 /* POST {path, content}               */
+      try {
+        const path = norm(body.path || '');
+        await mutateTree(env, async (tree) => {
+          const entry = tree[path];
+          if (!entry || entry.type !== 'file') throw new Error('非文件');
+          if (entry.storage !== 'kv') throw new Error('仅支持 KV 存储的小型文本文件在线编辑');
+          const bytes = new TextEncoder().encode(String(body.content ?? ''));
+          const kv = env[entry.kvBinding];
+          await kv.put(entry.kvKey, bytes);
+          entry.size = bytes.byteLength; entry.mtime = Date.now();
+          if (entry.ssid) await putMeta(env, entry);
+        });
+        return json({ ok: true });
+      } catch (e) { return jsonErr(e.message); }
+    }
+    case 'share': {                /* POST {path}  => {url}              */
+      const path = norm(body.path || '');
+      const tree = await readTree(env);
+      const entry = tree[path];
+      if (!entry || entry.type !== 'file') return jsonErr('只能分享文件');
+      const sid = randomId(14);
+      await env.FILE_STRUCTURE_KV.put('share:' + sid, JSON.stringify({ id: sid, ssid: entry.ssid, name: entry.name }));
+      return json({ ok: true, url: '/s/' + sid });
+    }
+    /* ---------------- 任务（上传） ---------------- */
+    case 'task/start': {
+      const parent = norm(body.parent || '/');
+      const name = String(body.name || '').trim();
+      const size = Number(body.size) || 0;
+      if (!name) return jsonErr('文件名不能为空');
+      if (!size) return jsonErr('文件为空');
+      const id = randomId(16);
+      const task = {
+        id, name, parent, path: joinPath(parent, name), size,
+        bytesReceived: 0, slices: 0, status: 'uploading',
+        stage: '等待上传', error: '', createdAt: Date.now(), updatedAt: Date.now(), finishedAt: 0,
+      };
+      await putTask(env, task);
+      return json({ ok: true, taskId: id });
+    }
+    case 'task/chunk': {           /* POST /api/task/chunk?task=&index=  原始二进制 body */
+      const id = url.searchParams.get('task');
+      const idx = Number(url.searchParams.get('index'));
+      const task = await getTask(env, id);
+      if (!task) return jsonErr('任务不存在', 404);
+      if (task.status !== 'uploading') return jsonErr('任务已完成或已取消');
+      const buf = await request.arrayBuffer();
+      await env.TASK_KV.put('tdata:' + id + ':' + idx, buf);       // 分片暂存 KV
+      task.bytesReceived += buf.byteLength;
+      task.slices = idx + 1;
+      task.stage = '上传到服务器';
+      task.updatedAt = Date.now();
+      await putTask(env, task);
+      return json({ ok: true, bytesReceived: task.bytesReceived, size: task.size });
+    }
+    case 'task/complete': {        /* POST /api/task/complete?task=     */
+      const id = url.searchParams.get('task');
+      const task = await getTask(env, id);
+      if (!task) return jsonErr('任务不存在', 404);
+      if (task.status !== 'uploading') return jsonErr('任务状态异常');
+      try {
+        task.stage = '处理文件，上传服务器'; task.status = 'processing'; task.updatedAt = Date.now();
+        await putTask(env, task);
+        const entry = await assembleAndStore(env, task);
+        task.status = 'done'; task.stage = '完成'; task.finishedAt = Date.now();
+        await putTask(env, task);
+        await clearTaskData(env, id);
+        return json({ ok: true, entry });
+      } catch (e) {
+        task.status = 'error'; task.error = String(e.message || e); task.stage = '失败';
+        await putTask(env, task);
+        return jsonErr('处理失败：' + e.message, 500);
+      }
+    }
+    case 'task/cancel': {          /* POST /api/task/cancel?task=       */
+      const id = url.searchParams.get('task');
+      const task = await getTask(env, id);
+      if (task) {
+        task.status = 'cancelled'; task.stage = '已取消';
+        await putTask(env, task);
+        await clearTaskData(env, id);
+      }
+      return json({ ok: true });
+    }
+    case 'task/delete': {          /* DELETE /api/task/delete?task=     */
+      const id = url.searchParams.get('task');
+      await clearTaskData(env, id);
+      await env.TASK_KV.delete('task:' + id);
+      return json({ ok: true });
+    }
+    case 'task/list': {
+      const list = await env.TASK_KV.list({ prefix: 'task:' });
+      const tasks = [];
+      for (const k of list.keys) {
+        const raw = await env.TASK_KV.get(k.name);
+        if (raw) tasks.push(JSON.parse(raw));
+      }
+      tasks.sort((a, b) => b.createdAt - a.createdAt);
+      return json({ ok: true, tasks });
+    }
+    default:
+      return jsonErr('未知接口 /api/' + route, 404);
+  }
+}
+
+async function readJson(request) {
+  const t = await request.text();
+  if (!t) return {};
+  try { return JSON.parse(t); } catch (e) { return {}; }
+}
+
+/* 组装分片并决定写入 KV 或 GitHub */
+async function assembleAndStore(env, task) {
+  // 读取全部分片
+  const list = [];
+  let total = 0;
+  for (let i = 0; i < task.slices; i++) {
+    const ab = await env.TASK_KV.get('tdata:' + task.id + ':' + i, 'arrayBuffer');
+    if (ab == null) throw new Error('分片缺失：' + i);
+    const u = new Uint8Array(ab);
+    list.push(u); total += u.byteLength;
+  }
+  const bytes = concatBytes(list, total);
+  task.stage = '写入底层存储';
+  await putTask(env, task);
+
+  const ssid = makeSsid();
+  let storage, repo, kvBinding, kvKey, chunks;
+  if (total < KV_THRESHOLD) {
+    kvBinding = dispatcher(ssid);
+    kvKey = 'file:' + ssid;
+    await env[kvBinding].put(kvKey, bytes);
+    storage = 'kv';
+  } else {
+    const r = await savePartsToGithub(env, ssid, bytes);
+    storage = r.storage; repo = r.repo; chunks = r.chunks;
+  }
+  // 更新文件结构树（使用串行化互斥，避免并行完成的任务丢失更新）
+  const entry = await mutateTree(env, async (tree) => {
+    if (tree[task.path]) throw new Error('存在同名文件，请先重命名');
+    const e = {
+      name: task.name, path: task.path, parent: task.parent, type: 'file',
+      size: total, mtime: Date.now(), mime: mimeOf(task.name),
+      storage, ssid, repo: repo || null, chunks: chunks || null,
+      kvBinding: kvBinding || null, kvKey: kvKey || null,
+    };
+    tree[task.path] = e;
+    await putMeta(env, e);
+    return e;
+  });
+  return entry;
+}
+
+/* 由 storeBytes 使用（mkfile 等小文本直存 KV） */
+async function storeBytes(env, info, bytes, name) {
+  const ssid = makeSsid();
+  let entry;
+  if (bytes.byteLength < KV_THRESHOLD) {
+    const kvBinding = dispatcher(ssid);
+    const kvKey = 'file:' + ssid;
+    await env[kvBinding].put(kvKey, bytes);
+    entry = { ...info, type: 'file', size: bytes.byteLength, mtime: Date.now(), mime: mimeOf(name), storage: 'kv', ssid, kvBinding, kvKey, repo: null, chunks: null };
+  } else {
+    const r = await savePartsToGithub(env, ssid, bytes);
+    entry = { ...info, type: 'file', size: bytes.byteLength, mtime: Date.now(), mime: mimeOf(name), storage: 'github', ssid, repo: r.repo, chunks: r.chunks, kvBinding: null, kvKey: null };
+  }
+  await putMeta(env, entry);
+  return entry;
+}
+
+async function readText(env, entry) {
+  if (entry.storage === 'kv') {
+    const kv = env[entry.kvBinding];
+    const buf = await kv.get(entry.kvKey, 'arrayBuffer');
+    if (buf == null) return '';
+    return new TextDecoder().decode(buf);
+  }
+  // GitHub 文本：拉取第一个分片解码
+  if (entry.chunks && entry.chunks.length) {
+    const token = env.GITHUB_TOKEN;
+    const info = await fetch('https://api.github.com/repos/' + OWNER + '/' + (entry.repo || entry.ssid) + '/contents/' + entry.chunks[0] + '?ref=main', { headers: ghHeaders(token) });
+    await ghCheck(info, '读取失败');
+    const j = await info.json();
+    if (j.download_url) {
+      const r = await fetch(j.download_url, { headers: ghHeaders(token) });
+      const b = await r.arrayBuffer();
+      return new TextDecoder().decode(b);
+    }
+  }
+  return '';
+}
+
+/* =====================================================================
+ * 前端资源
+ * ===================================================================== */
+function sharePageHTML(id, meta) {
+  const ct = meta.mime || mimeOf(meta.name);
+  const preview = previewBlock(meta.ssid, meta.name, ct);
+  return '<!doctype html><html lang="zh"><head><meta charset="utf-8">'
+    + '<meta name="viewport" content="width=device-width,initial-scale=1">'
+    + '<title>分享 · ' + escHtml(meta.name) + '</title>'
+    + '<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">'
+    + '<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">'
+    + '<style>' + SHARE_CSS + '</style></head><body>'
+    + '<div class="card"><div class="head"><span class="mi">share</span><div><div class="t">文件分享</div><div class="sub">' + escHtml(meta.name) + ' · ' + fmtSize(meta.size) + '</div></div></div>'
+    + '<div class="prev">' + preview + '</div>'
+    + '<a class="btn" href="/dl/' + escAttr(meta.ssid) + '"><span class="mi">download</span>下载文件</a>'
+    + '</div></body></html>';
+}
+
+function fmtSize(n) {
+  if (n == null) return '-';
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+  if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
+  return (n / 1073741824).toFixed(2) + ' GB';
+}
+function escHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function escAttr(s) {
+  return escHtml(s).replace(/'/g, '&#39;');
+}
+
+/* 预览区块（分享页 / 详情页共用逻辑，由前端 JS 也实现） */
+function previewBlock(ssid, name, ct) {
+  if (ct.startsWith('image/')) return '<img class="pv" src="/p/' + ssid + '" alt="">';
+  if (ct.startsWith('video/')) return '<video class="pv" src="/p/' + ssid + '" controls></video>';
+  if (ct.startsWith('audio/')) return '<audio class="pv" src="/p/' + ssid + '" controls></audio>';
+  if (isTextual(ct)) return '<iframe class="pv" src="/p/' + ssid + '"></iframe>';
+  if (ct.indexOf('zip') >= 0 || ct.indexOf('rar') >= 0 || ct.indexOf('tar') >= 0 || ct.indexOf('7z') >= 0)
+    return '<div class="pvn"><span class="mi">archive</span><div>压缩包无法在线预览，请下载后查看</div></div>';
+  return '<div class="pvn"><span class="mi">insert_drive_file</span><div>该类型暂不支持在线预览</div></div>';
+}
+
+const SHARE_CSS = `
+:root{--pri:#6200ee;--pri2:#7c4dff;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Roboto,"PingFang SC","Microsoft YaHei",sans-serif;background:#f3f1f8;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
+.card{background:#fff;border-radius:16px;box-shadow:0 8px 30px rgba(0,0,0,.12);width:100%;max-width:640px;overflow:hidden}
+.head{display:flex;gap:14px;align-items:center;padding:22px 24px;background:linear-gradient(135deg,var(--pri),var(--pri2));color:#fff}
+.head .mi{font-size:34px}
+.t{font-size:18px;font-weight:500}
+.sub{font-size:13px;opacity:.9;word-break:break-all}
+.prev{width:100%;background:#000}
+.pv{width:100%;max-height:420px;object-fit:contain;display:block}
+.audio,.video{width:100%}
+.pvn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:60px 20px;color:#666;background:#fafafa}
+.pvn .mi{font-size:56px;color:#bbb}
+.btn{display:flex;align-items:center;justify-content:center;gap:8px;margin:20px auto;padding:13px 30px;background:var(--pri);color:#fff;border:none;border-radius:28px;font-size:15px;text-decoration:none;cursor:pointer;width:fit-content;transition:.2s}
+.btn:hover{background:var(--pri2)}
+`;
+
+/* =====================================================================
+ * 管理页 SPA（Material Design）。下方所有字符串均避免使用反引号。
+ * ===================================================================== */
+function managerHTML() {
+  return '<!doctype html><html lang="zh"><head><meta charset="utf-8">'
+  + '<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">'
+  + '<title>NetDisk 网盘</title>'
+  + '<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">'
+  + '<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">'
+  + '<style>' + MANAGER_CSS + '</style></head><body>'
+  + '<div id="app"></div>'
+  + '<div id="lock" class="lock" style="display:none"><div class="lockcard"><span class="mi lg">lock</span>'
+  + '<div class="lt">网盘已加锁</div><div class="ls">请输入访问密码</div>'
+  + '<input id="pwd" class="tin" type="password" placeholder="访问密码">'
+  + '<button class="btn f" onclick="tryLogin()"><span class="mi">arrow_forward</span>解锁</button>'
+  + '<div id="loberr" class="lerr"></div></div></div>'
+  + '<div id="snack" class="snack"></div>'
+  + '<script>' + MANAGER_JS + '</script></body></html>';
+}
+
+const MANAGER_JS = `
+(function () {
+  'use strict';
+  var state = {
+    path: '/',
+    entries: [],
+    token: window.localStorage.getItem('nd_pwd') || '',
+    tasks: [],
+    taskTimers: {},
+    dt: {}
+  };
+  var app = document.getElementById('app');
+  var base = {};
+
+  function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
+  function fmtSize(n) { n = Number(n) || 0; if (n < 1024) return n + ' B'; if (n < 1048576) return (n / 1024).toFixed(1) + ' KB'; if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB'; return (n / 1073741824).toFixed(2) + ' GB'; }
+  function iconOf(e) {
+    if (e.type === 'folder') return 'folder';
+    var m = (e.mime || '').toLowerCase();
+    if (m && m.indexOf('image') === 0) return 'image';
+    if (m && m.indexOf('video') === 0) return 'movie';
+    if (m && m.indexOf('audio') === 0) return 'music_note';
+    if (m && m.indexOf('zip') >= 0 || m.indexOf('rar') >= 0 || m.indexOf('7z') >= 0) return 'folder_zip';
+    if (m && m.indexOf('text') === 0 || m.indexOf('json') >= 0 || m.indexOf('xml') >= 0) return 'description';
+    return 'insert_drive_file';
+  }
+  function colorOf(e) {
+    if (e.type === 'folder') return '#ffb300';
+    var m = (e.mime || '').toLowerCase();
+    if (m && m.indexOf('image') === 0) return '#8e24aa';
+    if (m && m.indexOf('video') === 0) return '#e53935';
+    if (m && m.indexOf('audio') === 0) return '#00897b';
+    if (m && m.indexOf('text') === 0 || m.indexOf('json') >= 0) return '#3949ab';
+    return '#757575';
+  }
+  function api(path, opts) {
+    opts = opts || {};
+    var headers = opts.headers || {};
+    headers['Authorization'] = 'Bearer ' + state.token;
+    if (opts.body && !(opts.body instanceof ArrayBuffer) && typeof opts.body !== 'string') headers['Content-Type'] = 'application/json';
+    return fetch(path, Object.assign({}, opts, { headers: headers })).then(function (r) {
+      if (r.status === 401) { lock(true); throw new Error('auth'); }
+      return r.json().catch(function () { return { ok: false, error: 'bad response' }; });
+    });
+  }
+  function snack(msg, color) {
+    var s = document.getElementById('snack');
+    s.textContent = msg;
+    s.style.background = color || '#333';
+    s.className = 'snack show';
+    clearTimeout(s._t);
+    s._t = setTimeout(function () { s.className = 'snack'; }, 2600);
+  }
+
+  /* ------- 登录 / 锁屏 ------- */
+  function lock(show) {
+    document.getElementById('lock').style.display = show ? 'flex' : 'none';
+  }
+  function tryLogin() {
+    var v = document.getElementById('pwd').value.trim();
+    if (!v) return;
+    state.token = v;
+    testAuth().then(function (ok) {
+      if (ok) { window.localStorage.setItem('nd_pwd', v); lock(false); loadList(); startPollTasks(); }
+      else { document.getElementById('loberr').textContent = '密码错误'; }
+    });
+  }
+  function testAuth() {
+    return api('/api/list?path=/').then(function () { return true; })
+      .catch(function () { return false; });
+  }
+
+  /* ------- 渲染 ------- */
+  function render() {
+    if (state.view === 'file') { renderDetail(); return; }
+    if (state.view === 'tasks') { renderTasks(); return; }
+    renderList();
+  }
+  function renderList() {
+    var crumbs = state.path.split('/').filter(Boolean);
+    var cr = '<div class="crumbs">';
+    cr += '<button class="crumb" onclick="nav(\'/\')">首页</button>';
+    var acc = '';
+    crumbs.forEach(function (c, i) {
+      acc += '/' + c;
+      cr += '<span class="sep">/</span><button class="crumb" onclick="nav(' + JSON.stringify(acc) + ')">' + esc(c) + '</button>';
+    });
+    cr += '</div>';
+    if (crumbs.length) cr += '<button class="cb" onclick="nav(\'' + escAttrUp(state.path) + '\')"><span class="mi">arrow_upward</span>返回上级</button>';
+
+    var html = cr + '<div class="list" id="list">';
+    if (!state.entries.length) html += '<div class="empty"><span class="mi">inbox</span><div>此文件夹为空</div></div>';
+    state.entries.forEach(function (e) { html += rowHtml(e); });
+    html += '</div>';
+    app.innerHTML = '<div class="ab"><span class="mi lg">cloud</span><div><div class="abt">NetDisk 网盘</div><div class="abs">' + esc(state.path) + '</div></div></div>'
+      + '<main class="main" id="main">' + html + '</main>'
+      + '<div class="nb"><button class="fab sm" onclick="showTasks()"><span class="mi">list_alt</span><i>任务</i></button>'
+      + '<button class="fab big" onclick="showNew()"><span class="mi add">+</span><i>新建</i></button>'
+      + '<button class="fab sm" onclick="document.getElementById(\'up_in\').click()"><span class="mi">upload</span><i>上传</i></button></div>'
+      + '<input type="file" id="up_in" multiple style="display:none" onchange="onFilePick(this.files)">'
+      + '<input type="file" id="up_dir" webkitdirectory multiple style="display:none" onchange="onDirPick(this.files)">'
+      + '<div class="sheet" id="sheet"></div>';
+    bindList();
+  }
+  function escAttrUp(p) { return JSON.stringify(dirname(p)).replace(/"/g, '&quot;'); }
+  function dirname(p) { if (!p || p === '/' || p.indexOf('/') < 0) return '/'; var i = p.lastIndexOf('/'); return p.slice(0, i) || '/'; }
+  function rowHtml(e) {
+    var actions = '';
+    if (e.type === 'folder') {
+      actions = '<button class="act" onclick="onRename(\'' + escAttr(e.path) + '\')"><span class="mi">edit</span><b>重命名</b></button>'
+        + '<button class="act dng" onclick="onDelete(\'' + escAttr(e.path) + '\')"><span class="mi">delete</span><b>删除</b></button>';
+    } else {
+      actions = '<button class="act" onclick="onDelete(\'' + escAttr(e.path) + '\')"><span class="mi">delete</span><b>删除</b></button>'
+        + '<button class="act" onclick="onShare(\'' + escAttr(e.path) + '\')"><span class="mi">share</span><b>分享</b></button>'
+        + '<button class="act" onclick="onRename(\'' + escAttr(e.path) + '\')"><span class="mi">edit</span><b>重命名</b></button>'
+        + '<button class="act" onclick="dl(\'' + escAttr(e.ssid) + '\')"><span class="mi">download</span><b>下载</b></button>';
+    }
+    var size = e.type === 'folder' ? '文件夹' : fmtSize(e.size);
+    var d = new Date(e.mtime || Date.now());
+    var ds = (d.getMonth() + 1) + '-' + d.getDate() + ' ' + ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+    return '<div class="row" onclick="openEntry(\'' + escAttr(e.path) + '\',\'' + e.type + '\')">'
+      + '<span class="fic mi" style="color:' + colorOf(e) + '">' + iconOf(e) + '</span>'
+      + '<div class="meta"><div class="nm">' + esc(e.name) + '</div><div class="sn">' + size + ' · ' + ds + '</div></div>'
+      + '<div class="acts" onclick="event.stopPropagation()">' + actions + '</div></div>';
+  }
+  function bindList() {
+    // 事件已内联绑定，此函数占位
+  }
+
+  /* ------- 导航 ------- */
+  window.nav = function (p) { state.path = p; state.view = 'list'; loadList(); };
+  window.openEntry = function (p, type) {
+    if (type === 'folder') { state.path = p.replace(/\/$/, ''); loadList(); return; }
+    state.current = p; state.view = 'file'; render();
+  };
+  function loadList() {
+    api('/api/list?path=' + encodeURIComponent(state.path)).then(function (d) {
+      if (!d.ok) { snack(d.error || '加载失败', '#c62828'); return; }
+      state.entries = d.entries; render();
+    });
+  }
+
+  /* ------- 详情页 ------- */
+  function renderDetail() {
+    var p = state.current;
+    api('/api/list?path=' + encodeURIComponent(dirname(p))).then(function (d) {
+      if (!d.ok) return;
+      var entry = null;
+      d.entries.forEach(function (e) { if (e.path === p) entry = e; });
+      if (!entry) { state.view = 'list'; loadList(); return; }
+      var editable = entry.storage === 'kv' && isText(entry.mime);
+      app.innerHTML = '<div class="ab"><button class="abb" onclick="back()"><span class="mi">arrow_back</span></button>'
+        + '<div><div class="abt">' + esc(entry.name) + '</div><div class="abs">详情 · ' + fmtSize(entry.size) + '</div></div></div>'
+        + '<main class="main"><div class="dt">'
+        + detailPreview(entry)
+        + '<div class="dtacts">'
+        + '<button class="act" onclick="dl(\'' + escAttr(entry.ssid) + '\')"><span class="mi">download</span><b>下载</b></button>'
+        + '<button class="act" onclick="onShare(\'' + escAttr(entry.path) + '\')"><span class="mi">share</span><b>分享</b></button>'
+        + '<button class="act" onclick="onRename(\'' + escAttr(entry.path) + '\')"><span class="mi">edit</span><b>重命名</b></button>'
+        + '<button class="act dng" onclick="onDelete(\'' + escAttr(entry.path) + '\')"><span class="mi">delete</span><b>删除</b></button>'
+        + (editable ? '<button class="act go" onclick="editText(\'' + escAttr(entry.path) + '\')"><span class="mi">edit_note</span><b>编辑</b></button>' : '')
+        + '</div></div></main>';
+    });
+  }
+  function detailPreview(e) {
+    var m = e.mime || '';
+    if (m.indexOf('image') === 0) return '<div class="pvbox"><img src="/p/' + escAttr(e.ssid) + '"></div>';
+    if (m.indexOf('video') === 0) return '<div class="pvbox"><video src="/p/' + escAttr(e.ssid) + '" controls></video></div>';
+    if (m.indexOf('audio') === 0) return '<div class="pvbox aud"><audio src="/p/' + escAttr(e.ssid) + '" controls></audio></div>';
+    if (isText(m)) return '<div class="pvbox txt"><iframe src="/p/' + escAttr(e.ssid) + '"></iframe></div>';
+    if (m.indexOf('zip') >= 0 || m.indexOf('rar') >= 0 || m.indexOf('7z') >= 0 || m.indexOf('tar') >= 0) return '<div class="pvn2"><span class="mi">archive</span><div>压缩包无法预览</div></div>';
+    return '<div class="pvn2"><span class="mi">insert_drive_file</span><div>该类型暂不支持在线预览</div></div>';
+  }
+  function isText(m) { m = (m || '').toLowerCase(); return m.indexOf('text') === 0 || m.indexOf('json') >= 0 || m.indexOf('xml') >= 0 || m.indexOf('javascript') >= 0 || m.indexOf('svg') >= 0; }
+  window.back = function () { state.view = 'list'; loadList(); };
+
+  /* ------- 文本编辑 ------- */
+  window.editText = function (p) {
+    api('/api/content?path=' + encodeURIComponent(p)).then(function (d) {
+      if (!d.ok) { snack(d.error || '读取失败', '#c62828'); return; }
+      var url = new URL('/api/save', location.href).href;
+      app.innerHTML = '<div class="ab"><button class="abb" onclick="back()"><span class="mi">arrow_back</span></button><div><div class="abt">编辑文本</div><div class="abs">' + esc(d.entry.name) + '</div></div>'
+        + '<button class="saveb" onclick="saveText()"><span class="mi">save</span>保存</button></div>'
+        + '<main class="main" style="padding:0"><textarea class="editor" id="ed">' + esc(d.content) + '</textarea></main>';
+      state.editPath = p;
+    });
+  };
+  window.saveText = function () {
+    var c = document.getElementById('ed').value;
+    api('/api/save', { method: 'POST', body: JSON.stringify({ path: state.editPath, content: c }) }).then(function (d) {
+      if (!d.ok) { snack(d.error || '保存失败', '#c62828'); return; }
+      snack('已保存'); back();
+    });
+  };
+
+  /* ------- 文件操作：重命名 / 删除 / 分享 ------- */
+  window.onRename = function (p) {
+    var old = p.split('/').pop();
+    var nm = prompt('重命名为：', old);
+    if (!nm) return;
+    api('/api/rename', { method: 'POST', body: JSON.stringify({ path: p, newName: nm }) }).then(function (d) {
+      if (!d.ok) { snack(d.error || '重命名失败', '#c62828'); return; }
+      snack('已重命名'); state.view = 'list'; loadList();
+    });
+  };
+  window.onDelete = function (p) {
+    if (!confirm('确定删除 "' + p.split('/').pop() + '" 吗？删除后不可恢复。')) return;
+    api('/api/delete', { method: 'POST', body: JSON.stringify({ path: p }) }).then(function (d) {
+      if (!d.ok) { snack(d.error || '删除失败', '#c62828'); return; }
+      snack('已删除'); state.view = 'list'; loadList();
+    });
+  };
+  window.onShare = function (p) {
+    api('/api/share', { method: 'POST', body: JSON.stringify({ path: p }) }).then(function (d) {
+      if (!d.ok) { snack(d.error || '创建分享失败', '#c62828'); return; }
+      var link = location.origin + d.url;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(link).then(function () { snack('分享链接已复制'); }, function () { prompt('分享链接：', link); });
+      } else { prompt('分享链接：', link); }
+    });
+  };
+  window.dl = function (ssid) { window.open('/dl/' + ssid, '_blank'); };
+
+  /* ------- 新建 ------- */
+  window.showNew = function () {
+    var s = document.getElementById('sheet');
+    s.innerHTML = '<div class="mask" onclick="closeSheet()"></div><div class="sb">'
+      + '<div class="sbt">新建</div>'
+      + '<button class="srow" onclick="newFolder()"><span class="mi" style="color:#ffb300">create_new_folder</span><b>新建文件夹</b></button>'
+      + '<button class="srow" onclick="newText()"><span class="mi" style="color:#3949ab">note_add</span><b>新建文本文件</b></button>'
+      + '</div>';
+    s.style.display = 'block';
+  };
+  window.closeSheet = function () { document.getElementById('sheet').style.display = 'none'; };
+  window.newFolder = function () {
+    var nm = prompt('文件夹名称：'); if (!nm) return;
+    api('/api/mkdir', { method: 'POST', body: JSON.stringify({ parent: state.path, name: nm }) }).then(function (d) {
+      if (!d.ok) { snack(d.error || '创建失败', '#c62828'); return; }
+      closeSheet(); snack('已创建文件夹'); loadList();
+    });
+  };
+  window.newText = function () {
+    var nm = prompt('文本文件名：', '新建文本.txt'); if (!nm) return;
+    api('/api/mkfile', { method: 'POST', body: JSON.stringify({ parent: state.path, name: nm, content: '' }) }).then(function (d) {
+      if (!d.ok) { snack(d.error || '创建失败', '#c62828'); return; }
+      closeSheet(); snack('已创建'); loadList(); editText(state.path + '/' + nm);
+    });
+  };
+
+  /* ------- 上传 ------- */
+  window.onFilePick = function (files) {
+    var arr = Array.prototype.slice.call(files);
+    arr.forEach(function (f) { startUpload(f, state.path); });
+    showTasks();
+  };
+  window.onDirPick = function (files) {
+    var arr = Array.prototype.slice.call(files);
+    var map = {};
+    arr.forEach(function (f) { map[(f.webkitRelativePath || f.name)] = f; });
+    var root = (arr[0] && arr[0].webkitRelativePath) ? arr[0].webkitRelativePath.split('/')[0] : null;
+    arr.forEach(function (f) {
+      var rel = f.webkitRelativePath || f.name;
+      startUpload(f, root ? state.path + '/' + root : state.path, rel);
+    });
+    showTasks();
+  };
+  function startUpload(file, basePath, rel) {
+    var name = file.name;
+    var parent = basePath;
+    var relPath = rel || '';
+    var parts = relPath ? relPath.split('/') : [];
+    var subDirs = parts.slice(1, -1);
+    var chain = Promise.resolve();
+    subDirs.forEach(function (dir) {
+      chain = chain.then(function () {
+        return api('/api/mkdir', { method: 'POST', body: JSON.stringify({ parent: parent, name: dir }) })
+          .then(function (d) { if (d.ok) parent = d.entry.path; else parent = parent + '/' + dir; })
+          .catch(function () { parent = parent + '/' + dir; });
+      });
+    });
+    chain.then(function () {
+      api('/api/task/start', { method: 'POST', body: JSON.stringify({ parent: parent, name: name, size: file.size }) }).then(function (d) {
+        if (!d.ok) { snack(d.error || '启动上传失败', '#c62828'); return; }
+        var task = { id: d.taskId, name: name, parent: parent, size: file.size, done: 0, speed: 0, cancel: false, file: file, rel: rel, startKey: parent };
+        state.tasks.unshift(task);
+        uploadLoop(task);
+        renderTasks();
+      });
+    }).catch(function (e) { snack(e.message || '上传失败', '#c62828'); });
+  }
+  function uploadLoop(task) {
+    var SLICE = 4 * 1024 * 1024;
+    var pos = 0;
+    var startT = Date.now();
+    var startB = 0;
+    var step = function () {
+      if (task.cancel) { api('/api/task/cancel?task=' + task.id); return; }
+      if (pos >= task.file.size) {
+        api('/api/task/complete?task=' + task.id).then(function (d) {
+          if (d.ok) { task.stage = '处理完成'; task.progress = 100; }
+          else { task.error = d.error || '处理失败'; task.stage = '失败'; }
+          renderTasks();
+          if (d.ok) { reloadIfUnder(task.rel); }
+        }).catch(function () { task.error = '网络错误'; task.stage = '失败'; renderTasks(); });
+        return;
+      }
+      var end = Math.min(pos + SLICE, task.file.size);
+      var bl = task.file.slice(pos, end);
+      var now = Date.now();
+      var dur = (now - startT) / 1000;
+      bl.arrayBuffer().then(function (buf) {
+        var mark = Date.now();
+        return fetch('/api/task/chunk?task=' + task.id + '&index=' + Math.floor(pos / SLICE), {
+          method: 'POST', headers: { 'Authorization': 'Bearer ' + state.token },
+          body: buf
+        }).then(function () {
+          var dt = (Date.now() - mark) / 1000;
+          task.done = end;
+          task.stage = '上传到服务器';
+          var local = task.done / task.size * 100;
+          task.progress = Math.round(local * 100) / 100;
+          var inst = (task.done - startB) / (dur > 0 ? dur : 1);
+          task.speed = inst > 0 ? inst : 0; // bytes/sec
+          if ((Date.now() - startT) > 2000) { startT = Date.now(); startB = task.done; }
+          renderTasks();
+          if (!task.cancel) step();
+        }).catch(function () { if (!task.cancel) { task.error = '上传中断'; task.stage = '失败'; renderTasks(); } });
+      });
+    };
+    step();
+  }
+  function reloadIfUnder(rel) { if (!rel) loadList(); }
+
+  /* ------- 任务面板 ------- */
+  window.showTasks = function () { state.view = 'tasks'; render(); };
+  function renderTasks() {
+    var html = '<div class="ab"><button class="abb" onclick="back()"><span class="mi">arrow_back</span></button><div><div class="abt">上传任务</div><div class="abs">' + state.tasks.length + ' 个任务</div></div></div><main class="main"><div class="list">';
+    if (!state.tasks.length) html += '<div class="empty"><span class="mi">check_circle</span><div>暂无任务</div></div>';
+    state.tasks.forEach(function (t) { html += taskRow(t); });
+    html += '</div></main>';
+    app.innerHTML = html;
+  }
+  function taskRow(t) {
+    var p = Math.round((t.progress || 0) * 100) / 100;
+    var stColor = t.stage === '失败' ? '#c62828' : (t.stage === '已取消' ? '#757575' : '#00897b');
+    var showDel = (t.stage === '失败' || t.stage === '已取消' || t.progress === 100);
+    var cancelBtn = ((!showDel) && t.stage !== '处理完成') ? '<button class="act" onclick="cancelTask(\'' + t.id + '\')"><span class="mi">close</span><b>取消</b></button>' : '';
+    var delBtn = showDel ? '<button class="act" onclick="delTask(\'' + t.id + '\')"><span class="mi">delete</span><b>删除</b></button>' : '';
+    var spd = t.speed ? fmtSize(t.speed) + '/s' : '';
+    return '<div class="row task">'
+      + '<span class="fic mi" style="color:#00897b">upload_file</span>'
+      + '<div class="meta"><div class="nm">' + esc(t.name) + '</div>'
+      + '<div class="prog"><div class="bar" style="width:' + p + '%"></div></div>'
+      + '<div class="sn">' + esc(t.stage || '') + ' · ' + p.toFixed(1) + '% · ' + fmtSize(t.done || 0) + '/' + fmtSize(t.size) + (spd ? ' · ' + spd : '') + '</div>'
+      + (t.error ? '<div class="sn" style="color:#c62828">' + esc(t.error) + '</div>' : '')
+      + '</div><div class="acts">' + cancelBtn + delBtn + '</div></div>';
+  }
+  window.cancelTask = function (id) {
+    state.tasks.forEach(function (t) { if (t.id === id) t.cancel = true; });
+  };
+  window.delTask = function (id) {
+    api('/api/task/delete?task=' + id).then(function () {
+      state.tasks = state.tasks.filter(function (t) { return t.id !== id; });
+      renderTasks();
+    });
+  };
+  function startPollTasks() {
+    setInterval(function () {
+      api('/api/task/list').then(function (d) {
+        if (!d.ok) return;
+        // 同步服务端状态到本地上传线程
+        d.tasks.forEach(function (s) {
+          state.tasks.forEach(function (l) { if (l.id === s.id && s.status === 'done') { l.stage = '处理完成'; l.progress = 100; } });
+        });
+        renderTasks();
+      });
+    }, 1500);
+  }
+
+  /* ------- 启动 ------- */
+  if (state.token) {
+    testAuth().then(function (ok) {
+      if (ok) { lock(false); loadList(); startPollTasks(); }
+      else { lock(true); }  /* 服务端重启 / 密码变更 */
+    });
+  } else { lock(true); }
+  window.addEventListener('keydown', function (e) { if (e.key === 'Enter' && document.getElementById('lock').style.display === 'flex') tryLogin(); });
+})();
+`;
+
+const MANAGER_CSS = `
+:root{--pri:#6200ee;--pri2:#7c4dff;--bg:#f3f1f8;--ink:#212121;}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{font-family:Roboto,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);-webkit-tap-highlight-color:transparent}
+.mi{font-family:'Material Icons';font-weight:normal;font-style:normal;display:inline-block;line-height:1;font-size:22px;user-select:none}
+.lg{font-size:30px}
+/* 状态栏 */
+.ab{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:12px;padding:16px 16px;background:linear-gradient(135deg,var(--pri),var(--pri2));color:#fff;box-shadow:0 2px 8px rgba(98,0,238,.25)}
+.ab .mi{font-size:28px}
+.abt{font-size:18px;font-weight:500}
+.abs{font-size:12px;opacity:.9}
+.abb{background:transparent;border:none;color:#fff;padding:6px;cursor:pointer;display:flex}
+.abb .mi{font-size:26px}
+.saveb{display:flex;align-items:center;gap:6px;background:rgba(255,255,255,.2);border:none;color:#fff;border-radius:20px;padding:9px 16px;font-size:14px;margin-left:auto;cursor:pointer}
+.saveb .mi{font-size:20px}
+/* 主区域 */
+.main{display:block;height:calc(100vh - 70px);overflow-y:auto;padding:14px 14px 96px;scrollbar-width:thin}
+.crumbs{display:flex;flex-wrap:wrap;align-items:center;gap:2px;margin-bottom:8px;font-size:14px}
+.crumb{background:none;border:none;color:var(--pri);cursor:pointer;padding:4px;border-radius:6px}
+.sep{color:#aaa}
+.cb{display:flex;align-items:center;gap:6px;background:none;border:none;color:var(--pri);cursor:pointer;font-size:13px;margin-bottom:8px;padding:4px 8px}
+/* 文件列表 */
+.list{display:flex;flex-direction:column;gap:10px}
+.row{display:flex;align-items:center;gap:12px;background:#fff;border-radius:14px;padding:12px 12px 8px;box-shadow:0 1px 4px rgba(0,0,0,.06);cursor:pointer;transition:.15s;position:relative}
+.row:active{transform:scale(.99)}
+.fic{font-size:34px;flex-shrink:0}
+.meta{flex:1;min-width:0}
+.nm{font-size:15px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sn{font-size:12px;color:#888;margin-top:2px;word-break:break-all}
+.acts{display:flex;flex-wrap:wrap;gap:6px;padding-top:8px;margin-top:6px;border-top:1px solid #f1f1f1;width:100%;flex:0 0 100%;order:3}
+.act{display:flex;align-items:center;gap:5px;background:#f5f1fb;border:none;border-radius:18px;padding:6px 12px;color:var(--pri);font-size:12.5px;cursor:pointer}
+.act .mi{font-size:17px}
+.act.dng{color:#c62828;background:#fdecec}
+.act.go{color:#00897b;background:#e0f2f1}
+.empty{display:flex;flex-direction:column;align-items:center;gap:8px;color:#b0a8c0;padding:70px 0}
+.empty .mi{font-size:56px;color:#d7cfe6}
+/* 进度条 */
+.prog{height:6px;border-radius:3px;background:#eee;overflow:hidden;margin:6px 0 4px}
+.bar{height:100%;background:linear-gradient(90deg,#00897b,#26a69a);transition:width .2s}
+/* 底部按钮栏 */
+.nb{position:fixed;bottom:0;left:0;right:0;display:flex;justify-content:space-around;align-items:center;padding:8px 16px calc(12px + env(safe-area-inset-bottom));background:rgba(255,255,255,.97);box-shadow:0 -3px 12px rgba(0,0,0,.09);z-index:40}
+.fab{border:none;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px;border-radius:16px;font-size:12px;color:#444}
+.fab .mi{font-size:26px;color:var(--pri)}
+.fab.sm{background:transparent;padding:6px 12px}
+.fab.big{width:60px;height:52px;background:linear-gradient(135deg,var(--pri),var(--pri2));color:#fff;border-radius:18px;box-shadow:0 6px 16px rgba(98,0,238,.4);justify-content:center}
+.fab.big .mi{color:#fff;font-size:28px}
+.fab i{font-style:normal}
+/* 底部弹层 */
+.sheet{display:none;position:fixed;inset:0;z-index:60}
+.mask{position:absolute;inset:0;background:rgba(0,0,0,.35)}
+.sb{position:absolute;bottom:0;left:0;right:0;background:#fff;border-radius:20px 20px 0 0;padding:14px 16px calc(20px + env(safe-area-inset-bottom));animation:up .2s}
+@keyframes up{from{transform:translateY(30px);opacity:0}to{transform:none;opacity:1}}
+.sbt{font-size:16px;font-weight:500;margin:4px 4px 10px;color:#888}
+.srow{display:flex;align-items:center;gap:14px;width:100%;background:#fff;border:none;padding:14px;border-radius:12px;cursor:pointer;font-size:15px}
+.srow:hover{background:#f5f1fb}
+/* 详情 */
+.dt{display:flex;flex-direction:column;gap:14px}
+.pvbox{background:#000;border-radius:14px;overflow:hidden}
+.pvbox img,.pvbox video{width:100%;max-height:60vh;object-fit:contain;display:block;background:#000}
+.pvbox.aud{background:#f7f5fb;padding:30px}
+.pvbox.aud audio{width:100%}
+.pvbox.txt iframe{width:100%;height:60vh;border:none;background:#fff}
+.pvn2{display:flex;flex-direction:column;align-items:center;gap:8px;padding:50px;color:#999;background:#fff;border-radius:14px}
+.pvn2 .mi{font-size:52px;color:#d0c8e0}
+.dtacts{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
+/* 编辑器 */
+.editor{width:100%;height:calc(100vh - 70px);border:none;outline:none;resize:none;padding:16px;font-family:ui-monospace,Consolas,monospace;font-size:14px;line-height:1.6;background:#fff}
+/* 锁屏 */
+.lock{position:fixed;inset:0;z-index:100;background:linear-gradient(135deg,var(--pri),var(--pri2));display:flex;align-items:center;justify-content:center}
+.lockcard{background:#fff;border-radius:20px;padding:34px 28px;width:320px;max-width:88vw;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.3)}
+.lockcard .lg{font-size:40px;color:var(--pri)}
+.lt{font-size:20px;font-weight:500;margin:8px 0 2px}
+.ls{font-size:13px;color:#888;margin-bottom:16px}
+.tin{width:100%;padding:12px 14px;border:1px solid #ddd;border-radius:10px;font-size:15px;outline:none;margin-bottom:12px}
+.tin:focus{border-color:var(--pri);box-shadow:0 0 0 2px rgba(98,0,238,.15)}
+.btn.f{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;padding:12px;background:var(--pri);color:#fff;border:none;border-radius:10px;font-size:15px;cursor:pointer}
+.lerr{color:#c62828;font-size:13px;margin-top:10px}
+/* snackbar */
+.snack{position:fixed;left:50%;bottom:90px;transform:translate(-50%,20px);background:#333;color:#fff;padding:11px 20px;border-radius:24px;font-size:13px;opacity:0;pointer-events:none;transition:.25s;z-index:200;max-width:88vw;text-align:center}
+.snack.show{opacity:1;transform:translate(-50%,0)}
+`;
