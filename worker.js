@@ -263,24 +263,32 @@ async function githubGetFileSha(ssid, path, env) {
 async function githubUploadFile(ssid, path, content, env, message = 'upload') {
   const base64 = arrayBufferToBase64(content);
   console.log(`[github] upload ${ssid}/${path} raw=${content.byteLength} base64=${base64.length}`);
-  const sha = await githubGetFileSha(ssid, path, env);
-  const body = { message, content: base64 };
-  if (sha) body.sha = sha;
-  const resp = await loggedFetch(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}/contents/${encodeURIComponent(path)}`, {
-    method: 'PUT',
-    headers: {
-      'Authorization': `token ${env.GITHUB_TOKEN}`,
-      'Accept': 'application/vnd.github+json',
-      'Content-Type': 'application/json',
-      'User-Agent': 'netdisk-worker'
-    },
-    body: JSON.stringify(body)
-  });
-  if (!resp.ok) {
+  let retries = 0;
+  while (true) {
+    const sha = await githubGetFileSha(ssid, path, env);
+    const body = { message, content: base64 };
+    if (sha) body.sha = sha;
+    const resp = await loggedFetch(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}/contents/${encodeURIComponent(path)}`, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `token ${env.GITHUB_TOKEN}`,
+        'Accept': 'application/vnd.github+json',
+        'Content-Type': 'application/json',
+        'User-Agent': 'netdisk-worker'
+      },
+      body: JSON.stringify(body)
+    });
+    if (resp.ok) return resp.json();
     const txt = await resp.text();
+    // 409 并发冲突：重新获取 sha 再试
+    if (resp.status === 409 && retries < 3) {
+      retries++;
+      console.log(`[github] 409 conflict on ${ssid}/${path}, retry ${retries}`);
+      await new Promise(r => setTimeout(r, 500));
+      continue;
+    }
     throw new Error(`上传 GitHub 失败: ${resp.status} ${txt}`);
   }
-  return resp.json();
 }
 
 async function githubDeleteFile(ssid, path, env) {
