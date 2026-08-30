@@ -30,7 +30,7 @@ async function loggedFetch(url, options = {}) {
 function ssid() {
   const arr = new Uint8Array(16);
   crypto.getRandomValues(arr);
-  return Array.from(arr, b => b.toString(36)).join('').replace(/[^a-z0-9]/g, '') + Date.now().toString(36);
+  return Array.from(arr, b => b.toString(36)).join('').replace(/[^a-z0-9]/g, '') + Date.now().toString(36) + Date.now().toString(36);
 }
 
 function getKV(ssid, env) {
@@ -236,11 +236,14 @@ async function githubCreateRepo(ssid, env) {
     },
     body: JSON.stringify({ name: ssid, private: false, auto_init: true, description: 'Netdisk storage' })
   });
-  if (!resp.ok) {
-    const txt = await resp.text();
-    throw new Error(`创建仓库失败: ${resp.status} ${txt}`);
+  if (resp.ok) return resp.json();
+  const txt = await resp.text();
+  // 422 且名称已存在时，说明该仓库已存在，直接复用
+  if (resp.status === 422 && txt.includes('name already exists')) {
+    console.log(`[github] repo ${ssid} already exists, reuse it`);
+    return { name: ssid, reused: true };
   }
-  return resp.json();
+  throw new Error(`创建仓库失败: ${resp.status} ${txt}`);
 }
 
 async function githubUploadFile(ssid, path, content, env, message = 'upload') {
