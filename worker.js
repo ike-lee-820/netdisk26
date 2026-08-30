@@ -7,6 +7,7 @@
 
 const GITHUB_USER = 'ikecode26';
 const GITHUB_API = 'https://api.github.com';
+const ASSETS_REPO = 'netdisk-assets';
 const KV_SIZE_LIMIT = 10 * 1024 * 1024;        // 10 MB
 const GITHUB_SINGLE_LIMIT = 0;                 // GitHub 文件一律分片，避免 Worker CPU/超时
 const CHUNK_SIZE = 10 * 1024 * 1024;           // 10 MB/片
@@ -246,9 +247,25 @@ async function githubCreateRepo(ssid, env) {
   throw new Error(`创建仓库失败: ${resp.status} ${txt}`);
 }
 
+async function githubGetFileSha(ssid, path, env) {
+  try {
+    const resp = await loggedFetch(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}/contents/${encodeURIComponent(path)}`, {
+      headers: { 'Authorization': `token ${env.GITHUB_TOKEN}`, 'Accept': 'application/vnd.github+json', 'User-Agent': 'netdisk-worker' }
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    return Array.isArray(data) ? null : data.sha;
+  } catch (e) {
+    return null;
+  }
+}
+
 async function githubUploadFile(ssid, path, content, env, message = 'upload') {
   const base64 = arrayBufferToBase64(content);
   console.log(`[github] upload ${ssid}/${path} raw=${content.byteLength} base64=${base64.length}`);
+  const sha = await githubGetFileSha(ssid, path, env);
+  const body = { message, content: base64 };
+  if (sha) body.sha = sha;
   const resp = await loggedFetch(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}/contents/${encodeURIComponent(path)}`, {
     method: 'PUT',
     headers: {
@@ -257,7 +274,7 @@ async function githubUploadFile(ssid, path, content, env, message = 'upload') {
       'Content-Type': 'application/json',
       'User-Agent': 'netdisk-worker'
     },
-    body: JSON.stringify({ message, content: base64 })
+    body: JSON.stringify(body)
   });
   if (!resp.ok) {
     const txt = await resp.text();
@@ -373,6 +390,14 @@ async function deleteTask(env, id) {
   } else {
     await saveTasks(env, tasks.filter(x => x.id !== id));
   }
+}
+
+async function uploadBackgroundImage(buffer, ext, env) {
+  await githubCreateRepo(ASSETS_REPO, env);
+  const fileName = 'bg_' + Date.now() + '.' + ext;
+  await githubUploadFile(ASSETS_REPO, fileName, buffer, env, 'background image');
+  const url = await githubGetDownloadUrl(ASSETS_REPO, fileName, env);
+  return url;
 }
 
 // ==================== 存储核心 ====================
@@ -1569,6 +1594,8 @@ function settingsPage(settings = {}) {
     <div style="display:flex;gap:8px;margin-bottom:8px;">
       <input type="text" id="bg-value" placeholder="颜色/图片URL" value="${escapeHtml(bg)}" style="flex:1;">
       <input type="color" id="bg-color" value="#f5f5f5" style="width:48px;padding:0;border:none;background:none;cursor:pointer;">
+      <input type="file" id="bg-file" accept="image/*" style="display:none">
+      <button class="btn-secondary" onclick="document.getElementById('bg-file').click()" style="display:flex;align-items:center;gap:4px;padding:8px;border:none;border-radius:8px;cursor:pointer;white-space:nowrap;"><span class="material-icons">image</span>上传</button>
     </div>
     <label style="display:block;margin-bottom:8px;font-size:14px;color:var(--text-sec);">文件卡片透明度: <span id="opacity-label">${Math.round(cardOpacity * 100)}%</span></label>
     <input type="range" id="card-opacity" min="0.2" max="1" step="0.05" value="${cardOpacity}" style="width:100%;margin-bottom:16px;">
@@ -1601,6 +1628,21 @@ document.getElementById('bg-color').oninput = function(){
 };
 document.getElementById('card-opacity').oninput = function(){
   document.getElementById('opacity-label').textContent = Math.round(parseFloat(this.value) * 100) + '%';
+};
+document.getElementById('bg-file').onchange = async function(){
+  const file = this.files[0];
+  if (!file) return;
+  const form = new FormData();
+  form.append('file', file);
+  try {
+    const r = await fetch('/api/upload/background', { method: 'POST', body: form });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || '上传失败');
+    document.getElementById('bg-value').value = j.url;
+    showMsg('背景图已上传');
+  } catch (e) {
+    showMsg('背景图上传失败: ' + e.message);
+  }
 };
 async function saveSettings(){
   const settings = {
@@ -1638,7 +1680,7 @@ function generateThemeCss(settings = {}) {
     }
   }
   const alpha = Math.round(cardOpacity * 255).toString(16).padStart(2, '0');
-  css += '.card, .file-card, .bottom-bar, .drawer, .fab-menu, .modal { background-color: #' + (cardOpacity < 1 ? 'ffffff' + alpha : 'ffffff') + ' !important; }';
+  css += '.file-card { background-color: #' + (cardOpacity < 1 ? 'ffffff' + alpha : 'ffffff') + ' !important; }';
   css += '</style>';
   return css;
 }
@@ -2035,6 +2077,23 @@ async function handleRequest(request, env) {
     if (forbid) return forbid;
     const settings = await getSettings(env);
     return jsonResponse(settings);
+  }
+
+  if (path === '/api/upload/background' && request.method === 'POST') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    const form = await request.formData();
+    const file = form.get('file');
+    if (!file) return errorResponse('缺少文件');
+    const buffer = await file.arrayBuffer();
+    const ext = (file.name.split('.').pop() || 'png').toLowerCase();
+    try {
+      const url = await uploadBackgroundImage(buffer, ext, env);
+      return jsonResponse({ ok: true, url });
+    } catch (e) {
+      console.error('背景图上传失败', e);
+      return errorResponse(e.message || '背景图上传失败', 500);
+    }
   }
 
   if (path === '/api/clear' && request.method === 'POST') {
