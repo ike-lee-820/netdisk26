@@ -453,22 +453,50 @@ async function githubUploadFile(repoName, path, contentBase64, message, env) {
 async function githubGetFileRaw(repoName, path, branch, env) {
   branch = branch || 'main';
   const username = env.GITHUB_USERNAME || '';
-  // 优先使用代理加速
-  const proxyUrl = getProxyUrl(repoName, path, branch, env);
-  try {
-    const res = await fetch(proxyUrl);
-    if (res.ok) return await res.arrayBuffer();
-  } catch (e) {
-    console.error('Proxy fetch failed, trying direct:', e.message);
+
+  // 1. 先通过 GitHub API 获取 download_url
+  const apiUrl = GITHUB_CONFIG.apiBase + '/repos/' + username + '/' + repoName + '/contents/' + path;
+  const apiRes = await fetchWithRetry(apiUrl, { headers: getGithubHeaders(env) }, 3, 500);
+
+  if (!apiRes.ok) {
+    const errText = await apiRes.text();
+    throw new Error('GitHub API get content failed: HTTP ' + apiRes.status + ' - ' + errText);
   }
-  // 代理失败，回退到直连
-  const directUrl = GITHUB_CONFIG.rawBase + '/' + username + '/' + repoName + '/' + branch + '/' + path;
-  const res = await fetch(directUrl, {
-    headers: { 'Authorization': 'Bearer ' + (env.GITHUB_TOKEN || ''), 'User-Agent': 'Cloudflare-Worker-CloudDrive' }
+
+  const fileData = await apiRes.json();
+  const downloadUrl = fileData.download_url;
+
+  if (!downloadUrl) {
+    throw new Error('GitHub API response missing download_url');
+  }
+
+  // 2. 使用 download_url 下载文件内容（带上 Token 更保险）
+  const downloadRes = await fetch(downloadUrl, {
+    headers: { 
+      'Authorization': 'Bearer ' + (env.GITHUB_TOKEN || ''), 
+      'User-Agent': 'Cloudflare-Worker-CloudDrive' 
+    }
   });
-  if (!res.ok) throw new Error('GitHub raw fetch failed: ' + res.status);
-  return await res.arrayBuffer();
+
+  if (!downloadRes.ok) throw new Error('GitHub download_url fetch failed: ' + downloadRes.status);
+  return await downloadRes.arrayBuffer();
 }
+
+// 获取 GitHub 文件的 download_url（用于直链 302 重定向，支持大文件）
+async function githubGetDownloadUrl(repoName, path, env) {
+  const username = env.GITHUB_USERNAME || '';
+  const apiUrl = GITHUB_CONFIG.apiBase + '/repos/' + username + '/' + repoName + '/contents/' + path;
+  const apiRes = await fetchWithRetry(apiUrl, { headers: getGithubHeaders(env) }, 3, 500);
+
+  if (!apiRes.ok) {
+    const errText = await apiRes.text();
+    throw new Error('GitHub API get content failed: HTTP ' + apiRes.status + ' - ' + errText);
+  }
+
+  const fileData = await apiRes.json();
+  return fileData.download_url;
+}
+
 
 // 获取文件 API 元数据
 async function githubGetFileApi(repoName, path, env) {
@@ -1019,18 +1047,32 @@ export default {
         const item = findItemById(tree, fileId);
         if (!item || item.type !== 'file') return new Response('File not found', { status: 404, headers });
 
-        // 检查是否存储在 GitHub，如果是则返回代理加速链接（302 重定向）
+        // 检查是否存储在 GitHub，如果是则获取 download_url 后 302 重定向（支持大文件）
         const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + fileId, 'json') || {};
         if (storageMap.single && storageMap.single.type === 'github') {
-          const proxyUrl = getProxyUrl(storageMap.single.repo, storageMap.single.path, null, env);
-          return new Response(null, {
-            status: 302,
-            headers: {
-              'Location': proxyUrl,
-              'Content-Disposition': 'attachment; filename="' + encodeURIComponent(item.name) + '"',
-              ...headers,
-            },
-          });
+          try {
+            const downloadUrl = await githubGetDownloadUrl(storageMap.single.repo, storageMap.single.path, env);
+            return new Response(null, {
+              status: 302,
+              headers: {
+                'Location': downloadUrl,
+                'Content-Disposition': 'attachment; filename="' + encodeURIComponent(item.name) + '"',
+                ...headers,
+              },
+            });
+          } catch (e) {
+            console.error('GitHub download_url fetch failed, falling back to proxy:', e.message);
+            // 回退到代理链接
+            const proxyUrl = getProxyUrl(storageMap.single.repo, storageMap.single.path, null, env);
+            return new Response(null, {
+              status: 302,
+              headers: {
+                'Location': proxyUrl,
+                'Content-Disposition': 'attachment; filename="' + encodeURIComponent(item.name) + '"',
+                ...headers,
+              },
+            });
+          }
         }
         if (storageMap.chunks && Object.keys(storageMap.chunks).length > 0) {
           // 多分片文件，需要组装后返回（不支持直链 302，直接返回组装后的数据）
@@ -1204,15 +1246,28 @@ export default {
 
           const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + fileId, 'json') || {};
           if (storageMap.single && storageMap.single.type === 'github') {
-            const proxyUrl = getProxyUrl(storageMap.single.repo, storageMap.single.path, null, env);
-            return new Response(null, {
-              status: 302,
-              headers: {
-                'Location': proxyUrl,
-                'Content-Disposition': 'attachment; filename="' + encodeURIComponent(item.name) + '"',
-                ...headers,
-              },
-            });
+            try {
+              const downloadUrl = await githubGetDownloadUrl(storageMap.single.repo, storageMap.single.path, env);
+              return new Response(null, {
+                status: 302,
+                headers: {
+                  'Location': downloadUrl,
+                  'Content-Disposition': 'attachment; filename="' + encodeURIComponent(item.name) + '"',
+                  ...headers,
+                },
+              });
+            } catch (e) {
+              console.error('GitHub download_url fetch failed, falling back to proxy:', e.message);
+              const proxyUrl = getProxyUrl(storageMap.single.repo, storageMap.single.path, null, env);
+              return new Response(null, {
+                status: 302,
+                headers: {
+                  'Location': proxyUrl,
+                  'Content-Disposition': 'attachment; filename="' + encodeURIComponent(item.name) + '"',
+                  ...headers,
+                },
+              });
+            }
           }
 
           const buffer = await getFileArrayBuffer(env, item);
@@ -1235,15 +1290,28 @@ export default {
 
           const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + fileId, 'json') || {};
           if (storageMap.single && storageMap.single.type === 'github') {
-            const proxyUrl = getProxyUrl(storageMap.single.repo, storageMap.single.path, null, env);
-            return new Response(null, {
-              status: 302,
-              headers: {
-                'Location': proxyUrl,
-                'Cache-Control': 'public, max-age=3600',
-                ...headers,
-              },
-            });
+            try {
+              const downloadUrl = await githubGetDownloadUrl(storageMap.single.repo, storageMap.single.path, env);
+              return new Response(null, {
+                status: 302,
+                headers: {
+                  'Location': downloadUrl,
+                  'Cache-Control': 'public, max-age=3600',
+                  ...headers,
+                },
+              });
+            } catch (e) {
+              console.error('GitHub download_url fetch failed, falling back to proxy:', e.message);
+              const proxyUrl = getProxyUrl(storageMap.single.repo, storageMap.single.path, null, env);
+              return new Response(null, {
+                status: 302,
+                headers: {
+                  'Location': proxyUrl,
+                  'Cache-Control': 'public, max-age=3600',
+                  ...headers,
+                },
+              });
+            }
           }
 
           const buffer = await getFileArrayBuffer(env, item);
