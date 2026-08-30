@@ -1229,6 +1229,7 @@ async function uploadOne(file, dir){
       const total = start.chunks;
       const completed = new Array(total).fill(false);
       let doneCount = 0;
+      let error = null;
       function updateProgress(){
         const progress = Math.floor((doneCount / total) * 90);
         addLocalTask({ ...baseTask, message: '上传分片 ' + doneCount + '/' + total, progress: progress });
@@ -1263,17 +1264,23 @@ async function uploadOne(file, dir){
       }
       async function worker(){
         for (let i = 0; i < total; i++) {
+          if (error) return;
           if (completed[i]) continue;
-          await uploadChunk(i);
-          completed[i] = true;
-          doneCount++;
-          updateProgress();
+          try {
+            await uploadChunk(i);
+            completed[i] = true;
+            doneCount++;
+            updateProgress();
+          } catch (e) {
+            error = e;
+          }
         }
       }
       const workers = [];
       const threads = Math.min(MAX_CONCURRENT, total);
       for (let t = 0; t < threads; t++) workers.push(worker());
       await Promise.all(workers);
+      if (error) throw error;
       await api('/api/upload/finish', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ uploadId: start.uploadId, path: path, filename: file.name, storage: start.storage, size: file.size, chunks: total, taskId: taskId }) });
       removeLocalTask(taskId);
       showMsg('上传完成: ' + file.name);
@@ -1886,7 +1893,7 @@ async function handleRequest(request, env) {
     return jsonResponse({ uploadId, storage, chunks, chunkSize, taskId });
   }
 
-  // 大文件客户端分片上传：接收单分片
+  // 大文件客户端分片上传：接收单分片（只写入 KV，避免 GitHub 并发冲突）
   if (path === '/api/upload/chunk' && request.method === 'POST') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
@@ -1894,18 +1901,12 @@ async function handleRequest(request, env) {
     const uploadId = form.get('uploadId');
     const index = parseInt(form.get('index'), 10);
     const total = parseInt(form.get('total'), 10);
-    const storage = form.get('storage');
     const taskId = form.get('taskId');
     const chunkFile = form.get('chunk');
     if (!uploadId || isNaN(index) || !chunkFile) return errorResponse('缺少分片参数');
     const chunkBuf = await chunkFile.arrayBuffer();
     try {
-      if (storage === 'kv') {
-        await getKV(uploadId, env).put(uploadId + '_chunk_' + index, chunkBuf);
-      } else {
-        if (index === 0) await githubCreateRepo(uploadId, env);
-        await githubUploadFile(uploadId, 'chunk_' + index, chunkBuf, env, 'chunk ' + index);
-      }
+      await getKV(uploadId, env).put(uploadId + '_chunk_' + index, chunkBuf);
       const progress = Math.floor(((index + 1) / total) * 90);
       await updateTask(env, taskId, { message: '上传分片 ' + (index + 1) + '/' + total, progress });
       return jsonResponse({ ok: true, index });
@@ -1916,7 +1917,7 @@ async function handleRequest(request, env) {
     }
   }
 
-  // 大文件客户端分片上传：完成并写入目录
+  // 大文件客户端分片上传：完成并写入目录（服务端串行写入 GitHub）
   if (path === '/api/upload/finish' && request.method === 'POST') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
@@ -1932,10 +1933,21 @@ async function handleRequest(request, env) {
     const structure = await getStructure(env);
     const oldNode = getNode(structure, filePath);
     if (oldNode && oldNode.type === 'file') await deleteFileStorage(oldNode, env);
-    // 合并分片写入目标 KV，仅当存储方式为 kv 且分片数 > 1 时需要
+
     let finalStorage = storage;
     let finalSsid = uploadId;
-    if (storage === 'kv' && chunks > 1) {
+
+    if (storage === 'github') {
+      await updateTask(env, taskId, { message: '服务端写入 GitHub...', progress: 92 });
+      await githubCreateRepo(uploadId, env);
+      for (let i = 0; i < chunks; i++) {
+        const b = await getKV(uploadId, env).get(uploadId + '_chunk_' + i, { type: 'arrayBuffer' });
+        await githubUploadFile(uploadId, 'chunk_' + i, b, env, 'chunk ' + i);
+        await updateTask(env, taskId, { message: '写入 GitHub 分片 ' + (i + 1) + '/' + chunks, progress: 92 + Math.floor(((i + 1) / chunks) * 7) });
+      }
+      for (let i = 0; i < chunks; i++) await getKV(uploadId, env).delete(uploadId + '_chunk_' + i);
+      finalStorage = 'github';
+    } else if (storage === 'kv' && chunks > 1) {
       let totalLen = 0;
       const bufs = [];
       for (let i = 0; i < chunks; i++) {
@@ -1950,6 +1962,7 @@ async function handleRequest(request, env) {
       for (let i = 0; i < chunks; i++) await getKV(uploadId, env).delete(uploadId + '_chunk_' + i);
       finalStorage = 'kv';
     }
+
     setNode(structure, filePath, {
       type: 'file',
       name: filename,
