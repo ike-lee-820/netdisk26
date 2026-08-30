@@ -89,7 +89,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 .upload-progress-overlay.show{transform:translateY(0)}
 .upload-progress-bar{height:6px;background:#e5e7eb;border-radius:3px;overflow:hidden;margin-top:8px}
 .upload-progress-fill{height:100%;background:var(--accent);transition:width 0.2s ease}
-.upload-progress-info{display:flex;justify-content:space-between;font-size:13px;color:var(--text-secondary)}
+.upload-progress-info{display:flex;justify-content:space-between;font-size:13px;color:var(--text-secondary)}.upload-speed{font-size:11px;color:var(--text-secondary);margin-top:4px;text-align:right}
 @media(max-width:480px){.file-item{padding:10px 12px}.btn-text{padding:3px 8px;font-size:11px}}
 </style>
 </head>
@@ -99,13 +99,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <div id="detailView" class="hidden"><div class="detail-page"><button class="btn btn-secondary" id="backBtn" style="margin-bottom:12px">返回</button><div class="detail-card" id="detailCard"></div></div></div>
 <div class="task-backdrop" id="taskBackdrop"></div><div class="task-panel" id="taskPanel"><div class="task-panel-header"><h3>任务列表</h3><button class="btn-text" id="closeTaskBtn">关闭</button></div><div id="taskList"></div></div>
 <div id="modalContainer"></div><div id="toastContainer"></div>
-<div class="upload-progress-overlay" id="uploadProgressOverlay"><div class="upload-progress-info"><span id="uploadProgressText">准备上传...</span><span id="uploadProgressPercent">0%</span></div><div class="upload-progress-bar"><div class="upload-progress-fill" id="uploadProgressFill" style="width:0%"></div></div><div class="btn-row" style="margin-top:10px"><button class="btn btn-danger" id="cancelUploadBtn" style="flex:0 0 auto;padding:6px 12px;font-size:12px">取消上传</button></div></div>
+<div class="upload-progress-overlay" id="uploadProgressOverlay"><div class="upload-progress-info"><span id="uploadProgressText">准备上传...</span><span id="uploadProgressPercent">0%</span></div><div class="upload-progress-bar"><div class="upload-progress-fill" id="uploadProgressFill" style="width:0%"></div></div><div class="upload-speed" id="uploadSpeed"></div><div class="btn-row" style="margin-top:10px"><button class="btn btn-danger" id="cancelUploadBtn" style="flex:0 0 auto;padding:6px 12px;font-size:12px">取消上传</button></div></div>
 <script src="https://unpkg.com/@wangeditor/editor@latest/dist/index.js"><\/script>
 <script src="https://cdn.jsdelivr.net/npm/mui-player@latest/dist/mui-player.min.js"><\/script>
 <script>
 var API_BASE="",currentPath="/",fileTree=null,tasks=[],currentView="list",currentDetailItem=null,currentAudio=null,lyricLines=[],isShareReadonly=false,activeUploads={};
 function showToast(msg,d){d=d||2000;var c=document.getElementById("toastContainer"),t=document.createElement("div");t.className="toast";t.textContent=msg;c.appendChild(t);setTimeout(function(){t.remove()},d)}
-function formatSize(b){if(b===0)return"0 B";if(!b)return"-";var k=1024,s=["B","KB","MB","GB","TB"],i=Math.floor(Math.log(b)/Math.log(k));return parseFloat((b/Math.pow(k,i)).toFixed(1))+" "+s[i]}
+function formatSize(b){if(b===0)return"0 B";if(!b)return"-";var k=1024,s=["B","KB","MB","GB","TB"],i=Math.floor(Math.log(b)/Math.log(k));return parseFloat((b/Math.pow(k,i)).toFixed(1))+" "+s[i]}function formatSpeed(bps){if(bps===0)return"0 B/s";if(!bps)return"";var k=1024,s=["B/s","KB/s","MB/s","GB/s"],i=Math.floor(Math.log(bps)/Math.log(k));return parseFloat((bps/Math.pow(k,i)).toFixed(1))+" "+s[i]}
 function formatTime(ts){if(!ts)return"-";var d=new Date(ts);return d.toLocaleString("zh-CN",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})}
 function getFileIcon(item){if(item.type==="folder")return"📁";var ext=(item.name.split(".").pop()||"").toLowerCase();if(["jpg","jpeg","png","gif","webp","svg","bmp","ico"].indexOf(ext)!==-1)return"🖼️";if(["mp4","webm","avi","mov","mkv","flv","a3v8"].indexOf(ext)!==-1)return"🎬";if(["mp3","wav","ogg","flac","m4a"].indexOf(ext)!==-1)return"🎵";if(["txt","md","json","js","ts","css","html","xml","yml","yaml","log"].indexOf(ext)!==-1)return"📄";if(["zip","rar","7z","tar","gz","bz2"].indexOf(ext)!==-1)return"📦";if(["pdf","doc","docx","xls","xlsx","ppt","pptx"].indexOf(ext)!==-1)return"📑";return"📎"}
 function getIconClass(item){if(item.type==="folder")return"folder";var ext=(item.name.split(".").pop()||"").toLowerCase();if(["jpg","jpeg","png","gif","webp","svg","bmp","ico"].indexOf(ext)!==-1)return"image";if(["mp4","webm","avi","mov","mkv","flv","a3v8"].indexOf(ext)!==-1)return"video";if(["txt","md","json","js","ts","css","html","xml"].indexOf(ext)!==-1)return"text";return""}
@@ -135,9 +135,9 @@ function doRename(itemId){var newName=document.getElementById("renameInput").val
 function deleteItem(itemId){var item=findItemInTree(fileTree,itemId);if(!item)return;if(!confirm("确定要删除 "+item.name+" 吗？"))return;if(item.type==="file"&&item.chunks>0){api("/api/delete-content",{method:"POST",body:{fileId:item.id,chunks:item.chunks}}).catch(function(){})}removeItemFromTree(fileTree,itemId);saveTree().then(function(){renderFileList();showToast("已删除");if(currentView==="detail"&&currentDetailItem&&currentDetailItem.id===itemId)closeDetail()})}
 function showUploadModal(){showModal('<h2>上传文件</h2><input type="file" id="fileInput" multiple><div class="btn-row"><button class="btn btn-secondary" id="cancelBtn">取消</button><button class="btn btn-primary" id="uploadBtn">开始上传</button></div>');document.getElementById("cancelBtn").onclick=closeModal;document.getElementById("uploadBtn").onclick=startUploadFiles}
 function showFolderUploadModal(){showModal('<h2>上传文件夹</h2><input type="file" id="folderInput" webkitdirectory directory multiple><div style="font-size:12px;color:var(--text-secondary);margin-bottom:12px">提示：选择文件夹上传整个目录</div><div class="btn-row"><button class="btn btn-secondary" id="cancelBtn">取消</button><button class="btn btn-primary" id="uploadBtn">开始上传</button></div>');document.getElementById("cancelBtn").onclick=closeModal;document.getElementById("uploadBtn").onclick=startUploadFolder}
-function showUploadProgress(text,percent){var overlay=document.getElementById("uploadProgressOverlay");overlay.classList.add("show");if(text)document.getElementById("uploadProgressText").textContent=text;if(percent!==undefined){document.getElementById("uploadProgressFill").style.width=percent+"%";document.getElementById("uploadProgressPercent").textContent=Math.round(percent)+"%"}}
-function hideUploadProgress(){document.getElementById("uploadProgressOverlay").classList.remove("show");document.getElementById("uploadProgressFill").style.width="0%";document.getElementById("uploadProgressPercent").textContent="0%"}
-function startUploadFiles(){var input=document.getElementById("fileInput");if(!input.files||input.files.length===0){showToast("请选择文件");return}var files=Array.from(input.files);var uploadPath=currentPath;closeModal();var fileList=[];for(var i=0;i<files.length;i++){var f=files[i];fileList.push({file:f,name:f.name,folderPath:uploadPath,size:f.size})}var totalSize=fileList.reduce(function(sum,e){return sum+e.size},0);var uploadedSize=0;api("/api/task/create",{method:"POST",body:{type:"upload",name:"上传 "+fileList.length+" 个文件"}}).then(function(taskData){var taskId=taskData.taskId;activeUploads[taskId]={cancelled:false};showUploadProgress("准备上传 "+fileList.length+" 个文件...",0);document.getElementById("cancelUploadBtn").onclick=function(){activeUploads[taskId].cancelled=true};var queue=Promise.resolve();var completed=0;for(var i=0;i<fileList.length;i++){(function(entry,index){queue=queue.then(function(){if(activeUploads[taskId].cancelled)return Promise.reject(new Error("用户取消"));return uploadSingleFileOptimized(entry.file,entry.name,entry.folderPath,taskId,function(fileProgress){var currentUploaded=uploadedSize+entry.size*fileProgress;var overall=(currentUploaded/totalSize)*100;showUploadProgress("上传中 "+(index+1)+"/"+fileList.length+" - "+entry.name,overall)}).then(function(){uploadedSize+=entry.size;completed++;var overall=(uploadedSize/totalSize)*100;showUploadProgress("上传中 "+completed+"/"+fileList.length,overall);return api("/api/task/update",{method:"POST",body:{taskId:taskId,progress:Math.round(overall)}})})})})(fileList[i],i)}queue.then(function(){if(activeUploads[taskId].cancelled){api("/api/task/update",{method:"POST",body:{taskId:taskId,status:"cancelled",progress:Math.round((uploadedSize/totalSize)*100)}});showToast("上传已取消")}else{api("/api/task/update",{method:"POST",body:{taskId:taskId,progress:100,status:"completed"}});showToast("上传完成")}hideUploadProgress();delete activeUploads[taskId];loadTree();loadTasks()}).catch(function(e){if(e.message==="用户取消"){api("/api/task/update",{method:"POST",body:{taskId:taskId,status:"cancelled",progress:Math.round((uploadedSize/totalSize)*100)}});showToast("上传已取消")}else{api("/api/task/update",{method:"POST",body:{taskId:taskId,status:"failed",error:e.message}});showToast("上传失败: "+e.message)}hideUploadProgress();delete activeUploads[taskId]})})}
+function showUploadProgress(text,percent,speed){var overlay=document.getElementById("uploadProgressOverlay");overlay.classList.add("show");if(text)document.getElementById("uploadProgressText").textContent=text;if(percent!==undefined){document.getElementById("uploadProgressFill").style.width=percent+"%";document.getElementById("uploadProgressPercent").textContent=Math.round(percent)+"%"}if(speed!==undefined){document.getElementById("uploadSpeed").textContent=speed?formatSpeed(speed):""}}
+function hideUploadProgress(){document.getElementById("uploadProgressOverlay").classList.remove("show");document.getElementById("uploadProgressFill").style.width="0%";document.getElementById("uploadProgressPercent").textContent="0%";document.getElementById("uploadSpeed").textContent=""}
+function startUploadFiles(){var input=document.getElementById("fileInput");if(!input.files||input.files.length===0){showToast("请选择文件");return}var files=Array.from(input.files);var uploadPath=currentPath;closeModal();var fileList=[];for(var i=0;i<files.length;i++){var f=files[i];fileList.push({file:f,name:f.name,folderPath:uploadPath,size:f.size})}var totalSize=fileList.reduce(function(sum,e){return sum+e.size},0);var uploadedSize=0;var lastTime=Date.now(),lastUploaded=0;api("/api/task/create",{method:"POST",body:{type:"upload",name:"上传 "+fileList.length+" 个文件"}}).then(function(taskData){var taskId=taskData.taskId;activeUploads[taskId]={cancelled:false};showUploadProgress("准备上传 "+fileList.length+" 个文件...",0,0);document.getElementById("cancelUploadBtn").onclick=function(){activeUploads[taskId].cancelled=true};var queue=Promise.resolve();var completed=0;for(var i=0;i<fileList.length;i++){(function(entry,index){queue=queue.then(function(){if(activeUploads[taskId].cancelled)return Promise.reject(new Error("用户取消"));return uploadSingleFileOptimized(entry.file,entry.name,entry.folderPath,taskId,function(fileProgress){var currentUploaded=uploadedSize+entry.size*fileProgress;var overall=(currentUploaded/totalSize)*100;var now=Date.now();var elapsed=(now-lastTime)/1000;if(elapsed>0.5){var speed=(currentUploaded-lastUploaded)/elapsed;lastTime=now;lastUploaded=currentUploaded;showUploadProgress("上传中 "+(index+1)+"/"+fileList.length+" - "+entry.name,overall,speed)}else{showUploadProgress("上传中 "+(index+1)+"/"+fileList.length+" - "+entry.name,overall)}}).then(function(){uploadedSize+=entry.size;completed++;var overall=(uploadedSize/totalSize)*100;showUploadProgress("上传中 "+completed+"/"+fileList.length,overall,0);return api("/api/task/update",{method:"POST",body:{taskId:taskId,progress:Math.round(overall)}})})})})(fileList[i],i)}queue.then(function(){if(activeUploads[taskId].cancelled){api("/api/task/update",{method:"POST",body:{taskId:taskId,status:"cancelled",progress:Math.round((uploadedSize/totalSize)*100)}});showToast("上传已取消")}else{api("/api/task/update",{method:"POST",body:{taskId:taskId,progress:100,status:"completed"}});showToast("上传完成")}hideUploadProgress();delete activeUploads[taskId];loadTree();loadTasks()}).catch(function(e){if(e.message==="用户取消"){api("/api/task/update",{method:"POST",body:{taskId:taskId,status:"cancelled",progress:Math.round((uploadedSize/totalSize)*100)}});showToast("上传已取消")}else{api("/api/task/update",{method:"POST",body:{taskId:taskId,status:"failed",error:e.message}});showToast("上传失败: "+e.message)}hideUploadProgress();delete activeUploads[taskId]})})}
 function startUploadFolder(){var input=document.getElementById("folderInput");if(!input.files||input.files.length===0){showToast("请选择文件夹");return}var files=Array.from(input.files);var uploadPath=currentPath;closeModal();var fileList=[];for(var i=0;i<files.length;i++){var f=files[i];var relativePath=f.webkitRelativePath||f.name;var pathParts=relativePath.split("/");var fileName=pathParts.pop();var folderPath=pathParts.length>0?uploadPath+"/"+pathParts.join("/"):uploadPath;folderPath=folderPath.replace(/\\+/g,"/");fileList.push({file:f,name:fileName,folderPath:folderPath,size:f.size})}var totalSize=fileList.reduce(function(sum,e){return sum+e.size},0);var uploadedSize=0;api("/api/task/create",{method:"POST",body:{type:"upload",name:"上传文件夹 "+(files[0].webkitRelativePath?files[0].webkitRelativePath.split("/")[0]:"")}}).then(function(taskData){var taskId=taskData.taskId;activeUploads[taskId]={cancelled:false};showUploadProgress("准备上传文件夹...",0);document.getElementById("cancelUploadBtn").onclick=function(){activeUploads[taskId].cancelled=true};var queue=Promise.resolve();var completed=0;for(var i=0;i<fileList.length;i++){(function(entry,index){queue=queue.then(function(){if(activeUploads[taskId].cancelled)return Promise.reject(new Error("用户取消"));return uploadSingleFileOptimized(entry.file,entry.name,entry.folderPath,taskId,function(fileProgress){var currentUploaded=uploadedSize+entry.size*fileProgress;var overall=(currentUploaded/totalSize)*100;showUploadProgress("上传中 "+(index+1)+"/"+fileList.length+" - "+entry.name,overall)}).then(function(){uploadedSize+=entry.size;completed++;var overall=(uploadedSize/totalSize)*100;showUploadProgress("上传中 "+completed+"/"+fileList.length,overall);return api("/api/task/update",{method:"POST",body:{taskId:taskId,progress:Math.round(overall)}})})})})(fileList[i],i)}queue.then(function(){if(activeUploads[taskId].cancelled){api("/api/task/update",{method:"POST",body:{taskId:taskId,status:"cancelled",progress:Math.round((uploadedSize/totalSize)*100)}});showToast("上传已取消")}else{api("/api/task/update",{method:"POST",body:{taskId:taskId,progress:100,status:"completed"}});showToast("上传完成")}hideUploadProgress();delete activeUploads[taskId];loadTree();loadTasks()}).catch(function(e){if(e.message==="用户取消"){api("/api/task/update",{method:"POST",body:{taskId:taskId,status:"cancelled",progress:Math.round((uploadedSize/totalSize)*100)}});showToast("上传已取消")}else{api("/api/task/update",{method:"POST",body:{taskId:taskId,status:"failed",error:e.message}});showToast("上传失败: "+e.message)}hideUploadProgress();delete activeUploads[taskId]})})}
 function uploadSingleFileOptimized(file,fileName,uploadPath,taskId,onProgress){var fileId=generateId();var KV_MAX=20*1024*1024;var GITHUB_MAX=50*1024*1024;var CHUNK_SIZE=50*1024*1024;var ctrl=activeUploads[taskId];if(file.size<KV_MAX){onProgress(0.1);return readChunkAsBase64(file).then(function(base64){if(ctrl&&ctrl.cancelled)throw new Error("用户取消");onProgress(0.5);return api("/api/upload/single",{method:"POST",body:{fileId:fileId,fileName:fileName,uploadPath:uploadPath,base64:base64,mimeType:file.type||"application/octet-stream",size:file.size,storage:"kv"}})}).then(function(){onProgress(1)})}else if(file.size<=GITHUB_MAX){onProgress(0.1);return readChunkAsBase64(file).then(function(base64){if(ctrl&&ctrl.cancelled)throw new Error("用户取消");onProgress(0.5);return api("/api/upload/single",{method:"POST",body:{fileId:fileId,fileName:fileName,uploadPath:uploadPath,base64:base64,mimeType:file.type||"application/octet-stream",size:file.size,storage:"github"}})}).then(function(){onProgress(1)})}else{var chunks=Math.ceil(file.size/CHUNK_SIZE);onProgress(0.05);return api("/api/upload/init",{method:"POST",body:{fileId:fileId,fileName:fileName,uploadPath:uploadPath,chunks:chunks,chunkSize:CHUNK_SIZE,mimeType:file.type||"application/octet-stream",size:file.size}}).then(function(){var chunkQueue=Promise.resolve();for(var i=0;i<chunks;i++){(function(index){chunkQueue=chunkQueue.then(function(){if(ctrl&&ctrl.cancelled)throw new Error("用户取消");var start=index*CHUNK_SIZE;var end=Math.min(start+CHUNK_SIZE,file.size);var slice=file.slice(start,end);return readChunkAsBase64(slice).then(function(chunkBase64){if(ctrl&&ctrl.cancelled)throw new Error("用户取消");return api("/api/upload/chunk",{method:"POST",body:{fileId:fileId,chunkIndex:index,base64:chunkBase64}})}).then(function(){onProgress((index+1)/chunks)})})})(i)}return chunkQueue.then(function(){if(ctrl&&ctrl.cancelled)throw new Error("用户取消");return api("/api/upload/complete",{method:"POST",body:{fileId:fileId,chunks:chunks}})})})}}
 // 下载改为直接跳转直链 /d/{fileId}
@@ -154,7 +154,7 @@ function cancelTask(taskId){if(activeUploads[taskId])activeUploads[taskId].cance
 function deleteTask(taskId){if(!confirm("确定要删除此任务记录吗？"))return;api("/api/task/delete",{method:"POST",body:{taskId:taskId}}).then(function(){showToast("任务已删除");loadTasks()}).catch(function(e){showToast("删除失败: "+e.message)})}
 function openDetail(item,updateUrl){if(updateUrl!==false){history.pushState({fileId:item.id},"","/detail?file="+item.id)}currentDetailItem=item;currentView="detail";document.getElementById("mainView").classList.add("hidden");document.getElementById("detailView").classList.remove("hidden");renderDetail()}
 function closeDetail(){history.pushState({},"",currentPath==="/"?"/":currentPath);currentView="list";currentDetailItem=null;document.getElementById("detailView").classList.add("hidden");document.getElementById("mainView").classList.remove("hidden");refreshFileList()}
-function renderDetail(){var item=currentDetailItem;var card=document.getElementById("detailCard");var actionsHtml="";if(isShareReadonly){actionsHtml='<button class="btn btn-primary" id="downloadDetail">下载</button>';var ext=(item.name.split(".").pop()||"").toLowerCase();if(["zip"].indexOf(ext)!==-1)actionsHtml+='<button class="btn btn-secondary" id="extractDetail">解压到当前目录</button>'}else{actionsHtml='<button class="btn btn-primary" id="downloadDetail">下载</button><button class="btn btn-secondary" id="shareDetail">分享</button><button class="btn btn-secondary" id="directLinkDetail">获取直链</button><button class="btn btn-secondary" id="renameDetail">重命名</button><button class="btn btn-danger" id="deleteDetail">删除</button>';var ext=(item.name.split(".").pop()||"").toLowerCase();if(["txt","md","json","js","ts","css","html","xml","log"].indexOf(ext)!==-1)actionsHtml+='<button class="btn btn-secondary" id="editDetail">编辑</button>';if(["zip"].indexOf(ext)!==-1)actionsHtml+='<button class="btn btn-secondary" id="extractDetail">解压到当前目录</button>'}var readonlyBadge=isShareReadonly?'<span class="share-readonly-badge">分享预览</span>':"";card.innerHTML='<div class="detail-header"><div class="file-icon '+getIconClass(item)+'" style="width:48px;height:48px;font-size:24px">'+getFileIcon(item)+'</div><div class="detail-title">'+item.name+readonlyBadge+'</div></div><div class="detail-meta"><span>大小: '+formatSize(item.size)+'</span> · <span>修改时间: '+formatTime(item.updatedAt||item.createdAt)+'</span> · <span>类型: '+(item.mimeType||"未知")+'</span></div><div class="detail-actions">'+actionsHtml+'</div><div class="preview-container" id="previewContainer"></div>';document.getElementById("downloadDetail").onclick=function(){downloadFile(item.id)};if(document.getElementById("shareDetail"))document.getElementById("shareDetail").onclick=function(){shareFile(item.id)};if(document.getElementById("directLinkDetail"))document.getElementById("directLinkDetail").onclick=function(){var link=location.origin+"/d/"+item.id;showModal('<h2>直链</h2><div class="share-link-box">'+link+'</div><p style="font-size:12px;color:var(--text-secondary);margin-top:8px">GitHub 存储的文件会自动通过代理加速访问</p><button class="btn btn-primary" onclick="closeModal()">关闭</button>')};if(document.getElementById("renameDetail"))document.getElementById("renameDetail").onclick=function(){showRenameModal(item.id)};if(document.getElementById("deleteDetail"))document.getElementById("deleteDetail").onclick=function(){deleteItem(item.id)};if(document.getElementById("editDetail"))document.getElementById("editDetail").onclick=editDetailText;if(document.getElementById("extractDetail"))document.getElementById("extractDetail").onclick=function(){extractZip(item.id)};loadPreview(item)}
+function renderDetail(){var item=currentDetailItem;var card=document.getElementById("detailCard");var actionsHtml="";if(isShareReadonly){actionsHtml='<button class="btn btn-primary" id="downloadDetail">下载</button>';var ext=(item.name.split(".").pop()||"").toLowerCase();if(["zip"].indexOf(ext)!==-1)actionsHtml+='<button class="btn btn-secondary" id="extractDetail">解压到当前目录</button>'}else{actionsHtml='<button class="btn btn-primary" id="downloadDetail">下载</button><button class="btn btn-secondary" id="shareDetail">分享</button><button class="btn btn-secondary" id="directLinkDetail">获取直链</button><button class="btn btn-secondary" id="renameDetail">重命名</button><button class="btn btn-danger" id="deleteDetail">删除</button>';var ext=(item.name.split(".").pop()||"").toLowerCase();if(["txt","md","json","js","ts","css","html","xml","log"].indexOf(ext)!==-1)actionsHtml+='<button class="btn btn-secondary" id="editDetail">编辑</button>';if(["zip"].indexOf(ext)!==-1)actionsHtml+='<button class="btn btn-secondary" id="extractDetail">解压到当前目录</button>'}var readonlyBadge=isShareReadonly?'<span class="share-readonly-badge">分享预览</span>':"";card.innerHTML='<div class="detail-header"><div class="file-icon '+getIconClass(item)+'" style="width:48px;height:48px;font-size:24px">'+getFileIcon(item)+'</div><div class="detail-title">'+item.name+readonlyBadge+'</div></div><div class="detail-meta"><span>大小: '+formatSize(item.size)+'</span> · <span>修改时间: '+formatTime(item.updatedAt||item.createdAt)+'</span> · <span>类型: '+(item.mimeType||"未知")+'</span></div><div class="detail-actions">'+actionsHtml+'</div><div class="preview-container" id="previewContainer"></div>';document.getElementById("downloadDetail").onclick=function(){downloadFile(item.id)};if(document.getElementById("shareDetail"))document.getElementById("shareDetail").onclick=function(){shareFile(item.id)};if(document.getElementById("directLinkDetail"))document.getElementById("directLinkDetail").onclick=function(){var link=location.origin+"/d/"+item.id;showModal('<h2>直链</h2><div class="share-link-box">'+link+'</div><p style="font-size:12px;color:var(--text-secondary);margin-top:8px">通过服务器代理访问，支持大文件下载</p><button class="btn btn-primary" onclick="closeModal()">关闭</button>')};if(document.getElementById("renameDetail"))document.getElementById("renameDetail").onclick=function(){showRenameModal(item.id)};if(document.getElementById("deleteDetail"))document.getElementById("deleteDetail").onclick=function(){deleteItem(item.id)};if(document.getElementById("editDetail"))document.getElementById("editDetail").onclick=editDetailText;if(document.getElementById("extractDetail"))document.getElementById("extractDetail").onclick=function(){extractZip(item.id)};loadPreview(item)}
 function loadPreview(item){var container=document.getElementById("previewContainer");var ext=(item.name.split(".").pop()||"").toLowerCase();var textExts=["txt","md","json","js","ts","css","html","xml","log"];var imageExts=["jpg","jpeg","png","gif","webp","svg","bmp","ico"];var videoExts=["mp4","webm","ogg","mov","a3v8"];var audioExts=["mp3","wav","ogg","flac","m4a"];var zipExts=["zip"];if(imageExts.indexOf(ext)!==-1)container.innerHTML='<img src="/d/'+item.id+'" alt="预览">';else if(videoExts.indexOf(ext)!==-1){container.innerHTML='<div id="video-player"></div>';if(typeof MuiPlayer!=="undefined")new MuiPlayer({container:"#video-player",title:item.name,src:"/d/"+item.id,autoplay:false,width:"100%",height:"auto"});else container.innerHTML='<video controls src="/d/'+item.id+'" style="width:100%"></video>'}else if(audioExts.indexOf(ext)!==-1){container.innerHTML='<div class="music-player"><img class="music-cover" id="musicCover" style="display:none"><div class="music-info"><div class="music-title" id="musicTitle">'+item.name+'</div><div class="music-artist" id="musicArtist"></div><div class="music-album" id="musicAlbum"></div></div><audio controls src="/d/'+item.id+'" id="musicAudio"></audio><div class="lyrics-container" id="lyricsContainer" style="display:none"></div></div>';var audioEl=document.getElementById("musicAudio");currentAudio=audioEl;audioEl.addEventListener("timeupdate",function(){highlightLyric(audioEl.currentTime)});if(typeof jsmediatags!=="undefined"){fetch("/d/"+item.id).then(res=>res.blob()).then(blob=>{jsmediatags.read(blob,{onSuccess:function(tag){var tags=tag.tags;if(tags.picture){var picture=tags.picture;var base64String="";for(var i=0;i<picture.data.length;i++)base64String+=String.fromCharCode(picture.data[i]);var coverUrl="data:"+picture.format+";base64,"+btoa(base64String);document.getElementById("musicCover").src=coverUrl;document.getElementById("musicCover").style.display="block"}if(tags.title)document.getElementById("musicTitle").textContent=tags.title;if(tags.artist)document.getElementById("musicArtist").textContent=tags.artist;if(tags.album)document.getElementById("musicAlbum").textContent=tags.album;if(tags.lyrics){var lyrics=tags.lyrics.lyrics||tags.lyrics;displayLyrics(lyrics)}else loadLrcFromFile(item)},onError:function(){loadLrcFromFile(item)}})})}else loadLrcFromFile(item)}else if(textExts.indexOf(ext)!==-1){api("/api/file-content?path="+encodeURIComponent(joinPath(currentPath,item.name))).then(function(data){if(data.base64)container.innerHTML='<div class="text-preview">'+escapeHtml(atob(data.base64))+'</div>'}).catch(function(){container.innerHTML="<p>无法加载文本预览</p>"})}else if(zipExts.indexOf(ext)!==-1)container.innerHTML='<p>ZIP 压缩包，可点击下方"解压到当前目录"按钮在线解压。</p>';else container.innerHTML="<p>该文件类型不支持预览，请下载后查看。</p>"}
 function loadLrcFromFile(item){var lrcName=item.name.replace(/\.[^.]+$/,"")+".lrc";var items=getCurrentFolderItems();var lrcItem=null;for(var i=0;i<items.length;i++){if(items[i].name===lrcName){lrcItem=items[i];break}}if(lrcItem)api("/api/file-content?path="+encodeURIComponent(joinPath(currentPath,lrcItem.name))).then(function(data){if(data.base64)displayLyrics(atob(data.base64));else document.getElementById("lyricsContainer").style.display="none"});else document.getElementById("lyricsContainer").style.display="none"}
 function displayLyrics(lyrics){var container=document.getElementById("lyricsContainer");container.style.display="block";container.innerHTML="";var hasTimestamps=/\[\d{2}:\d{2}(\.\d+)?\]/.test(lyrics);if(hasTimestamps){lyricLines=[];var lines=lyrics.split("");for(var i=0;i<lines.length;i++){var line=lines[i].trim();var timeMatch=line.match(/\[(\d{2}):(\d{2})(\.\d+)?\]/);if(timeMatch){var minutes=parseInt(timeMatch[1]);var seconds=parseFloat(timeMatch[2]+(timeMatch[3]||""));var text=line.replace(/\[.*?\]/g,"").trim();if(text)lyricLines.push({time:minutes*60+seconds,text:text})}}lyricLines.sort(function(a,b){return a.time-b.time});for(var j=0;j<lyricLines.length;j++){var div=document.createElement("div");div.className="lyric-line";div.setAttribute("data-time",lyricLines[j].time);div.textContent=lyricLines[j].text;container.appendChild(div)}}else{container.textContent=lyrics;container.style.whiteSpace="pre-wrap"}}
@@ -239,7 +239,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;b
 <script>
 var API_BASE="",currentItem=null,currentAudio=null,lyricLines=[];
 function showToast(msg,d){d=d||2000;var t=document.createElement("div");t.className="toast";t.textContent=msg;document.body.appendChild(t);setTimeout(function(){t.remove()},d)}
-function formatSize(b){if(b===0)return"0 B";if(!b)return"-";var k=1024,s=["B","KB","MB","GB","TB"],i=Math.floor(Math.log(b)/Math.log(k));return parseFloat((b/Math.pow(k,i)).toFixed(1))+" "+s[i]}
+function formatSize(b){if(b===0)return"0 B";if(!b)return"-";var k=1024,s=["B","KB","MB","GB","TB"],i=Math.floor(Math.log(b)/Math.log(k));return parseFloat((b/Math.pow(k,i)).toFixed(1))+" "+s[i]}function formatSpeed(bps){if(bps===0)return"0 B/s";if(!bps)return"";var k=1024,s=["B/s","KB/s","MB/s","GB/s"],i=Math.floor(Math.log(bps)/Math.log(k));return parseFloat((bps/Math.pow(k,i)).toFixed(1))+" "+s[i]}
 function formatTime(ts){if(!ts)return"-";var d=new Date(ts);return d.toLocaleString("zh-CN",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})}
 function getFileIcon(name){var ext=(name.split(".").pop()||"").toLowerCase();if(["jpg","jpeg","png","gif","webp","svg","bmp","ico"].indexOf(ext)!==-1)return"🖼️";if(["mp4","webm","avi","mov","mkv","flv","a3v8"].indexOf(ext)!==-1)return"🎬";if(["mp3","wav","ogg","flac","m4a"].indexOf(ext)!==-1)return"🎵";if(["txt","md","json","js","ts","css","html","xml","yml","yaml","log"].indexOf(ext)!==-1)return"📄";if(["zip","rar","7z","tar","gz","bz2"].indexOf(ext)!==-1)return"📦";if(["pdf","doc","docx","xls","xlsx","ppt","pptx"].indexOf(ext)!==-1)return"📑";return"📎"}
 function getIconClass(name){var ext=(name.split(".").pop()||"").toLowerCase();if(["jpg","jpeg","png","gif","webp","svg","bmp","ico"].indexOf(ext)!==-1)return"image";if(["mp4","webm","avi","mov","mkv","flv","a3v8"].indexOf(ext)!==-1)return"video";if(["mp3","wav","ogg","flac","m4a"].indexOf(ext)!==-1)return"audio";if(["txt","md","json","js","ts","css","html","xml"].indexOf(ext)!==-1)return"text";return""}
@@ -450,37 +450,7 @@ async function githubUploadFile(repoName, path, contentBase64, message, env) {
 }
 
 // 获取文件 raw 内容（修复：添加 env 参数）
-async function githubGetFileRaw(repoName, path, branch, env) {
-  branch = branch || 'main';
-  const username = env.GITHUB_USERNAME || '';
 
-  // 1. 先通过 GitHub API 获取 download_url
-  const apiUrl = GITHUB_CONFIG.apiBase + '/repos/' + username + '/' + repoName + '/contents/' + path;
-  const apiRes = await fetchWithRetry(apiUrl, { headers: getGithubHeaders(env) }, 3, 500);
-
-  if (!apiRes.ok) {
-    const errText = await apiRes.text();
-    throw new Error('GitHub API get content failed: HTTP ' + apiRes.status + ' - ' + errText);
-  }
-
-  const fileData = await apiRes.json();
-  const downloadUrl = fileData.download_url;
-
-  if (!downloadUrl) {
-    throw new Error('GitHub API response missing download_url');
-  }
-
-  // 2. 使用 download_url 下载文件内容（带上 Token 更保险）
-  const downloadRes = await fetch(downloadUrl, {
-    headers: { 
-      'Authorization': 'Bearer ' + (env.GITHUB_TOKEN || ''), 
-      'User-Agent': 'Cloudflare-Worker-CloudDrive' 
-    }
-  });
-
-  if (!downloadRes.ok) throw new Error('GitHub download_url fetch failed: ' + downloadRes.status);
-  return await downloadRes.arrayBuffer();
-}
 
 // 获取 GitHub 文件的 download_url（用于直链 302 重定向，支持大文件）
 async function githubGetDownloadUrl(repoName, path, env) {
@@ -1047,37 +1017,75 @@ export default {
         const item = findItemById(tree, fileId);
         if (!item || item.type !== 'file') return new Response('File not found', { status: 404, headers });
 
-        // 检查是否存储在 GitHub，如果是则获取 download_url 后 302 重定向（支持大文件）
         const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + fileId, 'json') || {};
+
+        // GitHub 存储的单文件：Worker 作为代理，通过 gh-proxy 获取后流式返回
         if (storageMap.single && storageMap.single.type === 'github') {
           try {
-            const downloadUrl = await githubGetDownloadUrl(storageMap.single.repo, storageMap.single.path, env);
-            return new Response(null, {
-              status: 302,
+            const proxyRes = await githubProxyFetch(storageMap.single.repo, storageMap.single.path, env);
+            return new Response(proxyRes.body, {
               headers: {
-                'Location': downloadUrl,
+                'Content-Type': item.mimeType || 'application/octet-stream',
                 'Content-Disposition': 'attachment; filename="' + encodeURIComponent(item.name) + '"',
+                'Content-Length': proxyRes.headers.get('content-length') || '',
                 ...headers,
               },
             });
           } catch (e) {
-            console.error('GitHub download_url fetch failed, falling back to proxy:', e.message);
-            // 回退到代理链接
-            const proxyUrl = getProxyUrl(storageMap.single.repo, storageMap.single.path, null, env);
-            return new Response(null, {
-              status: 302,
-              headers: {
-                'Location': proxyUrl,
-                'Content-Disposition': 'attachment; filename="' + encodeURIComponent(item.name) + '"',
-                ...headers,
-              },
-            });
+            console.error('GitHub proxy fetch failed:', e.message);
+            // 回退到直接组装
           }
         }
-        if (storageMap.chunks && Object.keys(storageMap.chunks).length > 0) {
-          // 多分片文件，需要组装后返回（不支持直链 302，直接返回组装后的数据）
-          const buffer = await getFileArrayBuffer(env, item);
-          return new Response(buffer, {
+
+        // 多分片文件（GitHub 或 KV）：组装后流式返回
+        if (item.chunks > 1) {
+          const { readable, writable } = new TransformStream();
+          const writer = writable.getWriter();
+
+          ctx.waitUntil((async () => {
+            try {
+              for (let i = 0; i < item.chunks; i++) {
+                let chunkBuffer = null;
+
+                // 优先从 GitHub 读取分片
+                if (storageMap.chunks && storageMap.chunks[i] && storageMap.chunks[i].type === 'github') {
+                  try {
+                    const chunkRes = await githubProxyFetch(storageMap.chunks[i].repo, storageMap.chunks[i].path, env);
+                    chunkBuffer = await chunkRes.arrayBuffer();
+                  } catch (e) {
+                    console.error('GitHub chunk proxy fetch failed:', e.message);
+                  }
+                }
+
+                // 回退到 KV
+                if (!chunkBuffer) {
+                  const kvMap = await env.FILE_STRUCTURE_KV.get('kvmap:' + fileId, 'json');
+                  const storedIndex = kvMap && kvMap.chunks && kvMap.chunks[i] !== undefined 
+                    ? kvMap.chunks[i] 
+                    : getKvIndex(fileId, i, true);
+                  const kv = env[FILE_KV_BINDINGS[storedIndex]];
+                  chunkBuffer = await kv.get('f:' + fileId + ':chunk:' + i, 'arrayBuffer');
+                  if (!chunkBuffer) {
+                    for (let j = 0; j < KV_COUNT; j++) {
+                      if (j === storedIndex) continue;
+                      const fallbackKv = env[FILE_KV_BINDINGS[j]];
+                      chunkBuffer = await fallbackKv.get('f:' + fileId + ':chunk:' + i, 'arrayBuffer');
+                      if (chunkBuffer) break;
+                    }
+                  }
+                }
+
+                if (!chunkBuffer) throw new Error('Missing chunk ' + i);
+                await writer.write(new Uint8Array(chunkBuffer));
+              }
+            } catch (e) {
+              console.error('Stream error:', e.message);
+            } finally {
+              await writer.close();
+            }
+          })());
+
+          return new Response(readable, {
             headers: {
               'Content-Type': item.mimeType || 'application/octet-stream',
               'Content-Disposition': 'attachment; filename="' + encodeURIComponent(item.name) + '"',
@@ -1086,7 +1094,7 @@ export default {
           });
         }
 
-        // 回退到 KV 直传
+        // KV 单文件直传
         const buffer = await getFileArrayBuffer(env, item);
         return new Response(buffer, {
           headers: {
@@ -1245,28 +1253,21 @@ export default {
           if (!item || item.type !== 'file') return jsonResponse({ error: 'File not found' }, headers, 404);
 
           const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + fileId, 'json') || {};
+
+          // GitHub 存储的单文件：Worker 代理模式
           if (storageMap.single && storageMap.single.type === 'github') {
             try {
-              const downloadUrl = await githubGetDownloadUrl(storageMap.single.repo, storageMap.single.path, env);
-              return new Response(null, {
-                status: 302,
+              const proxyRes = await githubProxyFetch(storageMap.single.repo, storageMap.single.path, env);
+              return new Response(proxyRes.body, {
                 headers: {
-                  'Location': downloadUrl,
+                  'Content-Type': item.mimeType || 'application/octet-stream',
                   'Content-Disposition': 'attachment; filename="' + encodeURIComponent(item.name) + '"',
+                  'Content-Length': proxyRes.headers.get('content-length') || '',
                   ...headers,
                 },
               });
             } catch (e) {
-              console.error('GitHub download_url fetch failed, falling back to proxy:', e.message);
-              const proxyUrl = getProxyUrl(storageMap.single.repo, storageMap.single.path, null, env);
-              return new Response(null, {
-                status: 302,
-                headers: {
-                  'Location': proxyUrl,
-                  'Content-Disposition': 'attachment; filename="' + encodeURIComponent(item.name) + '"',
-                  ...headers,
-                },
-              });
+              console.error('GitHub proxy fetch failed:', e.message);
             }
           }
 
@@ -1289,28 +1290,21 @@ export default {
           if (!item || item.type !== 'file') return jsonResponse({ error: 'File not found' }, headers, 404);
 
           const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + fileId, 'json') || {};
+
+          // GitHub 存储的单文件：Worker 代理模式
           if (storageMap.single && storageMap.single.type === 'github') {
             try {
-              const downloadUrl = await githubGetDownloadUrl(storageMap.single.repo, storageMap.single.path, env);
-              return new Response(null, {
-                status: 302,
+              const proxyRes = await githubProxyFetch(storageMap.single.repo, storageMap.single.path, env);
+              return new Response(proxyRes.body, {
                 headers: {
-                  'Location': downloadUrl,
+                  'Content-Type': item.mimeType || 'application/octet-stream',
                   'Cache-Control': 'public, max-age=3600',
+                  'Content-Length': proxyRes.headers.get('content-length') || '',
                   ...headers,
                 },
               });
             } catch (e) {
-              console.error('GitHub download_url fetch failed, falling back to proxy:', e.message);
-              const proxyUrl = getProxyUrl(storageMap.single.repo, storageMap.single.path, null, env);
-              return new Response(null, {
-                status: 302,
-                headers: {
-                  'Location': proxyUrl,
-                  'Cache-Control': 'public, max-age=3600',
-                  ...headers,
-                },
-              });
+              console.error('GitHub proxy fetch failed:', e.message);
             }
           }
 
@@ -1401,4 +1395,21 @@ export default {
       return jsonResponse({ error: e.message, stack: e.stack }, headers, 500);
     }
   }
-};
+};// 通过 gh-proxy 代理获取 GitHub 文件内容（支持大文件流式传输）
+async function githubProxyFetch(repoName, path, env) {
+  const username = env.GITHUB_USERNAME || '';
+  // 使用 gh-proxy 代理加速
+  const proxyUrl = GITHUB_CONFIG.proxyBase + '/' + username + '/' + repoName + '/raw/main/' + path;
+
+  const res = await fetch(proxyUrl, {
+    headers: { 
+      'Authorization': 'Bearer ' + (env.GITHUB_TOKEN || ''),
+      'User-Agent': 'Cloudflare-Worker-CloudDrive'
+    }
+  });
+
+  if (!res.ok) throw new Error('GitHub proxy fetch failed: ' + res.status);
+  return res;
+}
+
+
