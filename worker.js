@@ -1176,6 +1176,7 @@ async function uploadOne(file, dir){
   addLocalTask(baseTask);
   loadTasks();
   const CHUNK_SIZE = 5 * 1024 * 1024;
+  const MAX_CONCURRENT = 32;
   try{
     if (file.size <= CHUNK_SIZE) {
       const form = new FormData();
@@ -1190,7 +1191,14 @@ async function uploadOne(file, dir){
       if (!start) throw new Error('初始化上传失败');
       const chunkSize = start.chunkSize || CHUNK_SIZE;
       const total = start.chunks;
-      for (let i = 0; i < total; i++) {
+      const completed = new Array(total).fill(false);
+      let doneCount = 0;
+      function updateProgress(){
+        const progress = Math.floor((doneCount / total) * 90);
+        addLocalTask({ ...baseTask, message: '上传分片 ' + doneCount + '/' + total, progress: progress });
+        loadTasks();
+      }
+      async function uploadChunk(i){
         const begin = i * chunkSize;
         const end = Math.min(begin + chunkSize, file.size);
         const blob = file.slice(begin, end);
@@ -1207,19 +1215,29 @@ async function uploadOne(file, dir){
         while (true) {
           try {
             await api('/api/upload/chunk', { method: 'POST', body: form });
-            break;
+            return;
           } catch (e) {
             retries++;
-            if (retries > 2) throw e;
-            addLocalTask({ ...baseTask, message: '重试分片 ' + (i + 1) + ' (第' + retries + '次)', progress: Math.floor((i / total) * 90) });
+            if (retries > 2) throw new Error('分片 ' + (i + 1) + ' 上传失败: ' + (e.message || e));
+            addLocalTask({ ...baseTask, message: '重试分片 ' + (i + 1) + ' (第' + retries + '次)', progress: Math.floor((doneCount / total) * 90) });
             loadTasks();
             await new Promise(r => setTimeout(r, 1000));
           }
         }
-        const progress = Math.floor(((i + 1) / total) * 90);
-        addLocalTask({ ...baseTask, message: '上传分片 ' + (i + 1) + '/' + total, progress: progress });
-        loadTasks();
       }
+      async function worker(){
+        for (let i = 0; i < total; i++) {
+          if (completed[i]) continue;
+          await uploadChunk(i);
+          completed[i] = true;
+          doneCount++;
+          updateProgress();
+        }
+      }
+      const workers = [];
+      const threads = Math.min(MAX_CONCURRENT, total);
+      for (let t = 0; t < threads; t++) workers.push(worker());
+      await Promise.all(workers);
       await api('/api/upload/finish', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ uploadId: start.uploadId, path: path, filename: file.name, storage: start.storage, size: file.size, chunks: total, taskId: taskId }) });
       removeLocalTask(taskId);
       showMsg('上传完成: ' + file.name);
@@ -1531,7 +1549,6 @@ load();
 // ==================== 设置页 ====================
 
 function settingsPage(settings = {}) {
-  const theme = settings.theme || 'material';
   const primary = settings.primary || '#1976d2';
   const bg = settings.bg || '';
   const cardOpacity = settings.cardOpacity != null ? settings.cardOpacity : 1;
@@ -1540,12 +1557,6 @@ function settingsPage(settings = {}) {
 <div class="container">
   <div class="card">
     <h3 style="margin-top:0;">外观</h3>
-    <label style="display:block;margin-bottom:12px;font-size:14px;color:var(--text-sec);">主题风格</label>
-    <div style="display:flex;gap:12px;margin-bottom:16px;">
-      <button class="theme-option ${theme === 'material' ? 'active' : ''}" data-theme="material" style="flex:1;padding:12px;border:2px solid ${theme === 'material' ? primary : '#e0e0e0'};border-radius:8px;background:var(--surface);cursor:pointer;">Material</button>
-      <button class="theme-option ${theme === 'flat' ? 'active' : ''}" data-theme="flat" style="flex:1;padding:12px;border:2px solid ${theme === 'flat' ? primary : '#e0e0e0'};border-radius:8px;background:var(--surface);cursor:pointer;">扁平化</button>
-      <button class="theme-option ${theme === 'glass' ? 'active' : ''}" data-theme="glass" style="flex:1;padding:12px;border:2px solid ${theme === 'glass' ? primary : '#e0e0e0'};border-radius:8px;background:var(--surface);cursor:pointer;">液态玻璃</button>
-    </div>
     <label style="display:block;margin-bottom:8px;font-size:14px;color:var(--text-sec);">主题颜色</label>
     <div style="display:flex;gap:12px;align-items:center;margin-bottom:16px;">
       <input type="color" id="primary-color" value="${primary}" style="width:56px;height:36px;padding:0;border:none;background:none;cursor:pointer;">
@@ -1570,7 +1581,7 @@ function settingsPage(settings = {}) {
 <div class="snackbar" id="snackbar"></div>
 `, `
 <script>
-let currentSettings = { theme: '${theme}', primary: '${primary}', bg: '${escapeHtml(bg)}', cardOpacity: ${cardOpacity} };
+let currentSettings = { primary: '${primary}', bg: '${escapeHtml(bg)}', cardOpacity: ${cardOpacity} };
 function showMsg(msg){ const s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(()=>s.classList.remove('show'),2500); }
 function escapeHtml(t){ return t.replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 async function api(url, opts={}){
@@ -1579,18 +1590,8 @@ async function api(url, opts={}){
   if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
   return r.json().catch(()=>null);
 }
-let selectedTheme = currentSettings.theme;
-document.querySelectorAll('.theme-option').forEach(btn=>{
-  btn.onclick = () => {
-    selectedTheme = btn.dataset.theme;
-    document.querySelectorAll('.theme-option').forEach(b => b.style.borderColor = '#e0e0e0');
-    btn.style.borderColor = document.getElementById('primary-color').value;
-  };
-});
 document.getElementById('primary-color').oninput = function(){
   document.getElementById('primary-label').textContent = this.value;
-  const active = document.querySelector('.theme-option.active') || document.querySelector('[data-theme="' + selectedTheme + '"]');
-  if(active) active.style.borderColor = this.value;
 };
 document.getElementById('bg-color').oninput = function(){
   document.getElementById('bg-value').value = this.value;
@@ -1600,7 +1601,6 @@ document.getElementById('card-opacity').oninput = function(){
 };
 async function saveSettings(){
   const settings = {
-    theme: selectedTheme,
     primary: document.getElementById('primary-color').value,
     bg: document.getElementById('bg-value').value.trim(),
     cardOpacity: parseFloat(document.getElementById('card-opacity').value)
@@ -1621,28 +1621,22 @@ async function clearAllData(){
 }
 
 function generateThemeCss(settings = {}) {
-  const theme = settings.theme || 'material';
   const primary = settings.primary || '#1976d2';
   const bg = settings.bg || '';
   const cardOpacity = settings.cardOpacity != null ? settings.cardOpacity : 1;
-  let css = '<style id="theme-style">:root { --primary:' + primary + '; --primary-dark:' + adjustColor(primary, -30) + '; }';
+  let css = '<style id="theme-style">';
+  css += ':root { --primary:' + primary + '; --primary-dark:' + adjustColor(primary, -30) + '; }';
   if (bg) {
     if (bg.startsWith('http') || bg.startsWith('data:') || bg.startsWith('/')) {
-      css += 'body { background-image: url(' + bg + '); background-size: cover; background-attachment: fixed; background-position: center; }';
+      css += 'html, body { background: transparent !important; }';
+      css += 'body::before { content:""; position:fixed; inset:0; z-index:-1; background-image: url(' + bg + '); background-size: cover; background-attachment: fixed; background-position: center; }';
     } else {
-      css += 'body { background: ' + bg + ' !important; }';
+      css += 'html, body { background: ' + bg + ' !important; }';
     }
   }
-  if (theme === 'flat') {
-    css += '.card,.file-card,.bottom-bar,.drawer,.fab-menu,.modal { box-shadow: none !important; border: 1px solid var(--divider); }';
-    css += '.appbar { box-shadow: none !important; border-bottom: 1px solid var(--divider); }';
-  } else if (theme === 'glass') {
-    css += '.card,.file-card,.bottom-bar,.drawer,.fab-menu,.modal { background: rgba(255,255,255,' + cardOpacity + ') !important; backdrop-filter: blur(16px) saturate(180%); -webkit-backdrop-filter: blur(16px) saturate(180%); border: 1px solid rgba(255,255,255,0.3); box-shadow: 0 8px 32px rgba(0,0,0,0.1) !important; }';
-    css += 'body { background: ' + (bg || 'linear-gradient(135deg,' + primary + '22 0%, #f5f5f5 100%)') + ' !important; background-attachment: fixed; }';
-    css += '.appbar { background: rgba(25,118,210,0.85) !important; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }';
-    css += '.file-icon { background: rgba(25,118,210,0.12) !important; }';
-  }
-  css += '.card,.file-card { opacity: ' + cardOpacity + '; }</style>';
+  const alpha = Math.round(cardOpacity * 255).toString(16).padStart(2, '0');
+  css += '.card, .file-card, .bottom-bar, .drawer, .fab-menu, .modal { background-color: #' + (cardOpacity < 1 ? 'ffffff' + alpha : 'ffffff') + ' !important; }';
+  css += '</style>';
   return css;
 }
 
@@ -2025,7 +2019,6 @@ async function handleRequest(request, env) {
     if (forbid) return forbid;
     const body = await request.json();
     const settings = {
-      theme: body.theme || 'material',
       primary: body.primary || '#1976d2',
       bg: body.bg || '',
       cardOpacity: body.cardOpacity != null ? body.cardOpacity : 1
@@ -2053,6 +2046,15 @@ async function handleRequest(request, env) {
       if (node && node.type === 'file') {
         try { await deleteFileStorage(node, env); } catch (e) { console.error(e); }
       }
+    }
+    // 清理所有 FILE_KV 中的 key（包括 KV 小文件和分片临时 key）
+    for (const kv of [env.FILE_KV_1, env.FILE_KV_2, env.FILE_KV_3, env.FILE_KV_4, env.FILE_KV_5]) {
+      try {
+        const list = await kv.list();
+        for (const key of list.keys) {
+          try { await kv.delete(key.name); } catch (e) { console.error(e); }
+        }
+      } catch (e) { console.error(e); }
     }
     await env.FILE_STRUCTURE_KV.put('file_structure', JSON.stringify({ type: 'root', name: '', children: {}, createdAt: Date.now() }));
     await env.TASK_KV.put('tasks', JSON.stringify([]));
