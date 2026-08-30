@@ -1886,7 +1886,7 @@ export default {
         // 检查是否存储在 GitHub，如果是则返回代理加速链接（302 重定向）
         const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + fileId, 'json') || {};
         if (storageMap.single && storageMap.single.type === 'github') {
-          const proxyUrl = getProxyUrl(storageMap.single.repo, storageMap.single.path);
+          const proxyUrl = getProxyUrl(storageMap.single.repo, storageMap.single.path, null, env);
           return new Response(null, {
             status: 302,
             headers: {
@@ -2033,7 +2033,7 @@ export default {
           // 检查是否存储在 GitHub，如果是则返回代理加速链接（302 重定向）
           const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + fileId, 'json') || {};
           if (storageMap.single && storageMap.single.type === 'github') {
-            const proxyUrl = getProxyUrl(storageMap.single.repo, storageMap.single.path);
+            const proxyUrl = getProxyUrl(storageMap.single.repo, storageMap.single.path, null, env);
             return new Response(null, {
               status: 302,
               headers: {
@@ -2066,7 +2066,7 @@ export default {
           // 检查是否存储在 GitHub，如果是则返回代理加速链接（302 重定向）
           const storageMap = await env.FILE_STRUCTURE_KV.get('storage:' + fileId, 'json') || {};
           if (storageMap.single && storageMap.single.type === 'github') {
-            const proxyUrl = getProxyUrl(storageMap.single.repo, storageMap.single.path);
+            const proxyUrl = getProxyUrl(storageMap.single.repo, storageMap.single.path, null, env);
             return new Response(null, {
               status: 302,
               headers: {
