@@ -1246,6 +1246,11 @@ async function githubRepoExists(repoName, env) {
 
 // 创建 GitHub 仓库（私有）
 async function githubCreateRepo(repoName, env) {
+  const token = env.GITHUB_TOKEN || '';
+  const username = env.GITHUB_USERNAME || '';
+  if (!token) throw new Error('GITHUB_TOKEN 环境变量未设置');
+  if (!username) throw new Error('GITHUB_USERNAME 环境变量未设置');
+
   const res = await fetch(GITHUB_CONFIG.apiBase + "/user/repos", {
     method: 'POST',
     headers: getGithubHeaders(env, { 'Content-Type': 'application/json' }),
@@ -1258,7 +1263,7 @@ async function githubCreateRepo(repoName, env) {
   });
   if (!res.ok) {
     const err = await res.text();
-    throw new Error('GitHub create repo failed: ' + err);
+    throw new Error('GitHub create repo failed (token=' + token.substring(0, 8) + '..., user=' + username + '): ' + err);
   }
   return await res.json();
 }
