@@ -1251,9 +1251,18 @@ async function githubCreateRepo(repoName, env) {
   if (!token) throw new Error('GITHUB_TOKEN 环境变量未设置');
   if (!username) throw new Error('GITHUB_USERNAME 环境变量未设置');
 
+  const headers = getGithubHeaders(env, { 'Content-Type': 'application/json' });
+  console.log('GitHub API Request:', JSON.stringify({
+    url: GITHUB_CONFIG.apiBase + '/user/repos',
+    method: 'POST',
+    headers: headers,
+    tokenLength: token.length,
+    username: username
+  }));
+
   const res = await fetch(GITHUB_CONFIG.apiBase + "/user/repos", {
     method: 'POST',
-    headers: getGithubHeaders(env, { 'Content-Type': 'application/json' }),
+    headers: headers,
     body: JSON.stringify({
       name: repoName,
       private: true,
