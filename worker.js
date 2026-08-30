@@ -8,8 +8,21 @@
 const GITHUB_USER = 'ikecode26';
 const GITHUB_API = 'https://api.github.com';
 const KV_SIZE_LIMIT = 10 * 1024 * 1024;        // 10 MB
-const GITHUB_SINGLE_LIMIT = 50 * 1024 * 1024;  // 超过此大小使用分片，避免 GitHub 单文件 100MB(base64) 限制和 Worker 超时
-const CHUNK_SIZE = 50 * 1024 * 1024;           // 50 MB
+const GITHUB_SINGLE_LIMIT = 0;                 // GitHub 文件一律分片，避免 Worker CPU/超时
+const CHUNK_SIZE = 10 * 1024 * 1024;           // 10 MB/片
+
+async function loggedFetch(url, options = {}) {
+  const method = options.method || 'GET';
+  console.log(`[fetch] ${method} ${url}`);
+  try {
+    const resp = await fetch(url, options);
+    console.log(`[fetch] ${method} ${url} -> ${resp.status}`);
+    return resp;
+  } catch (e) {
+    console.error(`[fetch] ${method} ${url} failed:`, e);
+    throw e;
+  }
+}
 
 // ==================== 工具函数 ====================
 
@@ -27,10 +40,16 @@ function getKV(ssid, env) {
 }
 
 function arrayBufferToBase64(buffer) {
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(buffer).toString('base64');
+  }
   const bytes = new Uint8Array(buffer);
-  let binary = '';
   const len = bytes.byteLength;
-  for (let i = 0; i < len; i++) binary += String.fromCharCode(bytes[i]);
+  const chunkSize = 0x8000;
+  let binary = '';
+  for (let i = 0; i < len; i += chunkSize) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+  }
   return btoa(binary);
 }
 
@@ -197,7 +216,7 @@ function collectPaths(node, base = '') {
 // ==================== GitHub API ====================
 
 async function githubCreateRepo(ssid, env) {
-  const resp = await fetch(`${GITHUB_API}/user/repos`, {
+  const resp = await loggedFetch(`${GITHUB_API}/user/repos`, {
     method: 'POST',
     headers: {
       'Authorization': `token ${env.GITHUB_TOKEN}`,
@@ -216,7 +235,8 @@ async function githubCreateRepo(ssid, env) {
 
 async function githubUploadFile(ssid, path, content, env, message = 'upload') {
   const base64 = arrayBufferToBase64(content);
-  const resp = await fetch(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}/contents/${encodeURIComponent(path)}`, {
+  console.log(`[github] upload ${ssid}/${path} raw=${content.byteLength} base64=${base64.length}`);
+  const resp = await loggedFetch(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}/contents/${encodeURIComponent(path)}`, {
     method: 'PUT',
     headers: {
       'Authorization': `token ${env.GITHUB_TOKEN}`,
@@ -235,14 +255,14 @@ async function githubUploadFile(ssid, path, content, env, message = 'upload') {
 
 async function githubDeleteFile(ssid, path, env) {
   // 先获取 sha
-  const infoResp = await fetch(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}/contents/${encodeURIComponent(path)}`, {
+  const infoResp = await loggedFetch(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}/contents/${encodeURIComponent(path)}`, {
     headers: { 'Authorization': `token ${env.GITHUB_TOKEN}`, 'Accept': 'application/vnd.github+json', 'User-Agent': 'netdisk-worker' }
   });
   if (!infoResp.ok) return;
   const info = await infoResp.json();
   const sha = Array.isArray(info) ? null : info.sha;
   if (!sha) return;
-  await fetch(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}/contents/${encodeURIComponent(path)}`, {
+  await loggedFetch(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}/contents/${encodeURIComponent(path)}`, {
     method: 'DELETE',
     headers: {
       'Authorization': `token ${env.GITHUB_TOKEN}`,
@@ -255,14 +275,14 @@ async function githubDeleteFile(ssid, path, env) {
 }
 
 async function githubDeleteRepo(ssid, env) {
-  await fetch(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}`, {
+  await loggedFetch(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}`, {
     method: 'DELETE',
     headers: { 'Authorization': `token ${env.GITHUB_TOKEN}`, 'Accept': 'application/vnd.github+json', 'User-Agent': 'netdisk-worker' }
   });
 }
 
 async function githubGetDownloadUrl(ssid, path, env) {
-  const resp = await fetch(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}/contents/${encodeURIComponent(path)}`, {
+  const resp = await loggedFetch(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}/contents/${encodeURIComponent(path)}`, {
     headers: { 'Authorization': `token ${env.GITHUB_TOKEN}`, 'Accept': 'application/vnd.github+json', 'User-Agent': 'netdisk-worker' }
   });
   if (!resp.ok) {
@@ -275,7 +295,7 @@ async function githubGetDownloadUrl(ssid, path, env) {
 
 async function githubFetchFile(ssid, path, env) {
   const url = await githubGetDownloadUrl(ssid, path, env);
-  const resp = await fetch(url, {
+  const resp = await loggedFetch(url, {
     headers: { 'Authorization': `token ${env.GITHUB_TOKEN}`, 'User-Agent': 'netdisk-worker' }
   });
   if (!resp.ok) throw new Error(`GitHub 下载失败: ${resp.status}`);
@@ -596,13 +616,15 @@ body { margin:0; font-family:'Roboto',sans-serif; background:var(--bg); color:va
 .breadcrumbs a { color:var(--primary); text-decoration:none; font-size:14px; }
 .breadcrumbs span { color:var(--text-sec); font-size:14px; }
 .card { background:var(--surface); border-radius:12px; box-shadow:0 1px 3px rgba(0,0,0,.1); padding:12px; margin-bottom:12px; }
-.file-item { display:flex; align-items:center; gap:12px; padding:12px; border-bottom:1px solid var(--divider); }
-.file-item:last-child { border-bottom:none; }
-.file-icon { width:40px; height:40px; border-radius:8px; background:#e3f2fd; display:flex; align-items:center; justify-content:center; color:var(--primary); }
-.file-info { flex:1; min-width:0; }
-.file-name { font-size:15px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.file-card { background:#fff; border-radius:12px; box-shadow:0 1px 3px rgba(0,0,0,.08); padding:12px; margin-bottom:10px; }
+.file-main { display:flex; align-items:center; gap:12px; cursor:pointer; }
+.file-icon { width:40px; height:40px; border-radius:8px; background:#e3f2fd; display:flex; align-items:center; justify-content:center; color:var(--primary); flex-shrink:0; }
+.file-name-wrap { flex:1; min-width:0; overflow:hidden; }
+.file-name { display:inline-block; font-size:15px; font-weight:500; white-space:nowrap; }
+.file-name.marquee { padding-left:100%; animation:marquee 8s linear infinite; }
+@keyframes marquee { 0% { transform:translateX(0); } 100% { transform:translateX(-100%); } }
 .file-meta { font-size:12px; color:var(--text-sec); margin-top:2px; }
-.file-actions { display:flex; gap:4px; }
+.file-actions { display:flex; gap:8px; margin-top:10px; justify-content:flex-end; }
 .file-actions button { background:none; border:none; color:var(--text-sec); cursor:pointer; padding:6px; border-radius:50%; }
 .file-actions button:hover { background:#f5f5f5; color:var(--primary); }
 .empty { text-align:center; padding:40px 0; color:var(--text-sec); }
@@ -716,12 +738,14 @@ async function loadList(){
     const icon = node.type==='folder'?'folder':(getIcon(name));
     const meta = node.type==='folder'?'文件夹':(formatSize(node.size)||'');
     const path = currentPath?currentPath+'/'+name:name;
-    return \`<div class="file-item" data-path="\${escapeHtml(path)}" data-type="\${node.type}">
-      <div class="file-icon"><span class="material-icons">\${icon}</span></div>
-      <div class="file-info" data-action="open">
-        <div class="file-name">\${escapeHtml(name)}</div>
-        <div class="file-meta">\${meta}</div>
+    return \`<div class="file-card" data-path="\${escapeHtml(path)}" data-type="\${node.type}">
+      <div class="file-main" data-action="open">
+        <div class="file-icon"><span class="material-icons">\${icon}</span></div>
+        <div class="file-name-wrap">
+          <div class="file-name" title="\${escapeHtml(name)}">\${escapeHtml(name)}</div>
+        </div>
       </div>
+      <div class="file-meta">\${meta}</div>
       <div class="file-actions">
         \${node.type==='file'?\`<button data-action="download" title="下载"><span class="material-icons">download</span></button>
         <button data-action="link" title="复制直链"><span class="material-icons">link</span></button>
@@ -732,12 +756,22 @@ async function loadList(){
       </div>
     </div>\`;
   }).join('');
+  setupMarquee();
+}
+
+function setupMarquee(){
+  document.querySelectorAll('.file-name-wrap').forEach(wrap=>{
+    const name=wrap.querySelector('.file-name');
+    if(name && name.scrollWidth > wrap.clientWidth){
+      name.classList.add('marquee');
+    }
+  });
 }
 
 document.getElementById('file-list').addEventListener('click', e=>{
   const btn = e.target.closest('[data-action]');
   if(!btn) return;
-  const item = btn.closest('.file-item');
+  const item = btn.closest('.file-card');
   if(!item) return;
   const p = item.dataset.path;
   const type = item.dataset.type;
@@ -958,14 +992,23 @@ const params=new URLSearchParams(location.search);
 const path=params.get('path')||'';
 let fileNode=null;
 let textContent='';
+let editorInstance=null;
+let musicPlayer=null;
 function showMsg(msg){ const s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(()=>s.classList.remove('show'),2500); }
-function escapeHtml(t){ return t.replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',\"'\":'&#39;'}[m])); }
+function escapeHtml(t){ return t.replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 function formatSize(b){ if(!b)return '0 B'; const k=1024, s=['B','KB','MB','GB']; const i=Math.floor(Math.log(b)/Math.log(k)); return (b/Math.pow(k,i)).toFixed(2)+' '+s[i]; }
 async function api(url, opts={}){
   const r=await fetch(url, opts);
   if(r.status===401){ location.href='/login?redirect='+encodeURIComponent(location.pathname+location.search); return null; }
   if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
   return r.json().catch(()=>null);
+}
+function loadScript(src){ return new Promise((resolve,reject)=>{ const s=document.createElement('script'); s.src=src; s.onload=resolve; s.onerror=()=>reject(new Error('load failed: '+src)); document.head.appendChild(s); }); }
+function loadCSS(href){ return new Promise((resolve,reject)=>{ const l=document.createElement('link'); l.rel='stylesheet'; l.href=href; l.onload=resolve; l.onerror=()=>reject(new Error('load failed: '+href)); document.head.appendChild(l); }); }
+function getMime(name){
+  const ext=name.split('.').pop().toLowerCase();
+  const map={mp4:'video/mp4',webm:'video/webm',mkv:'video/x-matroska',mp3:'audio/mpeg',wav:'audio/wav',ogg:'audio/ogg',flac:'audio/flac',m4a:'audio/mp4',txt:'text/plain',md:'text/markdown',json:'application/json',js:'application/javascript',css:'text/css',html:'text/html',xml:'application/xml',zip:'application/zip',rar:'application/vnd.rar','7z':'application/x-7z-compressed',tar:'application/x-tar',gz:'application/gzip',pdf:'application/pdf',jpg:'image/jpeg',jpeg:'image/jpeg',png:'image/png',gif:'image/gif',webp:'image/webp'};
+  return map[ext]||'application/octet-stream';
 }
 async function load(){
   fileNode=await api('/api/file?path='+encodeURIComponent(path));
@@ -974,33 +1017,131 @@ async function load(){
   document.getElementById('file-meta').textContent=formatSize(fileNode.size)+' · '+new Date(fileNode.createdAt).toLocaleString();
   document.getElementById('title').textContent=fileNode.name;
   const ext=fileNode.name.split('.').pop().toLowerCase();
-  const mime = ext==='mp4'?'video/mp4':(ext==='mp3'?'audio/mpeg':(ext==='webm'?'video/webm':(ext==='wav'?'audio/wav':(ext==='ogg'?'audio/ogg':(ext==='jpg'||ext==='jpeg'?'image/jpeg':(ext==='png'?'image/png':(ext==='gif'?'image/gif':(ext==='webp'?'image/webp':'application/octet-stream'))))))));
+  const mime=getMime(fileNode.name);
   const preview=document.getElementById('preview');
-  if(mime.startsWith('video/')){
-    preview.innerHTML=\`<video controls><source src="/direct/\${fileNode.ssid}/\${encodeURIComponent(fileNode.name)}" type="\${mime}"></video>\`;
-  } else if(mime.startsWith('audio/')){
-    preview.innerHTML=\`<audio controls src="/direct/\${fileNode.ssid}/\${encodeURIComponent(fileNode.name)}"></audio>\`;
-  } else if(mime.startsWith('image/')){
-    preview.innerHTML=\`<img src="/direct/\${fileNode.ssid}/\${encodeURIComponent(fileNode.name)}" alt="\${escapeHtml(fileNode.name)}">\`;
-  } else if(['txt','md','json','js','css','html','xml'].includes(ext)){
-    const r=await fetch('/direct/'+fileNode.ssid+'/'+encodeURIComponent(fileNode.name));
-    textContent=await r.text();
-    preview.innerHTML=\`<textarea id="editor" style="width:100%;min-height:300px;font-family:monospace;padding:12px;border:1px solid #e0e0e0;border-radius:8px;">\${escapeHtml(textContent)}</textarea>\`;
-    document.getElementById('btn-save').style.display='inline-flex';
-  } else if(['zip','rar','7z','tar','gz'].includes(ext)){
-    preview.innerHTML='<div class="empty"><span class="material-icons" style="font-size:48px;color:#bdbdbd;">folder_zip</span><p>压缩文件，请下载后查看</p></div>';
-  } else {
-    preview.innerHTML='<div class="empty"><span class="material-icons" style="font-size:48px;color:#bdbdbd;">insert_drive_file</span><p>该文件类型无法预览</p></div>';
+  const url='/direct/'+fileNode.ssid+'/'+encodeURIComponent(fileNode.name);
+  try{
+    if(mime.startsWith('video/')){
+      await loadCSS('https://cdn.jsdelivr.net/npm/plyr@3.7.8/dist/plyr.css');
+      await loadScript('https://cdn.jsdelivr.net/npm/plyr@3.7.8/dist/plyr.min.js');
+      preview.innerHTML='<video id="media-player" controls><source src="'+url+'" type="'+mime+'"></video>';
+      new Plyr('#media-player',{speed:{selected:1,options:[0.5,0.75,1,1.25,1.5,2,3,4]}});
+    } else if(mime.startsWith('audio/')){
+      await loadScript('https://player.xfyun.club/js/music-player/music-player.min.js');
+      preview.innerHTML='<div id="music-root" style="width:100%;min-height:120px;"></div>';
+      if(musicPlayer) musicPlayer.destroy();
+      musicPlayer=new window.XfMusicPlayer.MusicPlayer({
+        tagName:'xf-netdisk-player',
+        language:'zh',
+        isMonitoring:false,
+        mountElement:document.getElementById('music-root'),
+        attributes:{
+          theme:'xf-original-theme',
+          mode:'local',
+          environment:'production',
+          autoplay:false,
+          playMode:'single',
+          volume:0.8,
+          isAutoPopup:true,
+          playlist:[{id:'audio-1',title:fileNode.name,src:url}]
+        }
+      });
+    } else if(['txt','md','json','js','css','html','xml'].includes(ext)){
+      await loadCSS('https://cdn.jsdelivr.net/npm/@wangeditor/editor@latest/dist/css/style.css');
+      await loadScript('https://cdn.jsdelivr.net/npm/@wangeditor/editor@latest/dist/index.js');
+      const r=await fetch(url);
+      textContent=await r.text();
+      preview.innerHTML='<div id="editor-toolbar" style="border-bottom:1px solid #e8e8e8;"></div><div id="editor-text-area" style="height:400px;background:#fff;"></div>';
+      const E=window.wangEditor;
+      if(editorInstance){ editorInstance.destroy(); editorInstance=null; }
+      editorInstance=E.createEditor({selector:'#editor-text-area',html:'<p></p>',mode:'default'});
+      editorInstance.setText(textContent);
+      E.createToolbar({editor:editorInstance,selector:'#editor-toolbar'});
+      document.getElementById('btn-save').style.display='inline-flex';
+    } else if(ext==='zip'){
+      preview.innerHTML='<div id="zip-list" class="card" style="padding:0;max-height:60vh;overflow:auto;"></div>';
+      await renderZip(url);
+    } else if(mime.startsWith('image/')){
+      preview.innerHTML='<img src="'+url+'" alt="'+escapeHtml(fileNode.name)+'" style="max-width:100%;border-radius:8px;">';
+    } else {
+      preview.innerHTML='<div class="empty"><span class="material-icons" style="font-size:48px;color:#bdbdbd;">insert_drive_file</span><p>该文件类型无法预览</p></div>';
+    }
+  }catch(e){
+    console.error('预览加载失败',e);
+    if(mime.startsWith('video/')){
+      preview.innerHTML='<video controls style="width:100%;"><source src="'+url+'" type="'+mime+'"></video>';
+    }else if(mime.startsWith('audio/')){
+      preview.innerHTML='<audio controls src="'+url+'" style="width:100%;"></audio>';
+    }else if(['txt','md','json','js','css','html','xml'].includes(ext)){
+      const r=await fetch(url);
+      textContent=await r.text();
+      preview.innerHTML='<textarea id="fallback-editor" style="width:100%;min-height:400px;font-family:monospace;padding:12px;border:1px solid #e0e0e0;border-radius:8px;background:#fff;">'+escapeHtml(textContent)+'</textarea>';
+      document.getElementById('btn-save').style.display='inline-flex';
+    }else{
+      preview.innerHTML='<div class="empty">预览加载失败: '+escapeHtml(e.message)+'</div>';
+    }
   }
   const iconMap={'mp4':'movie','mp3':'audiotrack','wav':'audiotrack','ogg':'audiotrack','jpg':'image','jpeg':'image','png':'image','gif':'image','webp':'image','zip':'folder_zip','rar':'folder_zip','7z':'folder_zip','tar':'folder_zip','gz':'folder_zip','txt':'description','md':'description','json':'description','js':'description','css':'description','html':'description'};
   document.getElementById('file-icon').textContent=iconMap[ext]||'insert_drive_file';
+}
+async function renderZip(url){
+  const list=document.getElementById('zip-list');
+  list.innerHTML='<div class="empty">正在读取压缩包...</div>';
+  try{
+    const {unzip}=await import('https://cdn.jsdelivr.net/npm/unzipit@2.0.1/dist/unzipit.module.js');
+    const r=await fetch(url);
+    const buf=await r.arrayBuffer();
+    const {entries}=await unzip(new Uint8Array(buf));
+    const names=Object.keys(entries).sort();
+    if(names.length===0){ list.innerHTML='<div class="empty">压缩包为空</div>'; return; }
+    list.innerHTML=names.map(name=>{
+      const entry=entries[name];
+      const isDir=name.endsWith('/');
+      return '<div class="zip-item" data-name="'+escapeHtml(name)+'" style="padding:10px 12px;border-bottom:1px solid #e0e0e0;display:flex;align-items:center;gap:8px;cursor:'+(isDir?'default':'pointer')+';">'+
+        '<span class="material-icons" style="color:#757575;">'+(isDir?'folder':'insert_drive_file')+'</span>'+
+        '<span style="flex:1;word-break:break-all;">'+escapeHtml(name)+'</span>'+
+        '<span style="color:#757575;font-size:12px;">'+formatSize(entry.size)+'</span>'+
+      '</div>';
+    }).join('');
+    list.querySelectorAll('.zip-item').forEach(item=>{
+      if(item.dataset.name.endsWith('/')) return;
+      item.onclick=async()=>{
+        const entry=entries[item.dataset.name];
+        const ext=item.dataset.name.split('.').pop().toLowerCase();
+        const textExts=['txt','md','json','js','css','html','xml'];
+        if(textExts.includes(ext)){
+          const text=new TextDecoder().decode(await entry.arrayBuffer());
+          list.innerHTML='<div style="padding:12px;"><button class="btn-secondary" onclick="renderZip(\''+url+'\')" style="margin-bottom:12px;">返回列表</button><pre style="background:#263238;color:#aed581;padding:12px;border-radius:8px;overflow:auto;max-height:60vh;font-size:13px;">'+escapeHtml(text)+'</pre></div>';
+        } else {
+          const blob=await entry.blob(getMime(item.dataset.name));
+          const blobUrl=URL.createObjectURL(blob);
+          const a=document.createElement('a'); a.href=blobUrl; a.download=item.dataset.name.split('/').pop(); a.click();
+        }
+      };
+    });
+  }catch(e){
+    console.error(e);
+    list.innerHTML='<div class="empty">读取压缩包失败: '+escapeHtml(e.message)+'</div>';
+  }
 }
 function downloadFile(){ location.href='/download/'+fileNode.ssid+'/'+encodeURIComponent(fileNode.name); }
 async function shareFile(){ await navigator.clipboard.writeText(location.origin+'/share/'+fileNode.ssid); showMsg('分享链接已复制'); }
 async function copyDirectLink(){ const url=location.origin+'/direct/'+fileNode.ssid+'/'+encodeURIComponent(fileNode.name); await navigator.clipboard.writeText(url); showMsg('直链已复制'); }
 async function renameFile(){ const n=prompt('新名称',fileNode.name); if(!n||n===fileNode.name) return; await api('/api/file/rename',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({path,newName:n})}); location.reload(); }
 async function deleteFile(){ if(!confirm('确定删除?')) return; await api('/api/file?path='+encodeURIComponent(path),{method:'DELETE'}); location.href='/?path='+encodeURIComponent(path.split('/').slice(0,-1).join('/')); }
-async function saveText(){ const body=document.getElementById('editor').value; await api('/api/file/content',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({path,content:body})}); showMsg('已保存'); }
+async function saveText(){
+  let body;
+  if(editorInstance){ body=editorInstance.getText(); }
+  else {
+    const ta=document.getElementById('fallback-editor');
+    if(!ta){ showMsg('编辑器未加载'); return; }
+    body=ta.value;
+  }
+  try{
+    await api('/api/file/content',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({path,content:body})});
+    showMsg('已保存');
+  }catch(e){ showMsg('保存失败: '+e.message); }
+}
 load();
 </script>
 `;
