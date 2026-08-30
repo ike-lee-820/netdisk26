@@ -8,7 +8,7 @@
 const GITHUB_USER = 'ikecode26';
 const GITHUB_API = 'https://api.github.com';
 const KV_SIZE_LIMIT = 10 * 1024 * 1024;        // 10 MB
-const GITHUB_SINGLE_LIMIT = 80 * 1024 * 1024;  // 80 MB
+const GITHUB_SINGLE_LIMIT = 50 * 1024 * 1024;  // 超过此大小使用分片，避免 GitHub 单文件 100MB(base64) 限制和 Worker 超时
 const CHUNK_SIZE = 50 * 1024 * 1024;           // 50 MB
 
 // ==================== 工具函数 ====================
@@ -425,6 +425,158 @@ async function buildDownloadResponse(node, filename, env, inline = false) {
   return new Response(readable, { headers });
 }
 
+// ==================== ZIP 打包下载 ====================
+
+function makeCrcTable() {
+  const table = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) {
+      c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    }
+    table[i] = c;
+  }
+  return table;
+}
+const CRC_TABLE = makeCrcTable();
+
+function crc32(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let c = ~0;
+  for (let i = 0; i < bytes.byteLength; i++) {
+    c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+  }
+  return ~c >>> 0;
+}
+
+function writeUintLE(view, offset, value, bytes) {
+  for (let i = 0; i < bytes; i++) {
+    view.setUint8(offset + i, (value >>> (8 * i)) & 0xFF);
+  }
+}
+
+class ZipBuilder {
+  constructor() {
+    this.entries = [];
+  }
+  add(name, buffer) {
+    const encodedName = new TextEncoder().encode(name);
+    const crc = crc32(buffer);
+    const size = buffer.byteLength;
+    this.entries.push({ name, encodedName, buffer, crc, size });
+  }
+  build() {
+    let localSize = 0;
+    let centralSize = 0;
+    for (const e of this.entries) {
+      localSize += 30 + e.encodedName.byteLength + e.size;
+      centralSize += 46 + e.encodedName.byteLength;
+    }
+    const total = localSize + centralSize + 22;
+    const zip = new Uint8Array(total);
+    const view = new DataView(zip.buffer);
+    let offset = 0;
+    const centralDir = [];
+    for (const e of this.entries) {
+      const nameLen = e.encodedName.byteLength;
+      writeUintLE(view, offset, 0x04034b50, 4);
+      writeUintLE(view, offset + 4, 20, 2);
+      writeUintLE(view, offset + 6, 0, 2);
+      writeUintLE(view, offset + 8, 0, 2);
+      writeUintLE(view, offset + 10, 0, 2);
+      writeUintLE(view, offset + 12, 0, 2);
+      writeUintLE(view, offset + 14, e.crc, 4);
+      writeUintLE(view, offset + 18, e.size, 4);
+      writeUintLE(view, offset + 22, e.size, 4);
+      writeUintLE(view, offset + 26, nameLen, 2);
+      writeUintLE(view, offset + 28, 0, 2);
+      zip.set(e.encodedName, offset + 30);
+      zip.set(new Uint8Array(e.buffer), offset + 30 + nameLen);
+      const localHeaderOffset = offset;
+      offset += 30 + nameLen + e.size;
+      centralDir.push({ ...e, localHeaderOffset });
+    }
+    const centralOffset = offset;
+    for (const e of centralDir) {
+      const nameLen = e.encodedName.byteLength;
+      writeUintLE(view, offset, 0x02014b50, 4);
+      writeUintLE(view, offset + 4, 20, 2);
+      writeUintLE(view, offset + 6, 20, 2);
+      writeUintLE(view, offset + 8, 0, 2);
+      writeUintLE(view, offset + 10, 0, 2);
+      writeUintLE(view, offset + 12, 0, 2);
+      writeUintLE(view, offset + 14, 0, 2);
+      writeUintLE(view, offset + 16, e.crc, 4);
+      writeUintLE(view, offset + 20, e.size, 4);
+      writeUintLE(view, offset + 24, e.size, 4);
+      writeUintLE(view, offset + 28, nameLen, 2);
+      writeUintLE(view, offset + 30, 0, 2);
+      writeUintLE(view, offset + 32, 0, 2);
+      writeUintLE(view, offset + 34, 0, 2);
+      writeUintLE(view, offset + 36, 0, 2);
+      writeUintLE(view, offset + 38, e.localHeaderOffset, 4);
+      zip.set(e.encodedName, offset + 42);
+      offset += 46 + nameLen;
+    }
+    writeUintLE(view, offset, 0x06054b50, 4);
+    writeUintLE(view, offset + 4, 0, 2);
+    writeUintLE(view, offset + 6, 0, 2);
+    writeUintLE(view, offset + 8, this.entries.length, 2);
+    writeUintLE(view, offset + 10, this.entries.length, 2);
+    writeUintLE(view, offset + 12, centralSize, 4);
+    writeUintLE(view, offset + 16, centralOffset, 4);
+    writeUintLE(view, offset + 20, 0, 2);
+    return zip.buffer;
+  }
+}
+
+async function fetchFileBuffer(node, env) {
+  if (node.storage === 'kv') {
+    return await getKV(node.ssid, env).get(node.ssid, { type: 'arrayBuffer' });
+  }
+  if (!node.chunks || node.chunks === 1) {
+    const resp = await githubFetchFile(node.ssid, node.githubPath || node.name, env);
+    return await resp.arrayBuffer();
+  }
+  let total = 0;
+  const chunks = [];
+  for (let i = 0; i < node.chunks; i++) {
+    const resp = await githubFetchFile(node.ssid, `chunk_${i}`, env);
+    const buf = await resp.arrayBuffer();
+    chunks.push(new Uint8Array(buf));
+    total += buf.byteLength;
+  }
+  const combined = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) {
+    combined.set(c, off);
+    off += c.byteLength;
+  }
+  return combined.buffer;
+}
+
+async function buildFolderZipResponse(folderPath, env) {
+  const structure = await getStructure(env);
+  const folder = getNode(structure, folderPath);
+  if (!folder || folder.type !== 'folder') return errorResponse('文件夹不存在', 404);
+  const prefix = folderPath ? folderPath + '/' : '';
+  const paths = collectPaths(folder, folderPath);
+  const zip = new ZipBuilder();
+  for (const p of paths) {
+    const node = getNode(structure, p);
+    if (!node || node.type !== 'file') continue;
+    const buf = await fetchFileBuffer(node, env);
+    zip.add(p.slice(prefix.length).replace(/\\/g, '/'), buf);
+  }
+  const zipBuffer = zip.build();
+  const folderName = folderPath ? folderPath.split('/').pop() : 'root';
+  const headers = {
+    'Content-Type': 'application/zip',
+    'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(folderName)}.zip`
+  };
+  return new Response(zipBuffer, { headers });
+}
+
 // ==================== HTML 模板 ====================
 
 const COMMON_HEAD = `
@@ -572,7 +724,9 @@ async function loadList(){
       </div>
       <div class="file-actions">
         \${node.type==='file'?\`<button data-action="download" title="下载"><span class="material-icons">download</span></button>
+        <button data-action="link" title="复制直链"><span class="material-icons">link</span></button>
         <button data-action="share" title="分享"><span class="material-icons">share</span></button>\`:''}
+        \${node.type==='folder'?\`<button data-action="downloadFolder" title="打包下载"><span class="material-icons">folder_zip</span></button>\`:''}
         <button data-action="rename" title="重命名"><span class="material-icons">edit</span></button>
         <button data-action="delete" title="删除"><span class="material-icons">delete</span></button>
       </div>
@@ -590,7 +744,9 @@ document.getElementById('file-list').addEventListener('click', e=>{
   const action = btn.dataset.action;
   if(action==='open'){ type==='folder'?openFolder(p):openFile(p); }
   else if(action==='download') downloadFile(p);
+  else if(action==='link') copyDirectLink(p);
   else if(action==='share') shareFile(p);
+  else if(action==='downloadFolder') downloadFolder(p);
   else if(action==='rename') renameItem(p);
   else if(action==='delete') deleteItem(p);
 });
@@ -627,6 +783,16 @@ async function shareFile(p){
   const url=location.origin+'/share/'+node.ssid;
   await navigator.clipboard.writeText(url);
   showMsg('分享链接已复制');
+}
+async function copyDirectLink(p){
+  const node=await api('/api/file?path='+encodeURIComponent(p));
+  if(!node) return;
+  const url=location.origin+'/direct/'+node.ssid+'/'+encodeURIComponent(node.name);
+  await navigator.clipboard.writeText(url);
+  showMsg('直链已复制');
+}
+function downloadFolder(p){
+  location.href='/api/folder/download?path='+encodeURIComponent(p);
 }
 async function renameItem(p){
   const name=p.split('/').pop();
@@ -777,6 +943,7 @@ const FILE_BODY = `
   <div class="card" style="display:flex;gap:8px;flex-wrap:wrap;">
     <button class="btn-primary" onclick="downloadFile()" style="display:flex;align-items:center;gap:4px;padding:10px 16px;border:none;border-radius:8px;cursor:pointer;"><span class="material-icons">download</span> 下载</button>
     <button class="btn-secondary" onclick="shareFile()" style="display:flex;align-items:center;gap:4px;padding:10px 16px;border:none;border-radius:8px;cursor:pointer;"><span class="material-icons">share</span> 分享</button>
+    <button class="btn-secondary" onclick="copyDirectLink()" style="display:flex;align-items:center;gap:4px;padding:10px 16px;border:none;border-radius:8px;cursor:pointer;"><span class="material-icons">link</span> 复制直链</button>
     <button class="btn-secondary" onclick="renameFile()" style="display:flex;align-items:center;gap:4px;padding:10px 16px;border:none;border-radius:8px;cursor:pointer;"><span class="material-icons">edit</span> 重命名</button>
     <button class="btn-secondary" onclick="deleteFile()" style="display:flex;align-items:center;gap:4px;padding:10px 16px;border:none;border-radius:8px;cursor:pointer;color:var(--danger);"><span class="material-icons">delete</span> 删除</button>
     <button class="btn-secondary" id="btn-save" onclick="saveText()" style="display:none;align-items:center;gap:4px;padding:10px 16px;border:none;border-radius:8px;cursor:pointer;"><span class="material-icons">save</span> 保存</button>
@@ -830,6 +997,7 @@ async function load(){
 }
 function downloadFile(){ location.href='/download/'+fileNode.ssid+'/'+encodeURIComponent(fileNode.name); }
 async function shareFile(){ await navigator.clipboard.writeText(location.origin+'/share/'+fileNode.ssid); showMsg('分享链接已复制'); }
+async function copyDirectLink(){ const url=location.origin+'/direct/'+fileNode.ssid+'/'+encodeURIComponent(fileNode.name); await navigator.clipboard.writeText(url); showMsg('直链已复制'); }
 async function renameFile(){ const n=prompt('新名称',fileNode.name); if(!n||n===fileNode.name) return; await api('/api/file/rename',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({path,newName:n})}); location.reload(); }
 async function deleteFile(){ if(!confirm('确定删除?')) return; await api('/api/file?path='+encodeURIComponent(path),{method:'DELETE'}); location.href='/?path='+encodeURIComponent(path.split('/').slice(0,-1).join('/')); }
 async function saveText(){ const body=document.getElementById('editor').value; await api('/api/file/content',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({path,content:body})}); showMsg('已保存'); }
@@ -848,7 +1016,7 @@ function sharePage(node) {
     <h2 style="margin:12px 0 4px;">${escapeHtml(node.name)}</h2>
     <p style="color:var(--text-sec);">${formatSize(node.size)}</p>
     <div style="margin-top:20px;display:flex;gap:12px;justify-content:center;">
-      <button class="btn-primary" onclick="location.href='/download/${node.ssid}/${encodeURIComponent(node.name)}'" style="padding:10px 20px;border:none;border-radius:8px;cursor:pointer;">下载</button>
+      <button class="btn-primary" onclick="location.href='/direct/${node.ssid}/${encodeURIComponent(node.name)}'" style="padding:10px 20px;border:none;border-radius:8px;cursor:pointer;">下载</button>
       <button class="btn-secondary" onclick="preview()" style="padding:10px 20px;border:none;border-radius:8px;cursor:pointer;">预览</button>
     </div>
   </div>
@@ -977,8 +1145,9 @@ async function handleRequest(request, env) {
       });
       await saveStructure(env, structure);
     } catch (e) {
-      await updateTask(env, taskId, { status: 'error', message: e.message, progress: 0 });
-      return errorResponse(e.message, 500);
+      console.error('上传失败', e);
+      await updateTask(env, taskId, { status: 'error', message: e.message || '上传失败', progress: 0 });
+      return errorResponse(e.message || '上传失败', 500);
     }
     return jsonResponse({ ok: true, taskId });
   }
@@ -1044,6 +1213,13 @@ async function handleRequest(request, env) {
     return jsonResponse({ ok: true });
   }
 
+  if (path === '/api/folder/download' && request.method === 'GET') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    const p = url.searchParams.get('path') || '';
+    return buildFolderZipResponse(p, env);
+  }
+
   if (path === '/api/tasks' && request.method === 'GET') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
@@ -1060,8 +1236,6 @@ async function handleRequest(request, env) {
   }
 
   if (path.startsWith('/api/share/')) {
-    const forbid = requirePassword(request, env);
-    if (forbid) return forbid;
     const id = path.slice('/api/share/'.length);
     // 通过遍历结构查找
     const structure = await getStructure(env);
@@ -1126,9 +1300,8 @@ async function handleRequest(request, env) {
     return buildDownloadResponse(node, filename || node.name, env, true);
   }
 
-  // 分享页 /share/:ssid （需密码）
+  // 分享页 /share/:ssid （无需密码）
   if (path.startsWith('/share/')) {
-    if (!checkPassword(request, env)) return loginPage();
     const id = path.slice('/share/'.length);
     const structure = await getStructure(env);
     const allPaths = collectPaths(structure);
