@@ -897,7 +897,7 @@ async function githubUploadFile(repoName, path, contentBase64, message, env) {
     headers: {
       'Authorization': "token " + getGithubToken(env),
       'Accept': 'application/vnd.github.v3+json',
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
       'User-Agent': 'Cloudflare-Worker-CloudDrive',
     },
     body: JSON.stringify(body)
@@ -947,7 +947,7 @@ async function githubDeleteFile(repoName, path, sha, message, env) {
     headers: {
       'Authorization': "token " + getGithubToken(env),
       'Accept': 'application/vnd.github.v3+json',
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
       'User-Agent': 'Cloudflare-Worker-CloudDrive',
     },
     body: JSON.stringify({ message: message || 'Delete file', sha })
@@ -1818,7 +1818,7 @@ async function githubUploadFile(repoName, path, contentBase64, message, env) {
     headers: {
       'Authorization': "token " + getGithubToken(env),
       'Accept': 'application/vnd.github.v3+json',
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
       'User-Agent': 'Cloudflare-Worker-CloudDrive',
     },
     body: JSON.stringify(body)
@@ -1868,7 +1868,7 @@ async function githubDeleteFile(repoName, path, sha, message, env) {
     headers: {
       'Authorization': "token " + getGithubToken(env),
       'Accept': 'application/vnd.github.v3+json',
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
       'User-Agent': 'Cloudflare-Worker-CloudDrive',
     },
     body: JSON.stringify({ message: message || 'Delete file', sha })
