@@ -935,7 +935,7 @@ body { margin:0; font-family:'Roboto',sans-serif; background:var(--bg); color:va
 `;
 
 function page(title, body, scripts = '') {
-  return new Response(`<!DOCTYPE html><html><head>${COMMON_HEAD}<title>${title}</title></head><body>${body}${scripts}</body></html>`, {
+  return new Response(`<!DOCTYPE html><html><head>${COMMON_HEAD}<title>${escapeHtml(title)}</title></head><body>${body}${scripts}</body></html>`, {
     headers: { 'Content-Type': 'text/html; charset=utf-8' }
   });
 }
@@ -1158,19 +1158,50 @@ async function uploadFiles(files){
 async function uploadOne(file, dir){
   const path = dir ? dir + '/' + file.name : file.name;
   const taskId = genTaskId();
-  addLocalTask({ id: taskId, name: file.name, status: 'uploading', message: '正在发送...', progress: 1, size: file.size, createdAt: Date.now(), updatedAt: Date.now() });
+  const baseTask = { id: taskId, name: file.name, status: 'uploading', message: '正在发送...', progress: 1, size: file.size, createdAt: Date.now(), updatedAt: Date.now() };
+  addLocalTask(baseTask);
   loadTasks();
-  const form = new FormData();
-  form.append('path', path);
-  form.append('file', file);
-  form.append('taskId', taskId);
+  const CHUNK_SIZE = 10 * 1024 * 1024;
   try{
-    await api('/api/upload', { method: 'POST', body: form });
-    showMsg('已开始上传: '+file.name);
+    if (file.size <= CHUNK_SIZE) {
+      const form = new FormData();
+      form.append('path', path);
+      form.append('file', file);
+      form.append('taskId', taskId);
+      await api('/api/upload', { method: 'POST', body: form });
+      removeLocalTask(taskId);
+      showMsg('已开始上传: ' + file.name);
+    } else {
+      const start = await api('/api/upload/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: path, filename: file.name, size: file.size, taskId: taskId }) });
+      if (!start) throw new Error('初始化上传失败');
+      const chunkSize = start.chunkSize || CHUNK_SIZE;
+      const total = start.chunks;
+      for (let i = 0; i < total; i++) {
+        const begin = i * chunkSize;
+        const end = Math.min(begin + chunkSize, file.size);
+        const blob = file.slice(begin, end);
+        const form = new FormData();
+        form.append('uploadId', start.uploadId);
+        form.append('index', String(i));
+        form.append('total', String(total));
+        form.append('storage', start.storage);
+        form.append('path', path);
+        form.append('filename', file.name);
+        form.append('chunk', blob, file.name + '.part' + i);
+        form.append('taskId', taskId);
+        await api('/api/upload/chunk', { method: 'POST', body: form });
+        const progress = Math.floor(((i + 1) / total) * 90);
+        addLocalTask({ ...baseTask, message: '上传分片 ' + (i + 1) + '/' + total, progress: progress });
+        loadTasks();
+      }
+      await api('/api/upload/finish', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ uploadId: start.uploadId, path: path, filename: file.name, storage: start.storage, size: file.size, chunks: total, taskId: taskId }) });
+      removeLocalTask(taskId);
+      showMsg('上传完成: ' + file.name);
+    }
   }catch(e){
-    addLocalTask({ id: taskId, name: file.name, status: 'error', message: e.message || '上传失败', progress: 0, size: file.size, createdAt: Date.now(), updatedAt: Date.now() });
+    addLocalTask({ ...baseTask, status: 'error', message: e.message || '上传失败', progress: 0 });
     loadTasks();
-    showMsg('上传失败: '+file.name+' '+e.message);
+    showMsg('上传失败: ' + file.name + ' ' + e.message);
     throw e;
   }
 }
@@ -1248,21 +1279,34 @@ async function login(){
 
 // ==================== 文件详情页 ====================
 
-const FILE_BODY = `
-<div class="appbar"><span class="material-icons" onclick="history.back()">arrow_back</span><h1 id="title">文件详情</h1></div>
+function fileBody(node, filePath) {
+  const meta = formatSize(node.size) + ' · ' + new Date(node.createdAt).toLocaleString();
+  const downloadUrl = '/download/' + node.ssid + '/' + encodeURIComponent(node.name);
+  return `
+<div class="appbar"><span class="material-icons" onclick="history.back()">arrow_back</span><h1 id="title">${escapeHtml(node.name)}</h1></div>
 <div class="container">
   <div class="card">
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
       <div class="file-icon" style="width:56px;height:56px;"><span class="material-icons" id="file-icon" style="font-size:28px;">insert_drive_file</span></div>
       <div>
-        <div id="file-name" style="font-size:18px;font-weight:500;"></div>
-        <div id="file-meta" style="color:var(--text-sec);font-size:14px;"></div>
+        <div id="file-name" style="font-size:18px;font-weight:500;">${escapeHtml(node.name)}</div>
+        <div id="file-meta" style="color:var(--text-sec);font-size:14px;">${meta}</div>
       </div>
     </div>
-    <div class="preview-box" id="preview"></div>
+    <div class="preview-box" id="preview">
+      <div class="empty">
+        正在加载预览…<br>
+        <a href="${downloadUrl}">如果无响应，请点击此处下载</a>
+      </div>
+    </div>
+    <noscript>
+      <div class="card" style="margin-top:12px;">
+        <p>您的浏览器已禁用 JavaScript，无法自动加载预览。请使用上方“下载”按钮获取文件。</p>
+      </div>
+    </noscript>
   </div>
   <div class="card" style="display:flex;gap:8px;flex-wrap:wrap;">
-    <button class="btn-primary" onclick="downloadFile()" style="display:flex;align-items:center;gap:4px;padding:10px 16px;border:none;border-radius:8px;cursor:pointer;"><span class="material-icons">download</span> 下载</button>
+    <a class="btn-primary" href="${downloadUrl}" style="display:inline-flex;align-items:center;gap:4px;padding:10px 16px;border:none;border-radius:8px;cursor:pointer;text-decoration:none;"><span class="material-icons">download</span> 下载</a>
     <button class="btn-secondary" onclick="shareFile()" style="display:flex;align-items:center;gap:4px;padding:10px 16px;border:none;border-radius:8px;cursor:pointer;"><span class="material-icons">share</span> 分享</button>
     <button class="btn-secondary" onclick="copyDirectLink()" style="display:flex;align-items:center;gap:4px;padding:10px 16px;border:none;border-radius:8px;cursor:pointer;"><span class="material-icons">link</span> 复制直链</button>
     <button class="btn-secondary" onclick="renameFile()" style="display:flex;align-items:center;gap:4px;padding:10px 16px;border:none;border-radius:8px;cursor:pointer;"><span class="material-icons">edit</span> 重命名</button>
@@ -1272,6 +1316,7 @@ const FILE_BODY = `
 </div>
 <div class="snackbar" id="snackbar"></div>
 `;
+}
 
 const FILE_SCRIPT = `
 <script>
@@ -1596,6 +1641,92 @@ async function handleRequest(request, env) {
     return jsonResponse({ ok: true, taskId });
   }
 
+  // 大文件客户端分片上传：初始化
+  if (path === '/api/upload/start' && request.method === 'POST') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    const body = await request.json();
+    const filePath = body.path;
+    const filename = body.filename;
+    const size = body.size;
+    const taskId = body.taskId || ssid();
+    if (!filePath || !filename || size == null) return errorResponse('缺少路径/文件名/大小');
+    const uploadId = ssid();
+    const storage = size <= KV_SIZE_LIMIT ? 'kv' : 'github';
+    const chunks = Math.ceil(size / CHUNK_SIZE);
+    await addTask(env, {
+      id: taskId,
+      name: filename,
+      status: 'uploading',
+      message: '准备分片上传...',
+      progress: 0,
+      size,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    });
+    return jsonResponse({ uploadId, storage, chunks, chunkSize: CHUNK_SIZE, taskId });
+  }
+
+  // 大文件客户端分片上传：接收单分片
+  if (path === '/api/upload/chunk' && request.method === 'POST') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    const form = await request.formData();
+    const uploadId = form.get('uploadId');
+    const index = parseInt(form.get('index'), 10);
+    const total = parseInt(form.get('total'), 10);
+    const storage = form.get('storage');
+    const taskId = form.get('taskId');
+    const chunkFile = form.get('chunk');
+    if (!uploadId || isNaN(index) || !chunkFile) return errorResponse('缺少分片参数');
+    const chunkBuf = await chunkFile.arrayBuffer();
+    try {
+      if (storage === 'kv') {
+        await getKV(uploadId, env).put(uploadId, chunkBuf);
+      } else {
+        if (index === 0) await githubCreateRepo(uploadId, env);
+        await githubUploadFile(uploadId, 'chunk_' + index, chunkBuf, env, 'chunk ' + index);
+      }
+      const progress = Math.floor(((index + 1) / total) * 90);
+      await updateTask(env, taskId, { message: '上传分片 ' + (index + 1) + '/' + total, progress });
+      return jsonResponse({ ok: true, index });
+    } catch (e) {
+      console.error('分片上传失败', e);
+      await updateTask(env, taskId, { status: 'error', message: e.message || '分片上传失败', progress: 0 });
+      return errorResponse(e.message || '分片上传失败', 500);
+    }
+  }
+
+  // 大文件客户端分片上传：完成并写入目录
+  if (path === '/api/upload/finish' && request.method === 'POST') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    const body = await request.json();
+    const filePath = body.path;
+    const uploadId = body.uploadId;
+    const filename = body.filename;
+    const storage = body.storage;
+    const size = body.size;
+    const chunks = body.chunks;
+    const taskId = body.taskId;
+    if (!filePath || !uploadId || !filename || !storage) return errorResponse('缺少完成参数');
+    const structure = await getStructure(env);
+    const oldNode = getNode(structure, filePath);
+    if (oldNode && oldNode.type === 'file') await deleteFileStorage(oldNode, env);
+    setNode(structure, filePath, {
+      type: 'file',
+      name: filename,
+      ssid: uploadId,
+      storage,
+      size,
+      chunks,
+      createdAt: Date.now()
+    });
+    await saveStructure(env, structure);
+    await updateTask(env, taskId, { status: 'done', message: '完成', progress: 100 });
+    return jsonResponse({ ok: true });
+  }
+
   if (path === '/api/file' && request.method === 'GET') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
@@ -1707,7 +1838,11 @@ async function handleRequest(request, env) {
   }
   if (path === '/file') {
     if (!checkPassword(request, env)) return loginPage();
-    return page('文件详情', FILE_BODY, FILE_SCRIPT);
+    const filePath = url.searchParams.get('path') || '';
+    const structure = await getStructure(env);
+    const node = getNode(structure, filePath);
+    if (!node || node.type !== 'file') return errorResponse('文件不存在或已删除', 404);
+    return page(node.name, fileBody(node, filePath), FILE_SCRIPT);
   }
 
   // WebDAV 入口
