@@ -189,7 +189,6 @@ const HTML = `
     function api(path, options) {
       options = options || {};
       var fetchOptions = { method: options.method || "GET", headers: { "Content-Type": "application/json" } };
-      // 自动携带认证 token
       var token = localStorage.getItem(AUTH_TOKEN_KEY);
       if (token) {
         fetchOptions.headers["X-Auth-Token"] = token;
@@ -197,13 +196,11 @@ const HTML = `
       }
       if (options.body) fetchOptions.body = JSON.stringify(options.body);
       return fetch(API_BASE + path, fetchOptions).then(function(res) {
-        // 如果返回 401，跳转到密码验证
         if (res.status === 401) {
           localStorage.removeItem(AUTH_TOKEN_KEY);
           showAuthModal();
           return Promise.reject(new Error("需要重新登录"));
         }
-        // 检查是否是 JSON 响应
         var contentType = res.headers.get('content-type') || '';
         if (!contentType.includes('application/json')) {
           return res.text().then(function(text) {
@@ -1205,10 +1202,6 @@ function getGithubToken(env) {
   return env.GITHUB_TOKEN || '';
 }
 
-function getGithubUsername(env) {
-  return env.GITHUB_USERNAME || '';
-}
-
 // GitHub 存储状态跟踪（存在 KV 中）
 // repo:{ssid} -> { size, fileCount, createdAt }
 
@@ -1403,7 +1396,9 @@ async function storeFileContent(env, fileId, base64, chunkIndex, isChunk) {
   return { type: 'github', repo: repoName, path };
 }
 
-// 主读取函数：优先 GitHub，回退到 KV(data, headers = {}, status = 200) {
+// 主读取函数：优先 GitHub，回退到 KV
+
+function jsonResponse(data, headers = {}, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
     headers: { 'Content-Type': 'application/json', ...headers },
@@ -1717,7 +1712,6 @@ async function handleOfflineDownload(env, url, savePath, taskId) {
     const base64 = arrayBufferToBase64(arrayBuffer);
     const size = arrayBuffer.byteLength;
 
-    // 根据文件大小选择存储方式
     const KV_MAX = 20 * 1024 * 1024; // 20MB
     if (size < KV_MAX) {
       await storeSingleFile(env, fileId, base64);
