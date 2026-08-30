@@ -10,6 +10,7 @@ const GITHUB_API = 'https://api.github.com';
 const KV_SIZE_LIMIT = 10 * 1024 * 1024;        // 10 MB
 const GITHUB_SINGLE_LIMIT = 0;                 // GitHub 文件一律分片，避免 Worker CPU/超时
 const CHUNK_SIZE = 10 * 1024 * 1024;           // 10 MB/片
+const CLIENT_CHUNK_SIZE = 5 * 1024 * 1024;     // 客户端每片 5 MB，避免浏览器/Worker 超时
 
 async function loggedFetch(url, options = {}) {
   const method = options.method || 'GET';
@@ -131,6 +132,15 @@ async function getStructure(env) {
 
 async function saveStructure(env, structure) {
   await env.FILE_STRUCTURE_KV.put('file_structure', JSON.stringify(structure));
+}
+
+async function getSettings(env) {
+  const data = await env.FILE_STRUCTURE_KV.get('app_settings', { type: 'json' });
+  return data || {};
+}
+
+async function saveSettings(env, settings) {
+  await env.FILE_STRUCTURE_KV.put('app_settings', JSON.stringify(settings));
 }
 
 function getFolder(structure, path) {
@@ -934,8 +944,8 @@ body { margin:0; font-family:'Roboto',sans-serif; background:var(--bg); color:va
 </style>
 `;
 
-function page(title, body, scripts = '') {
-  return new Response(`<!DOCTYPE html><html><head>${COMMON_HEAD}<title>${escapeHtml(title)}</title></head><body>${body}${scripts}</body></html>`, {
+function page(title, body, scripts = '', themeCss = '') {
+  return new Response(`<!DOCTYPE html><html><head>${COMMON_HEAD}${themeCss}<title>${escapeHtml(title)}</title></head><body>${body}${scripts}</body></html>`, {
     headers: { 'Content-Type': 'text/html; charset=utf-8' }
   });
 }
@@ -943,7 +953,7 @@ function page(title, body, scripts = '') {
 // ==================== 主页面 ====================
 
 const HOME_BODY = `
-<div class="appbar"><h1>我的网盘</h1><span class="material-icons" id="btn-logout" title="退出登录">logout</span></div>
+<div class="appbar"><h1>我的网盘</h1><div style="display:flex;align-items:center;gap:8px;"><span class="material-icons" id="btn-refresh" title="刷新" style="cursor:pointer;padding:8px;">refresh</span><span class="material-icons" id="btn-settings" title="设置" style="cursor:pointer;padding:8px;">settings</span><span class="material-icons" id="btn-logout" title="退出登录" style="cursor:pointer;padding:8px;">logout</span></div></div>
 <div class="container">
   <div class="breadcrumbs" id="breadcrumbs"><a href="/?path=">首页</a></div>
   <div id="file-list"></div>
@@ -964,6 +974,10 @@ const HOME_BODY = `
 <div class="drawer" id="task-drawer">
   <div class="drawer-head"><span>任务列表</span><span class="material-icons drawer-close" id="close-tasks">close</span></div>
   <div class="drawer-body" id="task-list"></div>
+  <div class="drawer-foot" style="padding:12px;border-top:1px solid var(--divider);display:flex;gap:8px;">
+    <button class="btn-secondary" id="btn-refresh-tasks" style="flex:1;padding:10px;border:none;border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:4px;"><span class="material-icons">refresh</span>刷新</button>
+    <button class="btn-secondary" id="btn-clear-done" style="flex:1;padding:10px;border:none;border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:4px;"><span class="material-icons">clear_all</span>清除已完成</button>
+  </div>
 </div>
 <div class="modal-overlay" id="modal">
   <div class="modal">
@@ -1161,7 +1175,7 @@ async function uploadOne(file, dir){
   const baseTask = { id: taskId, name: file.name, status: 'uploading', message: '正在发送...', progress: 1, size: file.size, createdAt: Date.now(), updatedAt: Date.now() };
   addLocalTask(baseTask);
   loadTasks();
-  const CHUNK_SIZE = 10 * 1024 * 1024;
+  const CHUNK_SIZE = 5 * 1024 * 1024;
   try{
     if (file.size <= CHUNK_SIZE) {
       const form = new FormData();
@@ -1172,7 +1186,7 @@ async function uploadOne(file, dir){
       removeLocalTask(taskId);
       showMsg('已开始上传: ' + file.name);
     } else {
-      const start = await api('/api/upload/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: path, filename: file.name, size: file.size, taskId: taskId }) });
+      const start = await api('/api/upload/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: path, filename: file.name, size: file.size, taskId: taskId, clientChunkSize: CHUNK_SIZE }) });
       if (!start) throw new Error('初始化上传失败');
       const chunkSize = start.chunkSize || CHUNK_SIZE;
       const total = start.chunks;
@@ -1189,7 +1203,19 @@ async function uploadOne(file, dir){
         form.append('filename', file.name);
         form.append('chunk', blob, file.name + '.part' + i);
         form.append('taskId', taskId);
-        await api('/api/upload/chunk', { method: 'POST', body: form });
+        let retries = 0;
+        while (true) {
+          try {
+            await api('/api/upload/chunk', { method: 'POST', body: form });
+            break;
+          } catch (e) {
+            retries++;
+            if (retries > 2) throw e;
+            addLocalTask({ ...baseTask, message: '重试分片 ' + (i + 1) + ' (第' + retries + '次)', progress: Math.floor((i / total) * 90) });
+            loadTasks();
+            await new Promise(r => setTimeout(r, 1000));
+          }
+        }
         const progress = Math.floor(((i + 1) / total) * 90);
         addLocalTask({ ...baseTask, message: '上传分片 ' + (i + 1) + '/' + total, progress: progress });
         loadTasks();
@@ -1231,10 +1257,25 @@ async function loadTasks(){
 }
 async function cancelTask(id){ await api('/api/tasks/'+id,{method:'DELETE'}); removeLocalTask(id); loadTasks(); }
 async function deleteTask(id){ await api('/api/tasks/'+id,{method:'DELETE'}); removeLocalTask(id); loadTasks(); }
+async function clearDoneTasks(){
+  const serverTasks = await api('/api/tasks') || [];
+  for (const t of serverTasks) {
+    if (t.status === 'done' || t.status === 'error' || t.status === 'cancelled') {
+      await api('/api/tasks/' + t.id, { method: 'DELETE' });
+      removeLocalTask(t.id);
+    }
+  }
+  loadTasks();
+  showMsg('已完成任务已清除');
+}
 
 // 底部菜单
 document.getElementById('btn-tasks').onclick=()=>{ document.getElementById('task-drawer').classList.add('show'); loadTasks(); if(taskTimer)clearInterval(taskTimer); taskTimer=setInterval(loadTasks,1500); };
 document.getElementById('close-tasks').onclick=()=>{ document.getElementById('task-drawer').classList.remove('show'); if(taskTimer)clearInterval(taskTimer); };
+document.getElementById('btn-refresh-tasks').onclick=loadTasks;
+document.getElementById('btn-clear-done').onclick=clearDoneTasks;
+document.getElementById('btn-refresh').onclick=loadList;
+document.getElementById('btn-settings').onclick=()=>{ location.href='/settings'; };
 document.getElementById('btn-new').onclick=()=>{ document.getElementById('upload-menu').classList.remove('show'); document.getElementById('new-menu').classList.toggle('show'); };
 document.getElementById('btn-upload').onclick=()=>{ document.getElementById('new-menu').classList.remove('show'); document.getElementById('upload-menu').classList.toggle('show'); };
 document.addEventListener('click',e=>{ if(!e.target.closest('#btn-new')&&!e.target.closest('#new-menu')) document.getElementById('new-menu').classList.remove('show'); if(!e.target.closest('#btn-upload')&&!e.target.closest('#upload-menu')) document.getElementById('upload-menu').classList.remove('show'); });
@@ -1487,6 +1528,136 @@ load();
 </script>
 `;
 
+// ==================== 设置页 ====================
+
+function settingsPage(settings = {}) {
+  const theme = settings.theme || 'material';
+  const primary = settings.primary || '#1976d2';
+  const bg = settings.bg || '';
+  const cardOpacity = settings.cardOpacity != null ? settings.cardOpacity : 1;
+  return page('设置', `
+<div class="appbar"><span class="material-icons" onclick="history.back()">arrow_back</span><h1>设置</h1></div>
+<div class="container">
+  <div class="card">
+    <h3 style="margin-top:0;">外观</h3>
+    <label style="display:block;margin-bottom:12px;font-size:14px;color:var(--text-sec);">主题风格</label>
+    <div style="display:flex;gap:12px;margin-bottom:16px;">
+      <button class="theme-option ${theme === 'material' ? 'active' : ''}" data-theme="material" style="flex:1;padding:12px;border:2px solid ${theme === 'material' ? primary : '#e0e0e0'};border-radius:8px;background:var(--surface);cursor:pointer;">Material</button>
+      <button class="theme-option ${theme === 'flat' ? 'active' : ''}" data-theme="flat" style="flex:1;padding:12px;border:2px solid ${theme === 'flat' ? primary : '#e0e0e0'};border-radius:8px;background:var(--surface);cursor:pointer;">扁平化</button>
+      <button class="theme-option ${theme === 'glass' ? 'active' : ''}" data-theme="glass" style="flex:1;padding:12px;border:2px solid ${theme === 'glass' ? primary : '#e0e0e0'};border-radius:8px;background:var(--surface);cursor:pointer;">液态玻璃</button>
+    </div>
+    <label style="display:block;margin-bottom:8px;font-size:14px;color:var(--text-sec);">主题颜色</label>
+    <div style="display:flex;gap:12px;align-items:center;margin-bottom:16px;">
+      <input type="color" id="primary-color" value="${primary}" style="width:56px;height:36px;padding:0;border:none;background:none;cursor:pointer;">
+      <span id="primary-label" style="font-size:14px;">${primary}</span>
+    </div>
+    <label style="display:block;margin-bottom:8px;font-size:14px;color:var(--text-sec);">文件列表背景</label>
+    <div style="display:flex;gap:8px;margin-bottom:8px;">
+      <input type="text" id="bg-value" placeholder="颜色/图片URL" value="${escapeHtml(bg)}" style="flex:1;">
+      <input type="color" id="bg-color" value="#f5f5f5" style="width:48px;padding:0;border:none;background:none;cursor:pointer;">
+    </div>
+    <label style="display:block;margin-bottom:8px;font-size:14px;color:var(--text-sec);">文件卡片透明度: <span id="opacity-label">${Math.round(cardOpacity * 100)}%</span></label>
+    <input type="range" id="card-opacity" min="0.2" max="1" step="0.05" value="${cardOpacity}" style="width:100%;margin-bottom:16px;">
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0;">危险操作</h3>
+    <button class="btn-secondary" onclick="clearAllData()" style="width:100%;padding:12px;border-radius:8px;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;color:var(--danger);"><span class="material-icons">delete_forever</span> 一键清空网盘</button>
+  </div>
+  <div class="card" style="text-align:center;">
+    <button class="btn-primary" onclick="saveSettings()" style="padding:12px 24px;border:none;border-radius:8px;cursor:pointer;">保存设置</button>
+  </div>
+</div>
+<div class="snackbar" id="snackbar"></div>
+`, `
+<script>
+let currentSettings = { theme: '${theme}', primary: '${primary}', bg: '${escapeHtml(bg)}', cardOpacity: ${cardOpacity} };
+function showMsg(msg){ const s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(()=>s.classList.remove('show'),2500); }
+function escapeHtml(t){ return t.replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+async function api(url, opts={}){
+  const r=await fetch(url, opts);
+  if(r.status===401){ location.href='/login?redirect='+encodeURIComponent(location.pathname+location.search); return null; }
+  if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
+  return r.json().catch(()=>null);
+}
+let selectedTheme = currentSettings.theme;
+document.querySelectorAll('.theme-option').forEach(btn=>{
+  btn.onclick = () => {
+    selectedTheme = btn.dataset.theme;
+    document.querySelectorAll('.theme-option').forEach(b => b.style.borderColor = '#e0e0e0');
+    btn.style.borderColor = document.getElementById('primary-color').value;
+  };
+});
+document.getElementById('primary-color').oninput = function(){
+  document.getElementById('primary-label').textContent = this.value;
+  const active = document.querySelector('.theme-option.active') || document.querySelector('[data-theme="' + selectedTheme + '"]');
+  if(active) active.style.borderColor = this.value;
+};
+document.getElementById('bg-color').oninput = function(){
+  document.getElementById('bg-value').value = this.value;
+};
+document.getElementById('card-opacity').oninput = function(){
+  document.getElementById('opacity-label').textContent = Math.round(parseFloat(this.value) * 100) + '%';
+};
+async function saveSettings(){
+  const settings = {
+    theme: selectedTheme,
+    primary: document.getElementById('primary-color').value,
+    bg: document.getElementById('bg-value').value.trim(),
+    cardOpacity: parseFloat(document.getElementById('card-opacity').value)
+  };
+  await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(settings) });
+  showMsg('设置已保存');
+  setTimeout(() => location.reload(), 600);
+}
+async function clearAllData(){
+  const pwd = prompt('警告：这将清空所有文件、任务和设置，且无法恢复。请输入网盘密码确认：');
+  if (!pwd) return;
+  await api('/api/clear', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pwd }) });
+  showMsg('网盘已清空');
+  setTimeout(() => location.href = '/', 800);
+}
+</script>
+`, settings.themeCss || '');
+}
+
+function generateThemeCss(settings = {}) {
+  const theme = settings.theme || 'material';
+  const primary = settings.primary || '#1976d2';
+  const bg = settings.bg || '';
+  const cardOpacity = settings.cardOpacity != null ? settings.cardOpacity : 1;
+  let css = '<style id="theme-style">:root { --primary:' + primary + '; --primary-dark:' + adjustColor(primary, -30) + '; }';
+  if (bg) {
+    if (bg.startsWith('http') || bg.startsWith('data:') || bg.startsWith('/')) {
+      css += 'body { background-image: url(' + bg + '); background-size: cover; background-attachment: fixed; background-position: center; }';
+    } else {
+      css += 'body { background: ' + bg + ' !important; }';
+    }
+  }
+  if (theme === 'flat') {
+    css += '.card,.file-card,.bottom-bar,.drawer,.fab-menu,.modal { box-shadow: none !important; border: 1px solid var(--divider); }';
+    css += '.appbar { box-shadow: none !important; border-bottom: 1px solid var(--divider); }';
+  } else if (theme === 'glass') {
+    css += '.card,.file-card,.bottom-bar,.drawer,.fab-menu,.modal { background: rgba(255,255,255,' + cardOpacity + ') !important; backdrop-filter: blur(16px) saturate(180%); -webkit-backdrop-filter: blur(16px) saturate(180%); border: 1px solid rgba(255,255,255,0.3); box-shadow: 0 8px 32px rgba(0,0,0,0.1) !important; }';
+    css += 'body { background: ' + (bg || 'linear-gradient(135deg,' + primary + '22 0%, #f5f5f5 100%)') + ' !important; background-attachment: fixed; }';
+    css += '.appbar { background: rgba(25,118,210,0.85) !important; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }';
+    css += '.file-icon { background: rgba(25,118,210,0.12) !important; }';
+  }
+  css += '.card,.file-card { opacity: ' + cardOpacity + '; }</style>';
+  return css;
+}
+
+function adjustColor(hex, amount) {
+  hex = hex.replace('#', '');
+  if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
+  let r = parseInt(hex.slice(0, 2), 16);
+  let g = parseInt(hex.slice(2, 4), 16);
+  let b = parseInt(hex.slice(4, 6), 16);
+  r = Math.max(0, Math.min(255, r + amount));
+  g = Math.max(0, Math.min(255, g + amount));
+  b = Math.max(0, Math.min(255, b + amount));
+  return '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('');
+}
+
 // ==================== 分享页 ====================
 
 function sharePage(node) {
@@ -1653,7 +1824,8 @@ async function handleRequest(request, env) {
     if (!filePath || !filename || size == null) return errorResponse('缺少路径/文件名/大小');
     const uploadId = ssid();
     const storage = size <= KV_SIZE_LIMIT ? 'kv' : 'github';
-    const chunks = Math.ceil(size / CHUNK_SIZE);
+    const chunkSize = Math.min(body.clientChunkSize || CLIENT_CHUNK_SIZE, CHUNK_SIZE);
+    const chunks = Math.ceil(size / chunkSize);
     await addTask(env, {
       id: taskId,
       name: filename,
@@ -1664,7 +1836,7 @@ async function handleRequest(request, env) {
       createdAt: Date.now(),
       updatedAt: Date.now()
     });
-    return jsonResponse({ uploadId, storage, chunks, chunkSize: CHUNK_SIZE, taskId });
+    return jsonResponse({ uploadId, storage, chunks, chunkSize, taskId });
   }
 
   // 大文件客户端分片上传：接收单分片
@@ -1682,7 +1854,7 @@ async function handleRequest(request, env) {
     const chunkBuf = await chunkFile.arrayBuffer();
     try {
       if (storage === 'kv') {
-        await getKV(uploadId, env).put(uploadId, chunkBuf);
+        await getKV(uploadId, env).put(uploadId + '_chunk_' + index, chunkBuf);
       } else {
         if (index === 0) await githubCreateRepo(uploadId, env);
         await githubUploadFile(uploadId, 'chunk_' + index, chunkBuf, env, 'chunk ' + index);
@@ -1713,13 +1885,31 @@ async function handleRequest(request, env) {
     const structure = await getStructure(env);
     const oldNode = getNode(structure, filePath);
     if (oldNode && oldNode.type === 'file') await deleteFileStorage(oldNode, env);
+    // 合并分片写入目标 KV，仅当存储方式为 kv 且分片数 > 1 时需要
+    let finalStorage = storage;
+    let finalSsid = uploadId;
+    if (storage === 'kv' && chunks > 1) {
+      let totalLen = 0;
+      const bufs = [];
+      for (let i = 0; i < chunks; i++) {
+        const b = await getKV(uploadId, env).get(uploadId + '_chunk_' + i, { type: 'arrayBuffer' });
+        bufs.push(new Uint8Array(b));
+        totalLen += b.byteLength;
+      }
+      const combined = new Uint8Array(totalLen);
+      let off = 0;
+      for (const b of bufs) { combined.set(b, off); off += b.byteLength; }
+      await getKV(finalSsid, env).put(finalSsid, combined.buffer);
+      for (let i = 0; i < chunks; i++) await getKV(uploadId, env).delete(uploadId + '_chunk_' + i);
+      finalStorage = 'kv';
+    }
     setNode(structure, filePath, {
       type: 'file',
       name: filename,
-      ssid: uploadId,
-      storage,
+      ssid: finalSsid,
+      storage: finalStorage,
       size,
-      chunks,
+      chunks: storage === 'kv' ? 1 : chunks,
       createdAt: Date.now()
     });
     await saveStructure(env, structure);
@@ -1830,11 +2020,53 @@ async function handleRequest(request, env) {
     });
   }
 
+  if (path === '/api/settings' && request.method === 'PUT') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    const body = await request.json();
+    const settings = {
+      theme: body.theme || 'material',
+      primary: body.primary || '#1976d2',
+      bg: body.bg || '',
+      cardOpacity: body.cardOpacity != null ? body.cardOpacity : 1
+    };
+    await saveSettings(env, settings);
+    return jsonResponse({ ok: true });
+  }
+
+  if (path === '/api/settings' && request.method === 'GET') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    const settings = await getSettings(env);
+    return jsonResponse(settings);
+  }
+
+  if (path === '/api/clear' && request.method === 'POST') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    const body = await request.json();
+    if (body.password !== env.CLOUD_PASSWORD) return errorResponse('密码错误', 403);
+    const structure = await getStructure(env);
+    const allPaths = collectPaths(structure);
+    for (const p of allPaths) {
+      const node = getNode(structure, p);
+      if (node && node.type === 'file') {
+        try { await deleteFileStorage(node, env); } catch (e) { console.error(e); }
+      }
+    }
+    await env.FILE_STRUCTURE_KV.put('file_structure', JSON.stringify({ type: 'root', name: '', children: {}, createdAt: Date.now() }));
+    await env.TASK_KV.put('tasks', JSON.stringify([]));
+    await env.FILE_STRUCTURE_KV.put('app_settings', JSON.stringify({}));
+    return jsonResponse({ ok: true });
+  }
+
   // HTML 页面路由
   if (path === '/login') return loginPage();
   if (path === '/') {
     if (!checkPassword(request, env)) return loginPage();
-    return page('我的网盘', HOME_BODY, HOME_SCRIPT);
+    const settings = await getSettings(env);
+    const themeCss = generateThemeCss(settings);
+    return page('我的网盘', HOME_BODY, HOME_SCRIPT, themeCss);
   }
   if (path === '/file') {
     if (!checkPassword(request, env)) return loginPage();
@@ -1842,7 +2074,15 @@ async function handleRequest(request, env) {
     const structure = await getStructure(env);
     const node = getNode(structure, filePath);
     if (!node || node.type !== 'file') return errorResponse('文件不存在或已删除', 404);
-    return page(node.name, fileBody(node, filePath), FILE_SCRIPT);
+    const settings = await getSettings(env);
+    const themeCss = generateThemeCss(settings);
+    return page(node.name, fileBody(node, filePath), FILE_SCRIPT, themeCss);
+  }
+  if (path === '/settings') {
+    if (!checkPassword(request, env)) return loginPage();
+    const settings = await getSettings(env);
+    settings.themeCss = generateThemeCss(settings);
+    return settingsPage(settings);
   }
 
   // WebDAV 入口
