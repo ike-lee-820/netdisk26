@@ -831,7 +831,7 @@ function getRepoName(fileId) {
 async function githubRepoExists(repoName, env) {
   try {
     const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName, {
-      headers: { 'Authorization': "token " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Cloudflare-Worker-CloudDrive' }
+      headers: { 'Authorization': "Bearer " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Cloudflare-Worker-CloudDrive' }
     });
     return res.status === 200;
   } catch (e) { return false; }
@@ -842,7 +842,7 @@ async function githubCreateRepo(repoName, env) {
   const res = await fetch(GITHUB_CONFIG.apiBase + "/user/repos", {
     method: 'POST',
     headers: {
-      'Authorization': "token " + getGithubToken(env),
+      'Authorization': "Bearer " + getGithubToken(env),
       'Accept': 'application/vnd.github.v3+json',
       'Content-Type': 'application/json',
       'User-Agent': 'Cloudflare-Worker-CloudDrive',
@@ -865,7 +865,7 @@ async function githubCreateRepo(repoName, env) {
 // 获取仓库信息
 async function githubGetRepo(repoName, env) {
   const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName, {
-    headers: { 'Authorization': "token " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Cloudflare-Worker-CloudDrive' }
+    headers: { 'Authorization': "Bearer " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Cloudflare-Worker-CloudDrive' }
   });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error('GitHub get repo failed: ' + res.status);
@@ -878,7 +878,7 @@ async function githubUploadFile(repoName, path, contentBase64, message, env) {
   let sha = null;
   try {
     const checkRes = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName + "/contents/" + path, {
-      headers: { 'Authorization': "token " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Cloudflare-Worker-CloudDrive' }
+      headers: { 'Authorization': "Bearer " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Cloudflare-Worker-CloudDrive' }
     });
     if (checkRes.status === 200) {
       const data = await checkRes.json();
@@ -895,7 +895,7 @@ async function githubUploadFile(repoName, path, contentBase64, message, env) {
   const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName + "/contents/" + path, {
     method: 'PUT',
     headers: {
-      'Authorization': "token " + getGithubToken(env),
+      'Authorization': "Bearer " + getGithubToken(env),
       'Accept': 'application/vnd.github.v3+json',
       'Content-Type': 'application/json',
       'User-Agent': 'Cloudflare-Worker-CloudDrive',
@@ -924,7 +924,7 @@ async function githubGetFileRaw(repoName, path, branch, env) {
   // 代理失败，回退到直连
   const directUrl = GITHUB_CONFIG.rawBase + "/" + GITHUB_CONFIG.username + "/" + repoName + "/" + branch + "/" + path;
   const res = await fetch(directUrl, {
-    headers: { 'Authorization': "token " + getGithubToken(env), 'User-Agent': 'Cloudflare-Worker-CloudDrive' }
+    headers: { 'Authorization': "Bearer " + getGithubToken(env), 'User-Agent': 'Cloudflare-Worker-CloudDrive' }
   });
   if (!res.ok) throw new Error('GitHub raw fetch failed: ' + res.status);
   return await res.arrayBuffer();
@@ -933,7 +933,7 @@ async function githubGetFileRaw(repoName, path, branch, env) {
 // 获取文件内容（API，用于获取 sha 等元数据）
 async function githubGetFileApi(repoName, path, env) {
   const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName + "/contents/" + path, {
-    headers: { 'Authorization': "token " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Cloudflare-Worker-CloudDrive' }
+    headers: { 'Authorization': "Bearer " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Cloudflare-Worker-CloudDrive' }
   });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error('GitHub get file failed: ' + res.status);
@@ -945,7 +945,7 @@ async function githubDeleteFile(repoName, path, sha, message, env) {
   const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName + "/contents/" + path, {
     method: 'DELETE',
     headers: {
-      'Authorization': "token " + getGithubToken(env),
+      'Authorization': "Bearer " + getGithubToken(env),
       'Accept': 'application/vnd.github.v3+json',
       'Content-Type': 'application/json',
       'User-Agent': 'Cloudflare-Worker-CloudDrive',
@@ -1752,7 +1752,7 @@ function getRepoName(fileId) {
 async function githubRepoExists(repoName, env) {
   try {
     const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName, {
-      headers: { 'Authorization': "token " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Cloudflare-Worker-CloudDrive' }
+      headers: { 'Authorization': "Bearer " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Cloudflare-Worker-CloudDrive' }
     });
     return res.status === 200;
   } catch (e) { return false; }
@@ -1763,7 +1763,7 @@ async function githubCreateRepo(repoName, env) {
   const res = await fetch(GITHUB_CONFIG.apiBase + "/user/repos", {
     method: 'POST',
     headers: {
-      'Authorization': "token " + getGithubToken(env),
+      'Authorization': "Bearer " + getGithubToken(env),
       'Accept': 'application/vnd.github.v3+json',
       'Content-Type': 'application/json',
       'User-Agent': 'Cloudflare-Worker-CloudDrive',
@@ -1786,7 +1786,7 @@ async function githubCreateRepo(repoName, env) {
 // 获取仓库信息
 async function githubGetRepo(repoName, env) {
   const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName, {
-    headers: { 'Authorization': "token " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Cloudflare-Worker-CloudDrive' }
+    headers: { 'Authorization': "Bearer " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Cloudflare-Worker-CloudDrive' }
   });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error('GitHub get repo failed: ' + res.status);
@@ -1799,7 +1799,7 @@ async function githubUploadFile(repoName, path, contentBase64, message, env) {
   let sha = null;
   try {
     const checkRes = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName + "/contents/" + path, {
-      headers: { 'Authorization': "token " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Cloudflare-Worker-CloudDrive' }
+      headers: { 'Authorization': "Bearer " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Cloudflare-Worker-CloudDrive' }
     });
     if (checkRes.status === 200) {
       const data = await checkRes.json();
@@ -1816,7 +1816,7 @@ async function githubUploadFile(repoName, path, contentBase64, message, env) {
   const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName + "/contents/" + path, {
     method: 'PUT',
     headers: {
-      'Authorization': "token " + getGithubToken(env),
+      'Authorization': "Bearer " + getGithubToken(env),
       'Accept': 'application/vnd.github.v3+json',
       'Content-Type': 'application/json',
       'User-Agent': 'Cloudflare-Worker-CloudDrive',
@@ -1845,7 +1845,7 @@ async function githubGetFileRaw(repoName, path, branch, env) {
   // 代理失败，回退到直连
   const directUrl = GITHUB_CONFIG.rawBase + "/" + GITHUB_CONFIG.username + "/" + repoName + "/" + branch + "/" + path;
   const res = await fetch(directUrl, {
-    headers: { 'Authorization': "token " + getGithubToken(env), 'User-Agent': 'Cloudflare-Worker-CloudDrive' }
+    headers: { 'Authorization': "Bearer " + getGithubToken(env), 'User-Agent': 'Cloudflare-Worker-CloudDrive' }
   });
   if (!res.ok) throw new Error('GitHub raw fetch failed: ' + res.status);
   return await res.arrayBuffer();
@@ -1854,7 +1854,7 @@ async function githubGetFileRaw(repoName, path, branch, env) {
 // 获取文件内容（API，用于获取 sha 等元数据）
 async function githubGetFileApi(repoName, path, env) {
   const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName + "/contents/" + path, {
-    headers: { 'Authorization': "token " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Cloudflare-Worker-CloudDrive' }
+    headers: { 'Authorization': "Bearer " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Cloudflare-Worker-CloudDrive' }
   });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error('GitHub get file failed: ' + res.status);
@@ -1866,7 +1866,7 @@ async function githubDeleteFile(repoName, path, sha, message, env) {
   const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName + "/contents/" + path, {
     method: 'DELETE',
     headers: {
-      'Authorization': "token " + getGithubToken(env),
+      'Authorization': "Bearer " + getGithubToken(env),
       'Accept': 'application/vnd.github.v3+json',
       'Content-Type': 'application/json',
       'User-Agent': 'Cloudflare-Worker-CloudDrive',
