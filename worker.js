@@ -364,11 +364,12 @@ async function deleteTask(env, id) {
 
 // ==================== 存储核心 ====================
 
-async function saveFile(fileBuffer, filename, env, taskId) {
+async function saveFile(fileBuffer, filename, env, taskId = null) {
   const size = fileBuffer.byteLength;
   const id = ssid();
   const startTime = Date.now();
   const report = async (msg, progress, extra = {}) => {
+    if (!taskId) return;
     const elapsed = (Date.now() - startTime) / 1000;
     const doneBytes = Math.floor(size * (progress / 100));
     const speed = elapsed > 0 ? doneBytes / elapsed : 0;
@@ -380,7 +381,7 @@ async function saveFile(fileBuffer, filename, env, taskId) {
   if (size <= KV_SIZE_LIMIT) {
     await report('上传到 KV 空间...', 30);
     await getKV(id, env).put(id, fileBuffer);
-    await updateTask(env, taskId, { status: 'done', message: '完成', progress: 100 });
+    await report('完成', 100, { status: 'done' });
     return { ssid: id, storage: 'kv', size, filename, chunks: 1 };
   }
 
@@ -390,7 +391,7 @@ async function saveFile(fileBuffer, filename, env, taskId) {
   if (size <= GITHUB_SINGLE_LIMIT) {
     await report('上传到 GitHub...', 30);
     await githubUploadFile(id, filename, fileBuffer, env);
-    await updateTask(env, taskId, { status: 'done', message: '完成', progress: 100 });
+    await report('完成', 100, { status: 'done' });
     return { ssid: id, storage: 'github', size, filename, chunks: 1, githubPath: filename };
   }
 
@@ -404,7 +405,7 @@ async function saveFile(fileBuffer, filename, env, taskId) {
     const progress = 15 + Math.floor(((i + 1) / chunks) * 80);
     await report(`上传分片 ${i + 1}/${chunks}`, progress, { currentChunk: i + 1 });
   }
-  await updateTask(env, taskId, { status: 'done', message: '完成', progress: 100 });
+  await report('完成', 100, { status: 'done' });
   return { ssid: id, storage: 'github', size, filename, chunks };
 }
 
@@ -595,6 +596,271 @@ async function buildFolderZipResponse(folderPath, env) {
     'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(folderName)}.zip`
   };
   return new Response(zipBuffer, { headers });
+}
+
+// ==================== WebDAV ====================
+
+function checkBasicAuth(request, env) {
+  const password = env.CLOUD_PASSWORD;
+  if (!password) return true;
+  const auth = request.headers.get('Authorization') || '';
+  const m = auth.match(/^Basic\s+(.+)$/i);
+  if (!m) return false;
+  try {
+    const creds = atob(m[1]);
+    const pass = creds.split(':').slice(1).join(':');
+    return pass === password;
+  } catch (e) {
+    return false;
+  }
+}
+
+function davUnauthorized() {
+  return new Response('Unauthorized', {
+    status: 401,
+    headers: { 'WWW-Authenticate': 'Basic realm="netdisk"' }
+  });
+}
+
+function davXmlResponse(xml, status = 207) {
+  return new Response(xml, {
+    status,
+    headers: { 'Content-Type': 'text/xml; charset=utf-8', 'DAV': '1, 2' }
+  });
+}
+
+function toDavDate(ts) {
+  return new Date(ts).toUTCString();
+}
+
+function davHref(path) {
+  return '/webdav' + encodeURI(path).replace(/%2F/g, '/');
+}
+
+function davPropResponse(path, node, isRoot = false) {
+  const name = path ? path.split('/').filter(Boolean).pop() : '';
+  const isFolder = !node || node.type === 'folder' || node.type === 'root';
+  const href = davHref(path || '/');
+  const lastMod = toDavDate(node && node.createdAt ? node.createdAt : Date.now());
+  let props = `<D:displayname>${escapeXml(name || 'root')}</D:displayname>`;
+  if (isFolder) {
+    props += `<D:resourcetype><D:collection/></D:resourcetype><D:getcontentlength>0</D:getcontentlength>`;
+  } else {
+    props += `<D:resourcetype/><D:getcontentlength>${node.size || 0}</D:getcontentlength><D:getcontenttype>${getMime(name)}</D:getcontenttype>`;
+  }
+  props += `<D:getlastmodified>${lastMod}</D:getlastmodified>`;
+  return `<D:response><D:href>${href}</D:href><D:propstat><D:prop>${props}</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>`;
+}
+
+function escapeXml(text) {
+  return String(text).replace(/[<>&'"]/g, m => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[m]));
+}
+
+async function handleWebDAV(request, env, reqPath) {
+  if (!checkBasicAuth(request, env)) return davUnauthorized();
+  const davPath = decodeURIComponent(reqPath.slice('/webdav'.length) || '/');
+  const method = request.method;
+
+  if (method === 'OPTIONS') {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        'DAV': '1, 2',
+        'Allow': 'OPTIONS, GET, HEAD, PUT, DELETE, MKCOL, PROPFIND, PROPPATCH, MOVE, COPY, LOCK, UNLOCK',
+        'MS-Author-Via': 'DAV'
+      }
+    });
+  }
+
+  if (method === 'PROPFIND') return await davPropfind(davPath, env, request);
+  if (method === 'GET' || method === 'HEAD') return await davGet(davPath, env, method);
+  if (method === 'PUT') return await davPut(davPath, env, request);
+  if (method === 'DELETE') return await davDelete(davPath, env);
+  if (method === 'MKCOL') return await davMkcol(davPath, env);
+  if (method === 'MOVE') return await davMove(davPath, env, request);
+  if (method === 'COPY') return await davCopy(davPath, env, request);
+  if (method === 'LOCK') return davLock();
+  if (method === 'UNLOCK') return davUnlock();
+
+  return new Response('Method Not Allowed', { status: 405 });
+}
+
+async function davPropfind(davPath, env, request) {
+  const depth = request.headers.get('Depth') || 'infinity';
+  const structure = await getStructure(env);
+  const node = davPath === '/' ? structure : getNode(structure, davPath);
+  if (!node) return new Response('Not Found', { status: 404 });
+
+  let responses = [davPropResponse(davPath || '/', node, davPath === '/')];
+  if ((node.type === 'folder' || node.type === 'root') && depth !== '0') {
+    for (const [name, child] of Object.entries(node.children || {})) {
+      const childPath = davPath === '/' ? name : davPath + '/' + name;
+      responses.push(davPropResponse(childPath, child));
+      if ((depth === 'infinity' || depth === '-1') && child.type === 'folder') {
+        const subPaths = collectPaths(child, childPath);
+        for (const sp of subPaths) {
+          responses.push(davPropResponse(sp, getNode(structure, sp)));
+        }
+      }
+    }
+  }
+
+  const xml = `<?xml version="1.0" encoding="utf-8"?><D:multistatus xmlns:D="DAV:">${responses.join('')}</D:multistatus>`;
+  return davXmlResponse(xml);
+}
+
+async function davGet(davPath, env, method) {
+  const structure = await getStructure(env);
+  const node = getNode(structure, davPath);
+  if (!node || node.type !== 'file') return new Response('Not Found', { status: 404 });
+  if (method === 'HEAD') {
+    return new Response(null, {
+      status: 200,
+      headers: {
+        'Content-Type': getMime(node.name),
+        'Content-Length': String(node.size || 0),
+        'Last-Modified': toDavDate(node.createdAt)
+      }
+    });
+  }
+  return buildDownloadResponse(node, node.name, env, true);
+}
+
+async function davPut(davPath, env, request) {
+  const filename = davPath.split('/').pop();
+  if (!filename) return new Response('Conflict', { status: 409 });
+  const buffer = await request.arrayBuffer();
+  const meta = await saveFile(buffer, filename, env);
+  const structure = await getStructure(env);
+  const oldNode = getNode(structure, davPath);
+  if (oldNode && oldNode.type === 'file') {
+    try { await deleteFileStorage(oldNode, env); } catch (e) { console.error(e); }
+  }
+  setNode(structure, davPath, {
+    type: 'file',
+    name: filename,
+    ssid: meta.ssid,
+    storage: meta.storage,
+    size: meta.size,
+    chunks: meta.chunks,
+    githubPath: meta.githubPath,
+    createdAt: Date.now()
+  });
+  await saveStructure(env, structure);
+  return new Response(null, { status: oldNode ? 204 : 201 });
+}
+
+async function davDelete(davPath, env) {
+  const structure = await getStructure(env);
+  const node = getNode(structure, davPath);
+  if (!node) return new Response('Not Found', { status: 404 });
+  if (node.type === 'file') {
+    await deleteFileStorage(node, env);
+  } else {
+    const paths = collectPaths(node, davPath);
+    for (const p of paths) {
+      const child = getNode(structure, p);
+      if (child && child.type === 'file') await deleteFileStorage(child, env);
+    }
+  }
+  deleteNode(structure, davPath);
+  await saveStructure(env, structure);
+  return new Response(null, { status: 204 });
+}
+
+async function davMkcol(davPath, env) {
+  const structure = await getStructure(env);
+  const existing = getNode(structure, davPath);
+  if (existing) return new Response('Method Not Allowed', { status: 405 });
+  const parts = davPath.split('/').filter(Boolean);
+  let parent = structure;
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i];
+    if (!parent.children[p]) {
+      parent.children[p] = { type: 'folder', name: p, children: {}, createdAt: Date.now() };
+    }
+    parent = parent.children[p];
+  }
+  await saveStructure(env, structure);
+  return new Response(null, { status: 201 });
+}
+
+async function davMove(davPath, env, request) {
+  const dest = request.headers.get('Destination');
+  if (!dest) return new Response('Bad Request', { status: 400 });
+  const destUrl = new URL(dest);
+  let destPath = decodeURIComponent(destUrl.pathname);
+  if (destPath.startsWith('/webdav')) destPath = destPath.slice('/webdav'.length) || '/';
+  if (!destPath) destPath = '/';
+
+  const structure = await getStructure(env);
+  const node = getNode(structure, davPath);
+  if (!node) return new Response('Not Found', { status: 404 });
+
+  if (node.type === 'file') {
+    const newName = destPath.split('/').pop();
+    const newNode = { ...node, name: newName, createdAt: Date.now() };
+    setNode(structure, destPath, newNode);
+  } else {
+    const oldPrefix = davPath;
+    const newPrefix = destPath;
+    const paths = collectPaths(node, oldPrefix);
+    for (const p of paths) {
+      const child = getNode(structure, p);
+      if (!child) continue;
+      const newP = newPrefix + p.slice(oldPrefix.length);
+      setNode(structure, newP, { ...child, createdAt: Date.now() });
+    }
+    setNode(structure, destPath, { ...node, name: destPath.split('/').pop(), createdAt: Date.now() });
+  }
+  deleteNode(structure, davPath);
+  await saveStructure(env, structure);
+  return new Response(null, { status: 204 });
+}
+
+async function davCopy(davPath, env, request) {
+  const dest = request.headers.get('Destination');
+  if (!dest) return new Response('Bad Request', { status: 400 });
+  const destUrl = new URL(dest);
+  let destPath = decodeURIComponent(destUrl.pathname);
+  if (destPath.startsWith('/webdav')) destPath = destPath.slice('/webdav'.length) || '/';
+  if (!destPath) destPath = '/';
+
+  const structure = await getStructure(env);
+  const node = getNode(structure, davPath);
+  if (!node) return new Response('Not Found', { status: 404 });
+
+  if (node.type === 'file') {
+    const buf = await fetchFileBuffer(node, env);
+    const meta = await saveFile(buf, node.name, env);
+    setNode(structure, destPath, {
+      type: 'file',
+      name: destPath.split('/').pop(),
+      ssid: meta.ssid,
+      storage: meta.storage,
+      size: meta.size,
+      chunks: meta.chunks,
+      githubPath: meta.githubPath,
+      createdAt: Date.now()
+    });
+  } else {
+    return new Response('Not Implemented', { status: 501 });
+  }
+  await saveStructure(env, structure);
+  return new Response(null, { status: 204 });
+}
+
+function davLock() {
+  const token = 'opaquelocktoken:' + crypto.randomUUID();
+  const xml = `<?xml version="1.0" encoding="utf-8"?><D:prop xmlns:D="DAV:"><D:lockdiscovery><D:activelock><D:locktype><D:write/></D:locktype><D:lockscope><D:exclusive/></D:lockscope><D:depth>infinity</D:depth><D:owner></D:owner><D:timeout>Second-3600</D:timeout><D:locktoken><D:href>${token}</D:href></D:locktoken></D:activelock></D:lockdiscovery></D:prop>`;
+  return new Response(xml, {
+    status: 200,
+    headers: { 'Content-Type': 'text/xml; charset=utf-8', 'Lock-Token': '<' + token + '>' }
+  });
+}
+
+function davUnlock() {
+  return new Response(null, { status: 204 });
 }
 
 // ==================== HTML 模板 ====================
@@ -867,6 +1133,11 @@ function newFolder(){
 }
 
 // 上传
+function genTaskId(){ return 'task_'+Date.now()+'_'+Math.random().toString(36).slice(2,9); }
+let localTasks = new Map();
+function addLocalTask(t){ localTasks.set(t.id, t); }
+function removeLocalTask(id){ localTasks.delete(id); }
+
 function selectFile(){ document.getElementById('file-input').click(); }
 function selectFolder(){ document.getElementById('folder-input').click(); }
 
@@ -874,28 +1145,44 @@ document.getElementById('file-input').addEventListener('change', e=>uploadFiles(
 document.getElementById('folder-input').addEventListener('change', e=>uploadFiles(e.target.files));
 
 async function uploadFiles(files){
+  let any = false;
   for(const file of files){
     const rel = file.webkitRelativePath || file.name;
     const folderPrefix = file.webkitRelativePath ? file.webkitRelativePath.slice(0, -file.name.length) : '';
     const targetDir = folderPrefix ? (currentPath ? currentPath + '/' + folderPrefix.slice(0,-1) : folderPrefix.slice(0,-1)) : currentPath;
-    await uploadOne(file, targetDir);
+    try{ await uploadOne(file, targetDir); any = true; }catch(e){}
   }
   loadList();
 }
 
 async function uploadOne(file, dir){
   const path = dir ? dir + '/' + file.name : file.name;
+  const taskId = genTaskId();
+  addLocalTask({ id: taskId, name: file.name, status: 'uploading', message: '正在发送...', progress: 1, size: file.size, createdAt: Date.now(), updatedAt: Date.now() });
+  loadTasks();
   const form = new FormData();
   form.append('path', path);
   form.append('file', file);
-  const task = await api('/api/upload', { method: 'POST', body: form });
-  showMsg('已开始上传: '+file.name);
+  form.append('taskId', taskId);
+  try{
+    await api('/api/upload', { method: 'POST', body: form });
+    showMsg('已开始上传: '+file.name);
+  }catch(e){
+    addLocalTask({ id: taskId, name: file.name, status: 'error', message: e.message || '上传失败', progress: 0, size: file.size, createdAt: Date.now(), updatedAt: Date.now() });
+    loadTasks();
+    showMsg('上传失败: '+file.name+' '+e.message);
+    throw e;
+  }
 }
 
 // 任务
 let taskTimer=null;
 async function loadTasks(){
-  const tasks=await api('/api/tasks')||[];
+  const serverTasks=await api('/api/tasks')||[];
+  const map=new Map();
+  for(const t of serverTasks) map.set(t.id, t);
+  for(const t of localTasks.values()){ if(!map.has(t.id)) map.set(t.id, t); }
+  const tasks=[...map.values()].sort((a,b)=>b.createdAt - a.createdAt);
   const box=document.getElementById('task-list');
   if(tasks.length===0){ box.innerHTML='<div class="empty">暂无任务</div>'; return; }
   box.innerHTML=tasks.map(t=>{
@@ -911,8 +1198,8 @@ async function loadTasks(){
     </div>\`;
   }).join('');
 }
-async function cancelTask(id){ await api('/api/tasks/'+id,{method:'DELETE'}); loadTasks(); }
-async function deleteTask(id){ await api('/api/tasks/'+id,{method:'DELETE'}); loadTasks(); }
+async function cancelTask(id){ await api('/api/tasks/'+id,{method:'DELETE'}); removeLocalTask(id); loadTasks(); }
+async function deleteTask(id){ await api('/api/tasks/'+id,{method:'DELETE'}); removeLocalTask(id); loadTasks(); }
 
 // 底部菜单
 document.getElementById('btn-tasks').onclick=()=>{ document.getElementById('task-drawer').classList.add('show'); loadTasks(); if(taskTimer)clearInterval(taskTimer); taskTimer=setInterval(loadTasks,1500); };
@@ -1003,19 +1290,28 @@ async function api(url, opts={}){
   if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
   return r.json().catch(()=>null);
 }
-function loadScript(src){ return new Promise((resolve,reject)=>{ const s=document.createElement('script'); s.src=src; s.onload=resolve; s.onerror=()=>reject(new Error('load failed: '+src)); document.head.appendChild(s); }); }
-function loadCSS(href){ return new Promise((resolve,reject)=>{ const l=document.createElement('link'); l.rel='stylesheet'; l.href=href; l.onload=resolve; l.onerror=()=>reject(new Error('load failed: '+href)); document.head.appendChild(l); }); }
+function loadScript(src, timeout=8000){ return new Promise((resolve,reject)=>{ const s=document.createElement('script'); s.src=src; const t=setTimeout(()=>reject(new Error('load timeout: '+src)), timeout); s.onload=()=>{ clearTimeout(t); resolve(); }; s.onerror=()=>{ clearTimeout(t); reject(new Error('load failed: '+src)); }; document.head.appendChild(s); }); }
+function loadCSS(href, timeout=8000){ return new Promise((resolve,reject)=>{ const l=document.createElement('link'); l.rel='stylesheet'; l.href=href; const t=setTimeout(()=>reject(new Error('load timeout: '+href)), timeout); l.onload=()=>{ clearTimeout(t); resolve(); }; l.onerror=()=>{ clearTimeout(t); reject(new Error('load failed: '+href)); }; document.head.appendChild(l); }); }
 function getMime(name){
   const ext=name.split('.').pop().toLowerCase();
   const map={mp4:'video/mp4',webm:'video/webm',mkv:'video/x-matroska',mp3:'audio/mpeg',wav:'audio/wav',ogg:'audio/ogg',flac:'audio/flac',m4a:'audio/mp4',txt:'text/plain',md:'text/markdown',json:'application/json',js:'application/javascript',css:'text/css',html:'text/html',xml:'application/xml',zip:'application/zip',rar:'application/vnd.rar','7z':'application/x-7z-compressed',tar:'application/x-tar',gz:'application/gzip',pdf:'application/pdf',jpg:'image/jpeg',jpeg:'image/jpeg',png:'image/png',gif:'image/gif',webp:'image/webp'};
   return map[ext]||'application/octet-stream';
 }
 async function load(){
-  fileNode=await api('/api/file?path='+encodeURIComponent(path));
-  if(!fileNode) return;
-  document.getElementById('file-name').textContent=fileNode.name;
-  document.getElementById('file-meta').textContent=formatSize(fileNode.size)+' · '+new Date(fileNode.createdAt).toLocaleString();
-  document.getElementById('title').textContent=fileNode.name;
+  const preview=document.getElementById('preview');
+  try{
+    fileNode=await api('/api/file?path='+encodeURIComponent(path));
+    if(!fileNode){ preview.innerHTML='<div class="empty">文件不存在或无权访问</div>'; return; }
+    document.getElementById('file-name').textContent=fileNode.name;
+    document.getElementById('file-meta').textContent=formatSize(fileNode.size)+' · '+new Date(fileNode.createdAt).toLocaleString();
+    document.getElementById('title').textContent=fileNode.name;
+    await renderPreview();
+  }catch(e){
+    console.error('文件详情加载失败',e);
+    preview.innerHTML='<div class="empty">加载失败: '+escapeHtml(e.message)+'</div>';
+  }
+}
+async function renderPreview(){
   const ext=fileNode.name.split('.').pop().toLowerCase();
   const mime=getMime(fileNode.name);
   const preview=document.getElementById('preview');
@@ -1163,7 +1459,14 @@ function sharePage(node) {
   </div>
 </div>
 <script>
-async function preview(){ const info=await fetch('/api/share/${node.ssid}').then(r=>r.json()); if(info.previewUrl) location.href=info.previewUrl; else alert('无法预览'); }
+async function preview(){
+  try{
+    const r=await fetch('/api/share/${node.ssid}');
+    if(!r.ok){ alert('获取分享信息失败: '+r.status); return; }
+    const info=await r.json();
+    if(info.previewUrl) location.href=info.previewUrl; else alert('无法预览');
+  }catch(e){ alert('预览失败: '+e.message); }
+}
 </script>
 `);
 }
@@ -1257,7 +1560,7 @@ async function handleRequest(request, env) {
     const file = form.get('file');
     if (!file || !filePath) return errorResponse('缺少文件或路径');
     const arrayBuffer = await file.arrayBuffer();
-    const taskId = ssid();
+    const taskId = form.get('taskId') || ssid();
     const task = {
       id: taskId,
       name: file.name,
@@ -1405,6 +1708,11 @@ async function handleRequest(request, env) {
   if (path === '/file') {
     if (!checkPassword(request, env)) return loginPage();
     return page('文件详情', FILE_BODY, FILE_SCRIPT);
+  }
+
+  // WebDAV 入口
+  if (path === '/webdav' || path.startsWith('/webdav/')) {
+    return handleWebDAV(request, env, path);
   }
 
   // 下载路由 /download/:ssid/:filename （需密码）
