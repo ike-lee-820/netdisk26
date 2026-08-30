@@ -817,9 +817,9 @@ function getProxyUrl(repoName, path, branch) {
   branch = branch || 'main';
   if (GITHUB_CONFIG.useProxy) {
     // v6.gh-proxy.com 代理格式: https://v6.gh-proxy.com/github.com/{user}/{repo}/raw/{branch}/{path}
-    return GITHUB_CONFIG.proxyBase + '/' + GITHUB_CONFIG.username + '/' + repoName + '/raw/' + branch + '/' + path;
+    return GITHUB_CONFIG.proxyBase + '/' + getGithubUsername(env) + '/' + repoName + '/raw/' + branch + '/' + path;
   }
-  return GITHUB_CONFIG.rawBase + '/' + GITHUB_CONFIG.username + '/' + repoName + '/' + branch + '/' + path;
+  return GITHUB_CONFIG.rawBase + '/' + getGithubUsername(env) + '/' + repoName + '/' + branch + '/' + path;
 }
 
 function getRepoName(fileId) {
@@ -830,7 +830,7 @@ function getRepoName(fileId) {
 // 检查 GitHub 仓库是否存在
 async function githubRepoExists(repoName, env) {
   try {
-    const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName, {
+    const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + getGithubUsername(env) + "/" + repoName, {
       headers: { 'Authorization': "Bearer " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Cloudflare-Worker-CloudDrive' }
     });
     return res.status === 200;
@@ -864,7 +864,7 @@ async function githubCreateRepo(repoName, env) {
 
 // 获取仓库信息
 async function githubGetRepo(repoName, env) {
-  const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName, {
+  const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + getGithubUsername(env) + "/" + repoName, {
     headers: { 'Authorization': "Bearer " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Cloudflare-Worker-CloudDrive' }
   });
   if (res.status === 404) return null;
@@ -877,7 +877,7 @@ async function githubUploadFile(repoName, path, contentBase64, message, env) {
   // 先检查文件是否存在（需要 sha 来更新）
   let sha = null;
   try {
-    const checkRes = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName + "/contents/" + path, {
+    const checkRes = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + getGithubUsername(env) + "/" + repoName + "/contents/" + path, {
       headers: { 'Authorization': "Bearer " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Cloudflare-Worker-CloudDrive' }
     });
     if (checkRes.status === 200) {
@@ -892,7 +892,7 @@ async function githubUploadFile(repoName, path, contentBase64, message, env) {
   };
   if (sha) body.sha = sha;
 
-  const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName + "/contents/" + path, {
+  const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + getGithubUsername(env) + "/" + repoName + "/contents/" + path, {
     method: 'PUT',
     headers: {
       'Authorization': "Bearer " + getGithubToken(env),
@@ -922,7 +922,7 @@ async function githubGetFileRaw(repoName, path, branch, env) {
     console.error('Proxy fetch failed, trying direct:', e.message);
   }
   // 代理失败，回退到直连
-  const directUrl = GITHUB_CONFIG.rawBase + "/" + GITHUB_CONFIG.username + "/" + repoName + "/" + branch + "/" + path;
+  const directUrl = GITHUB_CONFIG.rawBase + "/" + getGithubUsername(env) + "/" + repoName + "/" + branch + "/" + path;
   const res = await fetch(directUrl, {
     headers: { 'Authorization': "Bearer " + getGithubToken(env), 'User-Agent': 'Cloudflare-Worker-CloudDrive' }
   });
@@ -932,7 +932,7 @@ async function githubGetFileRaw(repoName, path, branch, env) {
 
 // 获取文件内容（API，用于获取 sha 等元数据）
 async function githubGetFileApi(repoName, path, env) {
-  const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName + "/contents/" + path, {
+  const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + getGithubUsername(env) + "/" + repoName + "/contents/" + path, {
     headers: { 'Authorization': "Bearer " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Cloudflare-Worker-CloudDrive' }
   });
   if (res.status === 404) return null;
@@ -942,7 +942,7 @@ async function githubGetFileApi(repoName, path, env) {
 
 // 删除文件
 async function githubDeleteFile(repoName, path, sha, message, env) {
-  const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName + "/contents/" + path, {
+  const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + getGithubUsername(env) + "/" + repoName + "/contents/" + path, {
     method: 'DELETE',
     headers: {
       'Authorization': "Bearer " + getGithubToken(env),
@@ -1397,6 +1397,10 @@ function getGithubToken(env) {
   return env.GITHUB_TOKEN || '';
 }
 
+function getGithubUsername(env) {
+  return env.GITHUB_USERNAME || getGithubUsername(env);
+}
+
 // GitHub 存储状态跟踪（存在 KV 中）
 // repo:{ssid} -> { size, fileCount, createdAt }
 
@@ -1738,9 +1742,9 @@ function getProxyUrl(repoName, path, branch) {
   branch = branch || 'main';
   if (GITHUB_CONFIG.useProxy) {
     // v6.gh-proxy.com 代理格式: https://v6.gh-proxy.com/github.com/{user}/{repo}/raw/{branch}/{path}
-    return GITHUB_CONFIG.proxyBase + '/' + GITHUB_CONFIG.username + '/' + repoName + '/raw/' + branch + '/' + path;
+    return GITHUB_CONFIG.proxyBase + '/' + getGithubUsername(env) + '/' + repoName + '/raw/' + branch + '/' + path;
   }
-  return GITHUB_CONFIG.rawBase + '/' + GITHUB_CONFIG.username + '/' + repoName + '/' + branch + '/' + path;
+  return GITHUB_CONFIG.rawBase + '/' + getGithubUsername(env) + '/' + repoName + '/' + branch + '/' + path;
 }
 
 function getRepoName(fileId) {
@@ -1751,7 +1755,7 @@ function getRepoName(fileId) {
 // 检查 GitHub 仓库是否存在
 async function githubRepoExists(repoName, env) {
   try {
-    const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName, {
+    const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + getGithubUsername(env) + "/" + repoName, {
       headers: { 'Authorization': "Bearer " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Cloudflare-Worker-CloudDrive' }
     });
     return res.status === 200;
@@ -1785,7 +1789,7 @@ async function githubCreateRepo(repoName, env) {
 
 // 获取仓库信息
 async function githubGetRepo(repoName, env) {
-  const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName, {
+  const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + getGithubUsername(env) + "/" + repoName, {
     headers: { 'Authorization': "Bearer " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Cloudflare-Worker-CloudDrive' }
   });
   if (res.status === 404) return null;
@@ -1798,7 +1802,7 @@ async function githubUploadFile(repoName, path, contentBase64, message, env) {
   // 先检查文件是否存在（需要 sha 来更新）
   let sha = null;
   try {
-    const checkRes = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName + "/contents/" + path, {
+    const checkRes = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + getGithubUsername(env) + "/" + repoName + "/contents/" + path, {
       headers: { 'Authorization': "Bearer " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Cloudflare-Worker-CloudDrive' }
     });
     if (checkRes.status === 200) {
@@ -1813,7 +1817,7 @@ async function githubUploadFile(repoName, path, contentBase64, message, env) {
   };
   if (sha) body.sha = sha;
 
-  const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName + "/contents/" + path, {
+  const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + getGithubUsername(env) + "/" + repoName + "/contents/" + path, {
     method: 'PUT',
     headers: {
       'Authorization': "Bearer " + getGithubToken(env),
@@ -1843,7 +1847,7 @@ async function githubGetFileRaw(repoName, path, branch, env) {
     console.error('Proxy fetch failed, trying direct:', e.message);
   }
   // 代理失败，回退到直连
-  const directUrl = GITHUB_CONFIG.rawBase + "/" + GITHUB_CONFIG.username + "/" + repoName + "/" + branch + "/" + path;
+  const directUrl = GITHUB_CONFIG.rawBase + "/" + getGithubUsername(env) + "/" + repoName + "/" + branch + "/" + path;
   const res = await fetch(directUrl, {
     headers: { 'Authorization': "Bearer " + getGithubToken(env), 'User-Agent': 'Cloudflare-Worker-CloudDrive' }
   });
@@ -1853,7 +1857,7 @@ async function githubGetFileRaw(repoName, path, branch, env) {
 
 // 获取文件内容（API，用于获取 sha 等元数据）
 async function githubGetFileApi(repoName, path, env) {
-  const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName + "/contents/" + path, {
+  const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + getGithubUsername(env) + "/" + repoName + "/contents/" + path, {
     headers: { 'Authorization': "Bearer " + getGithubToken(env), 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Cloudflare-Worker-CloudDrive' }
   });
   if (res.status === 404) return null;
@@ -1863,7 +1867,7 @@ async function githubGetFileApi(repoName, path, env) {
 
 // 删除文件
 async function githubDeleteFile(repoName, path, sha, message, env) {
-  const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + GITHUB_CONFIG.username + "/" + repoName + "/contents/" + path, {
+  const res = await fetch(GITHUB_CONFIG.apiBase + "/repos/" + getGithubUsername(env) + "/" + repoName + "/contents/" + path, {
     method: 'DELETE',
     headers: {
       'Authorization': "Bearer " + getGithubToken(env),
