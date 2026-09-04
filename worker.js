@@ -26,6 +26,16 @@ async function loggedFetch(url, options = {}) {
   }
 }
 
+async function fetchWithTimeout(url, options = {}, timeoutMs = 30000) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await loggedFetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(id);
+  }
+}
+
 // ==================== 工具函数 ====================
 
 function ssid() {
@@ -227,31 +237,61 @@ function collectPaths(node, base = '') {
 // ==================== GitHub API ====================
 
 async function githubCreateRepo(ssid, env) {
-  const resp = await loggedFetch(`${GITHUB_API}/user/repos`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `token ${env.GITHUB_TOKEN}`,
-      'Accept': 'application/vnd.github+json',
-      'Content-Type': 'application/json',
-      'User-Agent': 'netdisk-worker'
-    },
-    body: JSON.stringify({ name: ssid, private: false, auto_init: true, description: 'Netdisk storage' })
-  });
-  if (resp.ok) return resp.json();
-  const txt = await resp.text();
-  // 422 且名称已存在时，说明该仓库已存在，直接复用
-  if (resp.status === 422 && txt.includes('name already exists')) {
+  const headers = {
+    'Authorization': `token ${env.GITHUB_TOKEN}`,
+    'Accept': 'application/vnd.github+json',
+    'Content-Type': 'application/json',
+    'User-Agent': 'netdisk-worker'
+  };
+  const getHeaders = {
+    'Authorization': `token ${env.GITHUB_TOKEN}`,
+    'Accept': 'application/vnd.github+json',
+    'User-Agent': 'netdisk-worker'
+  };
+
+  // 先探测仓库是否已存在，避免反复创建
+  const exist = await fetchWithTimeout(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}`, { headers: getHeaders }, 20000).catch(() => null);
+  if (exist && exist.ok) {
     console.log(`[github] repo ${ssid} already exists, reuse it`);
     return { name: ssid, reused: true };
   }
-  throw new Error(`创建仓库失败: ${resp.status} ${txt}`);
+
+  const resp = await fetchWithTimeout(`${GITHUB_API}/user/repos`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ name: ssid, private: false, auto_init: true, description: 'Netdisk storage' })
+  }, 30000);
+
+  if (!resp.ok) {
+    const txt = await resp.text();
+    if (resp.status === 422 && txt.includes('name already exists')) {
+      console.log(`[github] repo ${ssid} already exists, reuse it`);
+      return { name: ssid, reused: true };
+    }
+    throw new Error(`创建仓库失败: ${resp.status} ${txt}`);
+  }
+
+  const data = await resp.json();
+  console.log(`[github] repo ${ssid} created, verifying availability...`);
+
+  // GitHub 创建仓库后可能需要短暂时间才能通过 API 访问，轮询确认
+  for (let i = 0; i < 20; i++) {
+    await new Promise(r => setTimeout(r, 500));
+    const check = await fetchWithTimeout(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}`, { headers: getHeaders }, 20000).catch(() => null);
+    if (check && check.ok) {
+      console.log(`[github] repo ${ssid} verified`);
+      return data;
+    }
+    console.log(`[github] repo ${ssid} not visible yet, retry ${i + 1}`);
+  }
+  throw new Error(`仓库创建成功但校验失败，无法访问: ${ssid}`);
 }
 
 async function githubGetFileSha(ssid, path, env) {
   try {
-    const resp = await loggedFetch(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}/contents/${encodeURIComponent(path)}`, {
+    const resp = await fetchWithTimeout(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}/contents/${encodeURIComponent(path)}`, {
       headers: { 'Authorization': `token ${env.GITHUB_TOKEN}`, 'Accept': 'application/vnd.github+json', 'User-Agent': 'netdisk-worker' }
-    });
+    }, 20000);
     if (!resp.ok) return null;
     const data = await resp.json();
     return Array.isArray(data) ? null : data.sha;
@@ -260,15 +300,39 @@ async function githubGetFileSha(ssid, path, env) {
   }
 }
 
+async function verifyGitHubFile(ssid, path, expectedSha, env) {
+  const headers = { 'Authorization': `token ${env.GITHUB_TOKEN}`, 'Accept': 'application/vnd.github+json', 'User-Agent': 'netdisk-worker' };
+  for (let i = 0; i < 10; i++) {
+    const check = await fetchWithTimeout(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}/contents/${encodeURIComponent(path)}`, { headers }, 20000).catch(() => null);
+    if (!check || !check.ok) {
+      await new Promise(r => setTimeout(r, 500));
+      continue;
+    }
+    try {
+      const info = await check.json();
+      if (Array.isArray(info)) continue;
+      const actualSha = info.sha;
+      if (!expectedSha || actualSha === expectedSha) {
+        console.log(`[github] verify ${ssid}/${path} ok, sha=${actualSha}`);
+        return true;
+      }
+      console.log(`[github] verify ${ssid}/${path} sha mismatch, expected=${expectedSha} actual=${actualSha}`);
+    } catch (e) {}
+    await new Promise(r => setTimeout(r, 500));
+  }
+  return false;
+}
+
 async function githubUploadFile(ssid, path, content, env, message = 'upload') {
   const base64 = arrayBufferToBase64(content);
   console.log(`[github] upload ${ssid}/${path} raw=${content.byteLength} base64=${base64.length}`);
   let retries = 0;
+  const maxRetries = 5;
   while (true) {
     const sha = await githubGetFileSha(ssid, path, env);
     const body = { message, content: base64 };
     if (sha) body.sha = sha;
-    const resp = await loggedFetch(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}/contents/${encodeURIComponent(path)}`, {
+    const resp = await fetchWithTimeout(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}/contents/${encodeURIComponent(path)}`, {
       method: 'PUT',
       headers: {
         'Authorization': `token ${env.GITHUB_TOKEN}`,
@@ -277,17 +341,34 @@ async function githubUploadFile(ssid, path, content, env, message = 'upload') {
         'User-Agent': 'netdisk-worker'
       },
       body: JSON.stringify(body)
-    });
-    if (resp.ok) return resp.json();
-    const txt = await resp.text();
-    // 409 并发冲突：重新获取 sha 再试
-    if (resp.status === 409 && retries < 3) {
-      retries++;
-      console.log(`[github] 409 conflict on ${ssid}/${path}, retry ${retries}`);
-      await new Promise(r => setTimeout(r, 500));
-      continue;
+    }, 60000);
+
+    if (resp.ok) {
+      let data = null;
+      try { data = await resp.json(); } catch (e) {}
+      const expectedSha = data && data.content && data.content.sha;
+      console.log(`[github] put ${ssid}/${path} ok, sha=${expectedSha || '?'}, verifying...`);
+      if (await verifyGitHubFile(ssid, path, expectedSha, env)) {
+        console.log(`[github] uploaded ${ssid}/${path} verified`);
+        return data || { sha: expectedSha };
+      }
+      console.log(`[github] verification failed for ${ssid}/${path}, retry ${retries + 1}`);
+    } else {
+      const txt = await resp.text();
+      console.error(`[github] put ${ssid}/${path} failed ${resp.status}: ${txt}`);
+      // 409 并发冲突 / 422 sha 缺失：重新获取 sha 再试
+      if ((resp.status === 409 || (resp.status === 422 && txt.includes('sha'))) && retries < maxRetries) {
+        retries++;
+        console.log(`[github] ${resp.status} on ${ssid}/${path}, retry ${retries}`);
+        await new Promise(r => setTimeout(r, 1000));
+        continue;
+      }
+      throw new Error(`上传 GitHub 失败: ${resp.status} ${txt}`);
     }
-    throw new Error(`上传 GitHub 失败: ${resp.status} ${txt}`);
+
+    retries++;
+    if (retries > maxRetries) throw new Error(`上传 GitHub 校验失败: ${ssid}/${path}`);
+    await new Promise(r => setTimeout(r, 1000));
   }
 }
 
@@ -320,9 +401,9 @@ async function githubDeleteRepo(ssid, env) {
 }
 
 async function githubGetDownloadUrl(ssid, path, env) {
-  const resp = await loggedFetch(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}/contents/${encodeURIComponent(path)}`, {
+  const resp = await fetchWithTimeout(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}/contents/${encodeURIComponent(path)}`, {
     headers: { 'Authorization': `token ${env.GITHUB_TOKEN}`, 'Accept': 'application/vnd.github+json', 'User-Agent': 'netdisk-worker' }
-  });
+  }, 20000);
   if (!resp.ok) {
     const txt = await resp.text();
     throw new Error(`获取下载链接失败: ${resp.status} ${txt}`);
@@ -333,12 +414,21 @@ async function githubGetDownloadUrl(ssid, path, env) {
 
 async function githubFetchFile(ssid, path, env) {
   const url = await githubGetDownloadUrl(ssid, path, env);
-  // raw.githubusercontent.com 不支持 Authorization header
-  const resp = await loggedFetch(url, {
-    headers: { 'User-Agent': 'netdisk-worker' }
-  });
-  if (!resp.ok) throw new Error(`GitHub 下载失败: ${resp.status} ${url}`);
-  return resp;
+  // raw.githubusercontent.com 不支持 Authorization header，且新文件可能有短暂延迟
+  let lastErr = null;
+  for (let i = 0; i < 5; i++) {
+    const resp = await fetchWithTimeout(url, {
+      headers: { 'User-Agent': 'netdisk-worker' }
+    }, 30000);
+    if (resp.ok) return resp;
+    lastErr = `GitHub 下载失败: ${resp.status} ${url}`;
+    if (resp.status === 404) {
+      await new Promise(r => setTimeout(r, 800));
+      continue;
+    }
+    throw new Error(lastErr);
+  }
+  throw new Error(lastErr || `GitHub 下载失败: ${url}`);
 }
 
 async function githubStreamChunks(fileNode, writable, env) {
@@ -451,9 +541,9 @@ async function saveFile(fileBuffer, filename, env, taskId = null) {
     const start = i * CHUNK_SIZE;
     const end = Math.min(start + CHUNK_SIZE, size);
     const chunk = fileBuffer.slice(start, end);
+    await report(`上传分片 ${i + 1}/${chunks} 到 GitHub...`, 15 + Math.floor((i / chunks) * 80), { currentChunk: i + 1 });
     await githubUploadFile(id, `chunk_${i}`, chunk, env, `upload chunk ${i}`);
-    const progress = 15 + Math.floor(((i + 1) / chunks) * 80);
-    await report(`上传分片 ${i + 1}/${chunks}`, progress, { currentChunk: i + 1 });
+    await report(`分片 ${i + 1}/${chunks} 已校验通过`, 15 + Math.floor(((i + 1) / chunks) * 80), { currentChunk: i + 1 });
   }
   await report('完成', 100, { status: 'done' });
   return { ssid: id, storage: 'github', size, filename, chunks };
@@ -1222,7 +1312,7 @@ async function uploadOne(file, dir){
   addLocalTask(baseTask);
   loadTasks();
   const CHUNK_SIZE = 5 * 1024 * 1024;
-  const MAX_CONCURRENT = 32;
+  const MAX_CONCURRENT = 6;
   try{
     if (file.size <= CHUNK_SIZE) {
       const form = new FormData();
@@ -1245,11 +1335,9 @@ async function uploadOne(file, dir){
         chunkSizes[i] = end - begin;
       }
       let error = null;
-      let lastUpdateTime = Date.now();
-      let lastUpdateBytes = 0;
       function formatSpeed(bps){
-        if (bps > 1024 * 1024) return (bps / (1024 * 1024)).toFixed(2) + ' MB/s';
-        if (bps > 1024) return (bps / 1024).toFixed(2) + ' KB/s';
+        if (bps >= 1024 * 1024) return (bps / (1024 * 1024)).toFixed(2) + ' MB/s';
+        if (bps >= 1024) return (bps / 1024).toFixed(2) + ' KB/s';
         return bps.toFixed(0) + ' B/s';
       }
       function calcDoneBytes(){
@@ -1259,21 +1347,32 @@ async function uploadOne(file, dir){
         }
         return sum;
       }
-      function updateProgress(){
-        const doneBytes = calcDoneBytes();
+      let lastRender = 0;
+      function renderTask(force){
         const now = Date.now();
-        const dt = (now - lastUpdateTime) / 1000;
-        let speedStr = '';
-        if (dt > 0.5) {
-          const speed = (doneBytes - lastUpdateBytes) / dt;
-          speedStr = ' · ' + formatSpeed(speed);
-          lastUpdateTime = now;
-          lastUpdateBytes = doneBytes;
-        }
-        const progress = Math.min(90, Math.floor((doneBytes / file.size) * 90));
-        addLocalTask({ ...baseTask, message: '已上传 ' + formatSize(doneBytes) + ' / ' + formatSize(file.size) + speedStr, progress: progress });
+        if (!force && now - lastRender < 300) return;
+        lastRender = now;
         loadTasks();
       }
+      const speedState = { lastTime: Date.now(), lastBytes: 0, str: ' · 0 B/s' };
+      function updateProgress(force){
+        const doneBytes = calcDoneBytes();
+        const progress = Math.min(90, Math.floor((doneBytes / file.size) * 90));
+        addLocalTask({ ...baseTask, message: '已上传 ' + formatSize(doneBytes) + ' / ' + formatSize(file.size) + speedState.str, progress: progress });
+        renderTask(force);
+      }
+      const speedTimer = setInterval(() => {
+        const now = Date.now();
+        const doneBytes = calcDoneBytes();
+        const dt = (now - speedState.lastTime) / 1000;
+        if (dt >= 0.4) {
+          const speed = (doneBytes - speedState.lastBytes) / dt;
+          speedState.str = ' · ' + formatSpeed(Math.max(0, speed));
+          speedState.lastTime = now;
+          speedState.lastBytes = doneBytes;
+        }
+        updateProgress();
+      }, 500);
       async function uploadChunk(i){
         const begin = i * chunkSize;
         const end = Math.min(begin + chunkSize, file.size);
@@ -1292,21 +1391,24 @@ async function uploadOne(file, dir){
           try {
             await api('/api/upload/chunk', { method: 'POST', body: form });
             completed[i] = true;
-            updateProgress();
+            updateProgress(true);
             return;
           } catch (e) {
             retries++;
+            const currentSpeed = Math.max(0, (calcDoneBytes() - speedState.lastBytes) / ((Date.now() - speedState.lastTime) / 1000) || 0);
             if (retries > 2) throw new Error('分片 ' + (i + 1) + ' 上传失败: ' + (e.message || e));
-            addLocalTask({ ...baseTask, message: '重试分片 ' + (i + 1) + ' (第' + retries + '次)', progress: Math.floor((calcDoneBytes() / file.size) * 90) });
-            loadTasks();
+            addLocalTask({ ...baseTask, message: '重试分片 ' + (i + 1) + ' (第' + retries + '次) · ' + formatSpeed(currentSpeed), progress: Math.floor((calcDoneBytes() / file.size) * 90) });
+            renderTask(true);
             await new Promise(r => setTimeout(r, 1000));
           }
         }
       }
+      const queue = [];
+      for (let i = 0; i < total; i++) queue.push(i);
       async function worker(){
-        for (let i = 0; i < total; i++) {
+        while (queue.length > 0) {
           if (error) return;
-          if (completed[i]) continue;
+          const i = queue.shift();
           try {
             await uploadChunk(i);
           } catch (e) {
@@ -1318,6 +1420,7 @@ async function uploadOne(file, dir){
       const threads = Math.min(MAX_CONCURRENT, total);
       for (let t = 0; t < threads; t++) workers.push(worker());
       await Promise.all(workers);
+      clearInterval(speedTimer);
       if (error) throw error;
       const finishRes = await api('/api/upload/finish', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ uploadId: start.uploadId, path: path, filename: file.name, storage: start.storage, size: file.size, chunks: total, taskId: taskId }) });
       if (start.storage === 'github') {
@@ -1953,19 +2056,16 @@ async function handleRequest(request, env, ctx = null) {
     const form = await request.formData();
     const uploadId = form.get('uploadId');
     const index = parseInt(form.get('index'), 10);
-    const total = parseInt(form.get('total'), 10);
     const taskId = form.get('taskId');
     const chunkFile = form.get('chunk');
     if (!uploadId || isNaN(index) || !chunkFile) return errorResponse('缺少分片参数');
     const chunkBuf = await chunkFile.arrayBuffer();
     try {
       await getKV(uploadId, env).put(uploadId + '_chunk_' + index, chunkBuf);
-      const progress = Math.floor(((index + 1) / total) * 90);
-      await updateTask(env, taskId, { message: '上传分片 ' + (index + 1) + '/' + total, progress });
       return jsonResponse({ ok: true, index });
     } catch (e) {
       console.error('分片上传失败', e);
-      await updateTask(env, taskId, { status: 'error', message: e.message || '分片上传失败', progress: 0 });
+      try { await updateTask(env, taskId, { status: 'error', message: e.message || '分片上传失败', progress: 0 }); } catch (_) {}
       return errorResponse(e.message || '分片上传失败', 500);
     }
   }
@@ -1996,13 +2096,15 @@ async function handleRequest(request, env, ctx = null) {
       let finalSsid = uploadId;
 
       if (storage === 'github') {
-        await updateTask(env, taskId, { message: '服务端写入 GitHub...', progress: 92 });
+        await updateTask(env, taskId, { message: '服务端：创建/校验 GitHub 仓库...', progress: 92 });
         try {
           await githubCreateRepo(uploadId, env);
           for (let i = 0; i < chunks; i++) {
+            await updateTask(env, taskId, { message: '服务端：读取分片 ' + (i + 1) + '/' + chunks, progress: 92 + Math.floor((i / chunks) * 7) });
             const b = await getKV(uploadId, env).get(uploadId + '_chunk_' + i, { type: 'arrayBuffer' });
+            if (!b) throw new Error('分片 ' + (i + 1) + ' 在服务端丢失');
             await githubUploadFile(uploadId, 'chunk_' + i, b, env, 'chunk ' + i);
-            await updateTask(env, taskId, { message: '写入 GitHub 分片 ' + (i + 1) + '/' + chunks, progress: 92 + Math.floor(((i + 1) / chunks) * 7) });
+            await updateTask(env, taskId, { message: '服务端：分片 ' + (i + 1) + '/' + chunks + ' 写入并校验通过', progress: 92 + Math.floor(((i + 1) / chunks) * 7) });
           }
           for (let i = 0; i < chunks; i++) await getKV(uploadId, env).delete(uploadId + '_chunk_' + i);
         } catch (e) {
