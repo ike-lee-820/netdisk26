@@ -1238,7 +1238,12 @@ async function uploadOne(file, dir){
       const chunkSize = start.chunkSize || CHUNK_SIZE;
       const total = start.chunks;
       const completed = new Array(total).fill(false);
-      let doneBytes = 0;
+      const chunkSizes = [];
+      for (let i = 0; i < total; i++) {
+        const begin = i * chunkSize;
+        const end = Math.min(begin + chunkSize, file.size);
+        chunkSizes[i] = end - begin;
+      }
       let error = null;
       let lastUpdateTime = Date.now();
       let lastUpdateBytes = 0;
@@ -1247,8 +1252,15 @@ async function uploadOne(file, dir){
         if (bps > 1024) return (bps / 1024).toFixed(2) + ' KB/s';
         return bps.toFixed(0) + ' B/s';
       }
-      function updateProgress(addBytes = 0){
-        doneBytes += addBytes;
+      function calcDoneBytes(){
+        let sum = 0;
+        for (let i = 0; i < total; i++) {
+          if (completed[i]) sum += chunkSizes[i];
+        }
+        return sum;
+      }
+      function updateProgress(){
+        const doneBytes = calcDoneBytes();
         const now = Date.now();
         const dt = (now - lastUpdateTime) / 1000;
         let speedStr = '';
@@ -1280,12 +1292,12 @@ async function uploadOne(file, dir){
           try {
             await api('/api/upload/chunk', { method: 'POST', body: form });
             completed[i] = true;
-            updateProgress(blob.size);
+            updateProgress();
             return;
           } catch (e) {
             retries++;
             if (retries > 2) throw new Error('分片 ' + (i + 1) + ' 上传失败: ' + (e.message || e));
-            addLocalTask({ ...baseTask, message: '重试上传 ' + formatSize(doneBytes) + ' / ' + formatSize(file.size) + ' (第' + retries + '次)', progress: Math.floor((doneBytes / file.size) * 90) });
+            addLocalTask({ ...baseTask, message: '重试分片 ' + (i + 1) + ' (第' + retries + '次)', progress: Math.floor((calcDoneBytes() / file.size) * 90) });
             loadTasks();
             await new Promise(r => setTimeout(r, 1000));
           }
@@ -1324,8 +1336,9 @@ let taskTimer=null;
 async function loadTasks(){
   const serverTasks=await api('/api/tasks')||[];
   const map=new Map();
-  for(const t of serverTasks) map.set(t.id, t);
-  for(const t of localTasks.values()){ if(!map.has(t.id)) map.set(t.id, t); }
+  // 本地任务（含实时进度/速度）优先于服务端任务
+  for(const t of localTasks.values()) map.set(t.id, t);
+  for(const t of serverTasks){ if(!map.has(t.id)) map.set(t.id, t); }
   const tasks=[...map.values()].sort((a,b)=>b.createdAt - a.createdAt);
   const box=document.getElementById('task-list');
   if(tasks.length===0){ box.innerHTML='<div class="empty">暂无任务</div>'; return; }
