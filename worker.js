@@ -1319,9 +1319,15 @@ async function uploadOne(file, dir){
       for (let t = 0; t < threads; t++) workers.push(worker());
       await Promise.all(workers);
       if (error) throw error;
-      await api('/api/upload/finish', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ uploadId: start.uploadId, path: path, filename: file.name, storage: start.storage, size: file.size, chunks: total, taskId: taskId }) });
-      removeLocalTask(taskId);
-      showMsg('上传完成: ' + file.name);
+      const finishRes = await api('/api/upload/finish', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ uploadId: start.uploadId, path: path, filename: file.name, storage: start.storage, size: file.size, chunks: total, taskId: taskId }) });
+      if (start.storage === 'github') {
+        addLocalTask({ ...baseTask, message: '客户端上传完成，服务端写入 GitHub...', progress: 92 });
+        loadTasks();
+        showMsg('客户端上传完成，服务端正在写入 GitHub: ' + file.name);
+      } else {
+        removeLocalTask(taskId);
+        showMsg('上传完成: ' + file.name);
+      }
     }
   }catch(e){
     addLocalTask({ ...baseTask, status: 'error', message: e.message || '上传失败', progress: 0 });
@@ -1335,6 +1341,12 @@ async function uploadOne(file, dir){
 let taskTimer=null;
 async function loadTasks(){
   const serverTasks=await api('/api/tasks')||[];
+  // 清理已完成的本地任务
+  for(const t of serverTasks){
+    if(localTasks.has(t.id) && (t.status==='done' || t.status==='error' || t.status==='cancelled')){
+      localTasks.delete(t.id);
+    }
+  }
   const map=new Map();
   // 本地任务（含实时进度/速度）优先于服务端任务
   for(const t of localTasks.values()) map.set(t.id, t);
@@ -1788,7 +1800,7 @@ function escapeHtml(text) {
 
 // ==================== 路由处理 ====================
 
-async function handleRequest(request, env) {
+async function handleRequest(request, env, ctx = null) {
   const url = new URL(request.url);
   const path = decodeURIComponent(url.pathname);
 
@@ -1971,51 +1983,78 @@ async function handleRequest(request, env) {
     const chunks = body.chunks;
     const taskId = body.taskId;
     if (!filePath || !uploadId || !filename || !storage) return errorResponse('缺少完成参数');
-    const structure = await getStructure(env);
-    const oldNode = getNode(structure, filePath);
-    if (oldNode && oldNode.type === 'file') await deleteFileStorage(oldNode, env);
 
-    let finalStorage = storage;
-    let finalSsid = uploadId;
+    // 客户端上传阶段已完成，立即返回，后续 GitHub 写入在后台执行
+    const finishBackground = async () => {
+      const structure = await getStructure(env);
+      const oldNode = getNode(structure, filePath);
+      if (oldNode && oldNode.type === 'file') {
+        try { await deleteFileStorage(oldNode, env); } catch (e) { console.error(e); }
+      }
 
-    if (storage === 'github') {
-      await updateTask(env, taskId, { message: '服务端写入 GitHub...', progress: 92 });
-      await githubCreateRepo(uploadId, env);
-      for (let i = 0; i < chunks; i++) {
-        const b = await getKV(uploadId, env).get(uploadId + '_chunk_' + i, { type: 'arrayBuffer' });
-        await githubUploadFile(uploadId, 'chunk_' + i, b, env, 'chunk ' + i);
-        await updateTask(env, taskId, { message: '写入 GitHub 分片 ' + (i + 1) + '/' + chunks, progress: 92 + Math.floor(((i + 1) / chunks) * 7) });
+      let finalStorage = storage;
+      let finalSsid = uploadId;
+
+      if (storage === 'github') {
+        await updateTask(env, taskId, { message: '服务端写入 GitHub...', progress: 92 });
+        try {
+          await githubCreateRepo(uploadId, env);
+          for (let i = 0; i < chunks; i++) {
+            const b = await getKV(uploadId, env).get(uploadId + '_chunk_' + i, { type: 'arrayBuffer' });
+            await githubUploadFile(uploadId, 'chunk_' + i, b, env, 'chunk ' + i);
+            await updateTask(env, taskId, { message: '写入 GitHub 分片 ' + (i + 1) + '/' + chunks, progress: 92 + Math.floor(((i + 1) / chunks) * 7) });
+          }
+          for (let i = 0; i < chunks; i++) await getKV(uploadId, env).delete(uploadId + '_chunk_' + i);
+        } catch (e) {
+          console.error('服务端写入 GitHub 失败', e);
+          await updateTask(env, taskId, { status: 'error', message: 'GitHub 写入失败: ' + e.message, progress: 0 });
+          return;
+        }
+      } else if (storage === 'kv' && chunks > 1) {
+        try {
+          await updateTask(env, taskId, { message: '服务端合并分片...', progress: 92 });
+          let totalLen = 0;
+          const bufs = [];
+          for (let i = 0; i < chunks; i++) {
+            const b = await getKV(uploadId, env).get(uploadId + '_chunk_' + i, { type: 'arrayBuffer' });
+            bufs.push(new Uint8Array(b));
+            totalLen += b.byteLength;
+          }
+          const combined = new Uint8Array(totalLen);
+          let off = 0;
+          for (const b of bufs) { combined.set(b, off); off += b.byteLength; }
+          await getKV(finalSsid, env).put(finalSsid, combined.buffer);
+          for (let i = 0; i < chunks; i++) await getKV(uploadId, env).delete(uploadId + '_chunk_' + i);
+          finalStorage = 'kv';
+        } catch (e) {
+          console.error('服务端合并分片失败', e);
+          await updateTask(env, taskId, { status: 'error', message: '合并分片失败: ' + e.message, progress: 0 });
+          return;
+        }
       }
-      for (let i = 0; i < chunks; i++) await getKV(uploadId, env).delete(uploadId + '_chunk_' + i);
-      finalStorage = 'github';
-    } else if (storage === 'kv' && chunks > 1) {
-      let totalLen = 0;
-      const bufs = [];
-      for (let i = 0; i < chunks; i++) {
-        const b = await getKV(uploadId, env).get(uploadId + '_chunk_' + i, { type: 'arrayBuffer' });
-        bufs.push(new Uint8Array(b));
-        totalLen += b.byteLength;
-      }
-      const combined = new Uint8Array(totalLen);
-      let off = 0;
-      for (const b of bufs) { combined.set(b, off); off += b.byteLength; }
-      await getKV(finalSsid, env).put(finalSsid, combined.buffer);
-      for (let i = 0; i < chunks; i++) await getKV(uploadId, env).delete(uploadId + '_chunk_' + i);
-      finalStorage = 'kv';
+
+      const structure2 = await getStructure(env);
+      setNode(structure2, filePath, {
+        type: 'file',
+        name: filename,
+        ssid: finalSsid,
+        storage: finalStorage,
+        size,
+        chunks: storage === 'kv' ? 1 : chunks,
+        createdAt: Date.now()
+      });
+      await saveStructure(env, structure2);
+      await updateTask(env, taskId, { status: 'done', message: '完成', progress: 100 });
+    };
+
+    if (ctx && ctx.waitUntil) {
+      ctx.waitUntil(finishBackground());
+    } else {
+      // 没有 ctx 时同步执行（兼容本地测试）
+      await finishBackground();
     }
 
-    setNode(structure, filePath, {
-      type: 'file',
-      name: filename,
-      ssid: finalSsid,
-      storage: finalStorage,
-      size,
-      chunks: storage === 'kv' ? 1 : chunks,
-      createdAt: Date.now()
-    });
-    await saveStructure(env, structure);
-    await updateTask(env, taskId, { status: 'done', message: '完成', progress: 100 });
-    return jsonResponse({ ok: true });
+    return jsonResponse({ ok: true, stage: 'server' });
   }
 
   if (path === '/api/file' && request.method === 'GET') {
@@ -2272,7 +2311,7 @@ async function handleRequest(request, env) {
 export default {
   async fetch(request, env, ctx) {
     try {
-      return await handleRequest(request, env);
+      return await handleRequest(request, env, ctx);
     } catch (e) {
       console.error(e);
       return errorResponse(e.message || 'Internal Error', 500);
