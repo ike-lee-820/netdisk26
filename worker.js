@@ -333,10 +333,11 @@ async function githubGetDownloadUrl(ssid, path, env) {
 
 async function githubFetchFile(ssid, path, env) {
   const url = await githubGetDownloadUrl(ssid, path, env);
+  // raw.githubusercontent.com 不支持 Authorization header
   const resp = await loggedFetch(url, {
-    headers: { 'Authorization': `token ${env.GITHUB_TOKEN}`, 'User-Agent': 'netdisk-worker' }
+    headers: { 'User-Agent': 'netdisk-worker' }
   });
-  if (!resp.ok) throw new Error(`GitHub 下载失败: ${resp.status}`);
+  if (!resp.ok) throw new Error(`GitHub 下载失败: ${resp.status} ${url}`);
   return resp;
 }
 
@@ -344,6 +345,7 @@ async function githubStreamChunks(fileNode, writable, env) {
   const writer = writable.getWriter();
   try {
     for (let i = 0; i < fileNode.chunks; i++) {
+      console.log(`[stream] fetch chunk_${i} for ${fileNode.ssid}`);
       const resp = await githubFetchFile(fileNode.ssid, `chunk_${i}`, env);
       const reader = resp.body.getReader();
       while (true) {
@@ -353,9 +355,11 @@ async function githubStreamChunks(fileNode, writable, env) {
       }
     }
   } catch (e) {
-    console.error(e);
+    console.error('[stream] error', e);
+    await writer.abort(e);
+    throw e;
   } finally {
-    writer.close();
+    try { await writer.close(); } catch (e) {}
   }
 }
 
@@ -1255,8 +1259,7 @@ async function uploadOne(file, dir){
           lastUpdateBytes = doneBytes;
         }
         const progress = Math.min(90, Math.floor((doneBytes / file.size) * 90));
-        const doneCount = completed.filter(Boolean).length;
-        addLocalTask({ ...baseTask, message: '上传分片 ' + doneCount + '/' + total + speedStr, progress: progress });
+        addLocalTask({ ...baseTask, message: '已上传 ' + formatSize(doneBytes) + ' / ' + formatSize(file.size) + speedStr, progress: progress });
         loadTasks();
       }
       async function uploadChunk(i){
@@ -1282,7 +1285,7 @@ async function uploadOne(file, dir){
           } catch (e) {
             retries++;
             if (retries > 2) throw new Error('分片 ' + (i + 1) + ' 上传失败: ' + (e.message || e));
-            addLocalTask({ ...baseTask, message: '重试分片 ' + (i + 1) + ' (第' + retries + '次)', progress: Math.floor((doneBytes / file.size) * 90) });
+            addLocalTask({ ...baseTask, message: '重试上传 ' + formatSize(doneBytes) + ' / ' + formatSize(file.size) + ' (第' + retries + '次)', progress: Math.floor((doneBytes / file.size) * 90) });
             loadTasks();
             await new Promise(r => setTimeout(r, 1000));
           }
@@ -1486,17 +1489,6 @@ async function renderPreview(){
   const mime=getMime(fileNode.name);
   const preview=document.getElementById('preview');
   const url='/direct/'+fileNode.ssid+'/'+encodeURIComponent(fileNode.name);
-  // 先检查直链是否可用
-  try{
-    const head=await fetch(url,{method:'HEAD'});
-    if(!head.ok){
-      preview.innerHTML='<div class="empty">文件直链不可用: '+head.status+' '+head.statusText+'<br><a href="'+url+'">点击测试直链</a></div>';
-      return;
-    }
-  }catch(e){
-    preview.innerHTML='<div class="empty">直链检测失败: '+escapeHtml(e.message)+'</div>';
-    return;
-  }
   try{
     if(mime.startsWith('video/')){
       await loadCSS('https://cdn.jsdelivr.net/npm/plyr@3.7.8/dist/plyr.css');
@@ -1551,7 +1543,7 @@ async function renderPreview(){
     }else if(mime.startsWith('image/')){
       preview.innerHTML='<img src="'+url+'" alt="'+escapeHtml(fileNode.name)+'" style="max-width:100%;border-radius:8px;">';
     }else{
-      preview.innerHTML='<div class="empty">预览加载失败: '+escapeHtml(e.message)+'</div>';
+      preview.innerHTML='<div class="empty">预览加载失败: '+escapeHtml(e.message)+'<br><a href="'+url+'" target="_blank">点击测试直链</a></div>';
     }
   }
   const iconMap={'mp4':'movie','mp3':'audiotrack','wav':'audiotrack','ogg':'audiotrack','jpg':'image','jpeg':'image','png':'image','gif':'image','webp':'image','zip':'folder_zip','rar':'folder_zip','7z':'folder_zip','tar':'folder_zip','gz':'folder_zip','txt':'description','md':'description','json':'description','js':'description','css':'description','html':'description'};
