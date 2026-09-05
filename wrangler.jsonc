@@ -2,22 +2,14 @@
   "name": "netdisk",
   "main": "worker.js",
   "compatibility_date": "2024-01-01",
-  "observability": {
-    "enabled": false,
-    "head_sampling_rate": 1,
-    "redact_query_string": false,
-    "logs": {
-      "enabled": true,
-      "head_sampling_rate": 1,
-      "persist": true,
-      "invocation_logs": true
-    },
-    "traces": {
-      "enabled": true,
-      "persist": true,
-      "head_sampling_rate": 1
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [
+    {
+      "binding": "NDK",
+      "database_name": "netdisk",
+      "database_id": "86ee14b0-7fb5-497b-a2cc-733634e84fe8"
     }
-  },
+  ],
   "kv_namespaces": [
     {
       "binding": "FILE_KV_1",
@@ -38,14 +30,6 @@
     {
       "binding": "FILE_KV_5",
       "id": "e93a98748c824b84a55f64f28dee98be"
-    },
-    {
-      "binding": "FILE_STRUCTURE_KV",
-      "id": "e8b818d9fc4c4291ada38a186807a1b0"
-    },
-    {
-      "binding": "TASK_KV",
-      "id": "29b0b9abec754957aaefd16d01df2966"
     }
   ]
 }

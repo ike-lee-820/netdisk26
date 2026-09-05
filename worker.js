@@ -140,9 +140,16 @@ function requirePassword(request, env) {
 
 // ==================== D1 通用存储 ====================
 
+function getD1(env) {
+  if (!env.NDK) {
+    throw new Error('D1 数据库 NDK 未绑定。请在 Cloudflare Worker 设置中绑定一个 D1 数据库，变量名为 NDK。');
+  }
+  return env.NDK;
+}
+
 async function ensureD1(env) {
   if (d1Initialized) return;
-  await env.NDK.exec(`CREATE TABLE IF NOT EXISTS kv_store (
+  await getD1(env).exec(`CREATE TABLE IF NOT EXISTS kv_store (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
   )`);
@@ -151,20 +158,20 @@ async function ensureD1(env) {
 
 async function d1Get(env, key, defaultValue = undefined) {
   await ensureD1(env);
-  const row = await env.NDK.prepare('SELECT value FROM kv_store WHERE key = ?').bind(key).first();
+  const row = await getD1(env).prepare('SELECT value FROM kv_store WHERE key = ?').bind(key).first();
   if (!row || !row.value) return defaultValue;
   try { return JSON.parse(row.value); } catch (e) { return defaultValue; }
 }
 
 async function d1Set(env, key, value) {
   await ensureD1(env);
-  await env.NDK.prepare('INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)')
+  await getD1(env).prepare('INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)')
     .bind(key, JSON.stringify(value)).run();
 }
 
 async function d1Delete(env, key) {
   await ensureD1(env);
-  await env.NDK.prepare('DELETE FROM kv_store WHERE key = ?').bind(key).run();
+  await getD1(env).prepare('DELETE FROM kv_store WHERE key = ?').bind(key).run();
 }
 
 // ==================== 文件结构操作 ====================
