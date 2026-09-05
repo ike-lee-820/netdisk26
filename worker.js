@@ -297,6 +297,16 @@ function isDescendantOrSelf(parentPath, childPath) {
   return c === p || c.startsWith(p + '/');
 }
 
+function uniqueName(children, name) {
+  if (!children[name]) return name;
+  const dot = name.lastIndexOf('.');
+  const base = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : '';
+  let i = 1;
+  while (children[base + ' (' + i + ')' + ext]) i++;
+  return base + ' (' + i + ')' + ext;
+}
+
 function moveNode(structure, path, targetPath) {
   const parts = path.split('/').filter(Boolean);
   const name = parts[parts.length - 1];
@@ -319,8 +329,10 @@ function copyNode(structure, path, targetPath) {
   const targetNode = targetPath ? getNode(structure, targetPath) : structure;
   if (!targetNode || targetNode.type !== 'folder') return { ok: false, error: '目标文件夹不存在' };
   if (isDescendantOrSelf(path, targetPath)) return { ok: false, error: '不能复制到自身或子文件夹内' };
-  if (targetNode.children[name]) return { ok: false, error: '目标位置已存在同名文件或文件夹' };
-  targetNode.children[name] = cloneNode(node);
+  const newName = uniqueName(targetNode.children, name);
+  const cloned = cloneNode(node);
+  cloned.name = newName;
+  targetNode.children[newName] = cloned;
   return { ok: true };
 }
 
@@ -598,6 +610,14 @@ async function uploadBackgroundImage(buffer, ext, env) {
   return url;
 }
 
+async function uploadFontFile(buffer, ext, env) {
+  await githubCreateRepo(ASSETS_REPO, env);
+  const fileName = 'font_' + Date.now() + '.' + ext;
+  await githubUploadFile(ASSETS_REPO, fileName, buffer, env, 'custom font');
+  const url = await githubGetDownloadUrl(ASSETS_REPO, fileName, env);
+  return url;
+}
+
 // ==================== 存储核心 ====================
 
 async function saveFile(fileBuffer, filename, env, taskId = null) {
@@ -826,7 +846,7 @@ async function fetchFileBuffer(node, env) {
     return await getKV(node.ssid, env).get(node.ssid, { type: 'arrayBuffer' });
   }
   if (!node.chunks || node.chunks === 1) {
-    const resp = await githubFetchFile(node.ssid, node.githubPath || node.name, env);
+    const resp = await githubFetchFile(node.ssid, node.githubPath || 'chunk_0', env);
     return await resp.arrayBuffer();
   }
   let total = 0;
@@ -853,11 +873,17 @@ async function buildFolderZipResponse(folderPath, env) {
   const prefix = folderPath ? folderPath + '/' : '';
   const paths = collectPaths(folder, folderPath);
   const zip = new ZipBuilder();
+  const failed = [];
   for (const p of paths) {
     const node = getNode(structure, p);
     if (!node || node.type !== 'file') continue;
-    const buf = await fetchFileBuffer(node, env);
-    zip.add(p.slice(prefix.length).replace(/\\/g, '/'), buf);
+    try {
+      const buf = await fetchFileBuffer(node, env);
+      zip.add(p.slice(prefix.length).replace(/\\/g, '/'), buf);
+    } catch (e) {
+      console.error('打包失败：' + p, e);
+      failed.push(p);
+    }
   }
   const zipBuffer = zip.build();
   const folderName = folderPath ? folderPath.split('/').pop() : 'root';
@@ -865,6 +891,9 @@ async function buildFolderZipResponse(folderPath, env) {
     'Content-Type': 'application/zip',
     'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(folderName)}.zip`
   };
+  if (failed.length) {
+    headers['X-Zip-Failed'] = failed.map(f => encodeURIComponent(f)).join(',');
+  }
   return new Response(zipBuffer, { headers });
 }
 
@@ -1152,23 +1181,28 @@ body { margin:0; font-family:'Roboto',sans-serif; background:var(--bg); color:va
 .breadcrumbs a { color:var(--primary); text-decoration:none; font-size:14px; }
 .breadcrumbs span { color:var(--text-sec); font-size:14px; }
 .card { background:var(--surface); border-radius:12px; box-shadow:0 1px 3px rgba(0,0,0,.1); padding:12px; margin-bottom:12px; }
-.file-card { background:#fff; border-radius:12px; box-shadow:0 1px 3px rgba(0,0,0,.08); padding:12px; margin-bottom:10px; }
-.file-main { display:flex; align-items:center; gap:12px; cursor:pointer; }
-.file-icon { width:40px; height:40px; border-radius:8px; background:#e3f2fd; display:flex; align-items:center; justify-content:center; color:var(--primary); flex-shrink:0; }
+.file-card { background:#fff; border-radius:10px; box-shadow:0 1px 2px rgba(0,0,0,.08); padding:8px 10px; margin-bottom:6px; }
+.file-main { display:flex; align-items:center; gap:8px; cursor:pointer; }
+.file-icon { width:32px; height:32px; border-radius:6px; background:#e3f2fd; display:flex; align-items:center; justify-content:center; color:var(--primary); flex-shrink:0; }
+.file-icon .material-icons { font-size:20px; }
 .file-name-wrap { flex:1; min-width:0; overflow:hidden; }
-.file-name { display:inline-block; font-size:15px; font-weight:500; white-space:nowrap; }
+.file-name { display:inline-block; font-size:14px; font-weight:500; white-space:nowrap; }
 .file-name.marquee { padding-left:100%; animation:marquee 8s linear infinite; }
 @keyframes marquee { 0% { transform:translateX(0); } 100% { transform:translateX(-100%); } }
-.file-meta { font-size:12px; color:var(--text-sec); margin-top:2px; }
-.file-actions { display:flex; gap:6px; margin-top:10px; justify-content:flex-end; flex-wrap:wrap; }
-.file-actions button { background:none; border:none; color:var(--text-sec); cursor:pointer; padding:6px; border-radius:50%; }
+.file-meta { font-size:11px; color:var(--text-sec); margin-top:1px; }
+.file-actions { display:flex; gap:4px; margin-top:6px; justify-content:flex-end; flex-wrap:wrap; }
+.file-actions button { background:none; border:none; color:var(--text-sec); cursor:pointer; padding:4px; border-radius:50%; }
+.file-actions button .material-icons { font-size:18px; }
 .file-card.selected { background:#e3f2fd !important; }
-.sel-check { width:20px; height:20px; flex-shrink:0; accent-color:var(--primary); margin-right:8px; }
+.sel-check { width:18px; height:18px; flex-shrink:0; accent-color:var(--primary); margin-right:4px; display:none; }
+#file-list.selection-mode .sel-check { display:inline-block; }
 .file-actions button:hover { background:#f5f5f5; color:var(--primary); }
-.sort-select { flex:1; padding:8px; border-radius:8px; border:1px solid var(--divider); background:var(--surface); font-size:14px; }
-.selection-bar { display:none; align-items:center; gap:8px; margin-bottom:10px; padding:8px 12px; background:var(--surface); border-radius:12px; box-shadow:0 1px 3px rgba(0,0,0,.1); flex-wrap:wrap; }
+.sort-select { flex:1; padding:6px 8px; border-radius:8px; border:1px solid var(--divider); background:var(--surface); font-size:14px; }
+.selection-bar { display:none; align-items:center; gap:6px; margin-bottom:6px; padding:6px 10px; background:var(--surface); border-radius:10px; box-shadow:0 1px 2px rgba(0,0,0,.1); flex-wrap:wrap; }
 .selection-bar.show { display:flex; }
-.selection-bar button { padding:6px 10px; border:none; border-radius:8px; cursor:pointer; font-size:13px; background:#e0e0e0; color:var(--text); }
+.selection-bar button { padding:5px 8px; border:none; border-radius:6px; cursor:pointer; font-size:12px; background:#e0e0e0; color:var(--text); }
+#btn-select-mode { padding:6px; }
+#btn-select-mode .material-icons { font-size:20px; }
 #btn-select-mode.active { color:var(--primary); background:#e3f2fd; }
 .empty { text-align:center; padding:40px 0; color:var(--text-sec); }
 .bottom-bar { position:fixed; bottom:0; left:0; right:0; height:64px; background:var(--surface); display:flex; box-shadow:0 -2px 6px rgba(0,0,0,.1); z-index:20; }
@@ -1352,10 +1386,9 @@ async function loadList(){
     const meta = timeMeta ? (sizeMeta + ' · ' + timeMeta) : sizeMeta;
     const path = currentPath?currentPath+'/'+name:name;
     const isSelected = selectedPaths.has(path);
-    const check = selectionMode ? \`<input type="checkbox" class="sel-check" data-action="select" \${isSelected?'checked':''}>\` : '';
     return \`<div class="file-card \${isSelected?'selected':''}" data-path="\${escapeHtml(path)}" data-type="\${node.type}" data-action="open">
       <div class="file-main">
-        \${check}
+        <input type="checkbox" class="sel-check" data-action="select" \${isSelected?'checked':''}>
         <div class="file-icon"><span class="material-icons">\${icon}</span></div>
         <div class="file-name-wrap">
           <div class="file-name" title="\${escapeHtml(name)}">\${escapeHtml(name)}</div>
@@ -1379,11 +1412,13 @@ async function loadList(){
 }
 
 function setupMarquee(){
-  document.querySelectorAll('.file-name-wrap').forEach(wrap=>{
-    const name=wrap.querySelector('.file-name');
-    if(name && name.scrollWidth > wrap.clientWidth){
-      name.classList.add('marquee');
-    }
+  requestAnimationFrame(()=>{
+    document.querySelectorAll('.file-name-wrap').forEach(wrap=>{
+      const name=wrap.querySelector('.file-name');
+      if(name && name.scrollWidth > wrap.clientWidth){
+        name.classList.add('marquee');
+      }
+    });
   });
 }
 
@@ -1412,7 +1447,8 @@ function toggleSelectionMode(){
   selectionMode = !selectionMode;
   selectedPaths.clear();
   document.getElementById('btn-select-mode').classList.toggle('active', selectionMode);
-  loadList();
+  document.getElementById('file-list').classList.toggle('selection-mode', selectionMode);
+  updateSelectionUI();
 }
 
 function toggleSelect(p){
@@ -1446,7 +1482,8 @@ function clearSelection(){
   selectedPaths.clear();
   selectionMode = false;
   document.getElementById('btn-select-mode').classList.remove('active');
-  loadList();
+  document.getElementById('file-list').classList.remove('selection-mode');
+  updateSelectionUI();
 }
 
 async function pickTargetFolder(currentTarget){
@@ -1478,51 +1515,61 @@ function collectFolderPathsClient(node, base=''){
 }
 
 async function moveItem(p){
-  const target = await pickTargetFolder();
-  if(target === null) return;
-  await api('/api/file/move', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({path:p, targetPath:target})});
-  showMsg('移动成功');
-  loadList();
+  try {
+    const target = await pickTargetFolder();
+    if(target === null) return;
+    await api('/api/file/move', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({path:p, targetPath:target})});
+    showMsg('移动成功');
+    loadList();
+  } catch(e) { showMsg('移动失败: ' + (e.message || e)); }
 }
 
 async function copyItem(p){
-  const target = await pickTargetFolder();
-  if(target === null) return;
-  await api('/api/file/copy', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({path:p, targetPath:target})});
-  showMsg('复制成功');
-  loadList();
+  try {
+    const target = await pickTargetFolder();
+    if(target === null) return;
+    await api('/api/file/copy', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({path:p, targetPath:target})});
+    showMsg('复制成功');
+    loadList();
+  } catch(e) { showMsg('复制失败: ' + (e.message || e)); }
 }
 
 async function batchMove(){
   if(selectedPaths.size===0){ showMsg('请先选择文件'); return; }
-  const target = await pickTargetFolder();
-  if(target === null) return;
-  const paths = Array.from(selectedPaths);
-  await api('/api/file/move', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({paths, targetPath:target})});
-  showMsg('批量移动成功');
-  selectedPaths.clear();
-  loadList();
+  try {
+    const target = await pickTargetFolder();
+    if(target === null) return;
+    const paths = Array.from(selectedPaths);
+    await api('/api/file/move', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({paths, targetPath:target})});
+    showMsg('批量移动成功');
+    selectedPaths.clear();
+    loadList();
+  } catch(e) { showMsg('批量移动失败: ' + (e.message || e)); }
 }
 
 async function batchCopy(){
   if(selectedPaths.size===0){ showMsg('请先选择文件'); return; }
-  const target = await pickTargetFolder();
-  if(target === null) return;
-  const paths = Array.from(selectedPaths);
-  await api('/api/file/copy', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({paths, targetPath:target})});
-  showMsg('批量复制成功');
-  selectedPaths.clear();
-  loadList();
+  try {
+    const target = await pickTargetFolder();
+    if(target === null) return;
+    const paths = Array.from(selectedPaths);
+    await api('/api/file/copy', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({paths, targetPath:target})});
+    showMsg('批量复制成功');
+    selectedPaths.clear();
+    loadList();
+  } catch(e) { showMsg('批量复制失败: ' + (e.message || e)); }
 }
 
 async function batchDelete(){
   if(selectedPaths.size===0){ showMsg('请先选择文件'); return; }
   if(!confirm('确定删除选中的 '+selectedPaths.size+' 项?')) return;
-  const paths = Array.from(selectedPaths);
-  await api('/api/files/batch', {method:'DELETE', headers:{'Content-Type':'application/json'}, body:JSON.stringify({paths})});
-  showMsg('批量删除成功');
-  selectedPaths.clear();
-  loadList();
+  try {
+    const paths = Array.from(selectedPaths);
+    await api('/api/files/batch', {method:'DELETE', headers:{'Content-Type':'application/json'}, body:JSON.stringify({paths})});
+    showMsg('批量删除成功');
+    selectedPaths.clear();
+    loadList();
+  } catch(e) { showMsg('批量删除失败: ' + (e.message || e)); }
 }
 
 function getIcon(name){
@@ -1543,7 +1590,7 @@ function renderBreadcrumbs(){
   document.getElementById('breadcrumbs').innerHTML=html;
 }
 
-function openFolder(p){ currentPath=p; selectedPaths.clear(); history.pushState(null,'','/?path='+encodeURIComponent(p)); loadList(); }
+function openFolder(p){ currentPath=p; selectedPaths.clear(); selectionMode=false; document.getElementById('btn-select-mode').classList.remove('active'); document.getElementById('file-list').classList.remove('selection-mode'); history.pushState(null,'','/?path='+encodeURIComponent(p)); loadList(); }
 function openFile(p){ location.href='/file?path='+encodeURIComponent(p); }
 
 async function downloadFile(p){
@@ -2160,6 +2207,8 @@ function settingsPage(settings = {}) {
   const primary = settings.primary || '#1976d2';
   const bg = settings.bg || '';
   const cardOpacity = settings.cardOpacity != null ? settings.cardOpacity : 1;
+  const fontFamily = settings.fontFamily || '';
+  const useCustomFont = fontFamily && (fontFamily.startsWith('http') || fontFamily.startsWith('/'));
   return page('设置', `
 <div class="appbar"><span class="material-icons" onclick="history.back()">arrow_back</span><h1>设置</h1></div>
 <div class="container">
@@ -2169,6 +2218,20 @@ function settingsPage(settings = {}) {
     <div style="display:flex;gap:12px;align-items:center;margin-bottom:16px;">
       <input type="color" id="primary-color" value="${primary}" style="width:56px;height:36px;padding:0;border:none;background:none;cursor:pointer;">
       <span id="primary-label" style="font-size:14px;">${primary}</span>
+    </div>
+    <label style="display:block;margin-bottom:8px;font-size:14px;color:var(--text-sec);">全局字体</label>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px;">
+      <label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;">
+        <input type="radio" name="font-mode" value="system" ${!useCustomFont ? 'checked' : ''}> 手机默认字体
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;">
+        <input type="radio" name="font-mode" value="custom" ${useCustomFont ? 'checked' : ''}> 自定义字体
+      </label>
+    </div>
+    <div id="font-upload-wrap" style="display:${useCustomFont ? 'flex' : 'none'};gap:8px;margin-bottom:16px;align-items:center;">
+      <input type="text" id="font-value" placeholder="字体 URL" value="${escapeHtml(fontFamily)}" style="flex:1;">
+      <input type="file" id="font-file" accept=".ttf,.otf,.woff,.woff2" style="display:none">
+      <button class="btn-secondary" onclick="document.getElementById('font-file').click()" style="display:flex;align-items:center;gap:4px;padding:8px;border:none;border-radius:8px;cursor:pointer;white-space:nowrap;"><span class="material-icons">font_download</span>上传</button>
     </div>
     <label style="display:block;margin-bottom:8px;font-size:14px;color:var(--text-sec);">文件列表背景</label>
     <div style="display:flex;gap:8px;margin-bottom:8px;">
@@ -2191,7 +2254,15 @@ function settingsPage(settings = {}) {
 <div class="snackbar" id="snackbar"></div>
 `, `
 <script>
-let currentSettings = { primary: '${primary}', bg: '${escapeHtml(bg)}', cardOpacity: ${cardOpacity} };
+let currentSettings = { primary: '${primary}', bg: '${escapeHtml(bg)}', cardOpacity: ${cardOpacity}, fontFamily: '${escapeHtml(fontFamily)}' };
+function getFontFamily(){
+  const mode = document.querySelector('input[name="font-mode"]:checked').value;
+  return mode === 'custom' ? document.getElementById('font-value').value.trim() : '';
+}
+function updateFontUI(){
+  const mode = document.querySelector('input[name="font-mode"]:checked').value;
+  document.getElementById('font-upload-wrap').style.display = mode === 'custom' ? 'flex' : 'none';
+}
 function showMsg(msg){ const s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(()=>s.classList.remove('show'),2500); }
 function escapeHtml(t){ return t.replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 async function api(url, opts={}){
@@ -2224,11 +2295,30 @@ document.getElementById('bg-file').onchange = async function(){
     showMsg('背景图上传失败: ' + e.message);
   }
 };
+document.querySelectorAll('input[name="font-mode"]').forEach(radio => {
+  radio.onchange = updateFontUI;
+});
+document.getElementById('font-file').onchange = async function(){
+  const file = this.files[0];
+  if (!file) return;
+  const form = new FormData();
+  form.append('file', file);
+  try {
+    const r = await fetch('/api/upload/font', { method: 'POST', body: form });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || '上传失败');
+    document.getElementById('font-value').value = j.url;
+    showMsg('字体已上传');
+  } catch (e) {
+    showMsg('字体上传失败: ' + e.message);
+  }
+};
 async function saveSettings(){
   const settings = {
     primary: document.getElementById('primary-color').value,
     bg: document.getElementById('bg-value').value.trim(),
-    cardOpacity: parseFloat(document.getElementById('card-opacity').value)
+    cardOpacity: parseFloat(document.getElementById('card-opacity').value),
+    fontFamily: getFontFamily()
   };
   await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(settings) });
   showMsg('设置已保存');
@@ -2249,8 +2339,15 @@ function generateThemeCss(settings = {}) {
   const primary = settings.primary || '#1976d2';
   const bg = settings.bg || '';
   const cardOpacity = settings.cardOpacity != null ? settings.cardOpacity : 1;
+  const fontFamily = settings.fontFamily || '';
   let css = '<style id="theme-style">';
   css += ':root { --primary:' + primary + '; --primary-dark:' + adjustColor(primary, -30) + '; }';
+  if (fontFamily) {
+    css += '@font-face { font-family: "CustomNetdiskFont"; src: url(' + fontFamily + '); }';
+    css += 'body, input, select, button, textarea { font-family: "CustomNetdiskFont", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important; }';
+  } else {
+    css += 'body, input, select, button, textarea { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important; }';
+  }
   if (bg) {
     if (bg.startsWith('http') || bg.startsWith('data:') || bg.startsWith('/')) {
       css += 'html, body { background: transparent !important; }';
@@ -2260,7 +2357,8 @@ function generateThemeCss(settings = {}) {
     }
   }
   const alpha = Math.round(cardOpacity * 255).toString(16).padStart(2, '0');
-  css += '.file-card { background-color: #' + (cardOpacity < 1 ? 'ffffff' + alpha : 'ffffff') + ' !important; }';
+  const cardBg = cardOpacity < 1 ? 'ffffff' + alpha : 'ffffff';
+  css += '.file-card, .sort-select, #btn-select-mode, .selection-bar, .selection-bar button { background-color: #' + cardBg + ' !important; }';
   css += '</style>';
   return css;
 }
@@ -2809,7 +2907,8 @@ async function handleRequest(request, env, ctx = null) {
     const settings = {
       primary: body.primary || '#1976d2',
       bg: body.bg || '',
-      cardOpacity: body.cardOpacity != null ? body.cardOpacity : 1
+      cardOpacity: body.cardOpacity != null ? body.cardOpacity : 1,
+      fontFamily: body.fontFamily || 'Roboto, sans-serif'
     };
     await saveSettings(env, settings);
     return jsonResponse({ ok: true });
@@ -2836,6 +2935,24 @@ async function handleRequest(request, env, ctx = null) {
     } catch (e) {
       console.error('背景图上传失败', e);
       return errorResponse(e.message || '背景图上传失败', 500);
+    }
+  }
+
+  if (path === '/api/upload/font' && request.method === 'POST') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    const form = await request.formData();
+    const file = form.get('file');
+    if (!file) return errorResponse('缺少文件');
+    const buffer = await file.arrayBuffer();
+    const ext = (file.name.split('.').pop() || 'ttf').toLowerCase();
+    if (!['ttf', 'otf', 'woff', 'woff2'].includes(ext)) return errorResponse('仅支持 ttf/otf/woff/woff2 字体文件', 400);
+    try {
+      const url = await uploadFontFile(buffer, ext, env);
+      return jsonResponse({ ok: true, url });
+    } catch (e) {
+      console.error('字体上传失败', e);
+      return errorResponse(e.message || '字体上传失败', 500);
     }
   }
 
