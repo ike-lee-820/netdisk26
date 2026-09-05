@@ -1833,7 +1833,13 @@ async function renderZip(url){
         const textExts=['txt','md','json','js','css','html','xml'];
         if(textExts.includes(ext)){
           const text=fflate.strFromU8(entry);
-          list.innerHTML='<div style="padding:12px;"><button class="btn-secondary" onclick="renderZip(\''+url+'\')" style="margin-bottom:12px;">返回列表</button><pre style="background:#263238;color:#aed581;padding:12px;border-radius:8px;overflow:auto;max-height:60vh;font-size:13px;">'+escapeHtml(text)+'</pre></div>';
+          const wrap=document.createElement('div'); wrap.style.padding='12px';
+          const backBtn=document.createElement('button'); backBtn.className='btn-secondary'; backBtn.textContent='返回列表'; backBtn.style.marginBottom='12px';
+          backBtn.onclick=()=>renderZip(url);
+          const pre=document.createElement('pre'); pre.style.cssText='background:#263238;color:#aed581;padding:12px;border-radius:8px;overflow:auto;max-height:60vh;font-size:13px;';
+          pre.textContent=text;
+          wrap.appendChild(backBtn); wrap.appendChild(pre);
+          list.innerHTML=''; list.appendChild(wrap);
         } else {
           const blob=new Blob([entry.buffer], {type:getMime(item.dataset.name)});
           const blobUrl=URL.createObjectURL(blob);
