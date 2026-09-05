@@ -1663,6 +1663,7 @@ async function pickTargetFolder(opts = {}){
         if(base) toggleTargetExpand(base);
         targetPickState.expanded.add(newPath);
         selectTargetPath(newPath);
+        loadList();
       } catch(e){ showMsg('新建文件夹失败: ' + (e.message || e)); }
     };
   });
