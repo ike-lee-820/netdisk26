@@ -334,10 +334,17 @@ function moveNode(structure, path, targetPath, mode = 'overwrite') {
   const node = getNode(structure, path);
   if (!node) return { ok: false, error: '源文件不存在' };
   const targetNode = targetPath ? getNode(structure, targetPath) : structure;
-  if (!targetNode || targetNode.type !== 'folder') return { ok: false, error: '目标文件夹不存在' };
+  if (!targetNode || (targetNode.type !== 'folder' && targetNode.type !== 'root')) return { ok: false, error: '目标文件夹不存在' };
   if (isDescendantOrSelf(path, targetPath)) return { ok: false, error: '不能移动到自身或子文件夹内' };
   if (targetNode.children[name]) {
     if (mode === 'skip' || mode === 'newOnly') return { ok: true };
+    if (mode === 'rename') {
+      const newName = uniqueName(targetNode.children, name);
+      deleteNode(structure, path);
+      node.name = newName;
+      targetNode.children[newName] = node;
+      return { ok: true };
+    }
     removeChild(structure, (targetPath ? targetPath + '/' : '') + name);
   }
   deleteNode(structure, path);
@@ -351,7 +358,7 @@ function copyNode(structure, path, targetPath, mode = 'overwrite') {
   const node = getNode(structure, path);
   if (!node) return { ok: false, error: '源文件不存在' };
   const targetNode = targetPath ? getNode(structure, targetPath) : structure;
-  if (!targetNode || targetNode.type !== 'folder') return { ok: false, error: '目标文件夹不存在' };
+  if (!targetNode || (targetNode.type !== 'folder' && targetNode.type !== 'root')) return { ok: false, error: '目标文件夹不存在' };
   if (isDescendantOrSelf(path, targetPath)) return { ok: false, error: '不能复制到自身或子文件夹内' };
   if (targetNode.children[name]) {
     if (mode === 'skip') return { ok: true };
@@ -1230,12 +1237,13 @@ body { margin:0; font-family:'Roboto',sans-serif; background:var(--bg); color:va
 @keyframes marquee { 0% { transform:translateX(0); } 100% { transform:translateX(-100%); } }
 .file-meta { font-size:10px; color:var(--text-sec); margin-top:0; }
 .file-actions { display:flex; gap:3px; margin-top:4px; justify-content:flex-end; flex-wrap:wrap; }
-.file-actions button { background:none; border:none; color:var(--text-sec); cursor:pointer; padding:3px; border-radius:50%; }
-.file-actions button .material-icons { font-size:16px; }
+.file-actions button { background:none; border:none; color:var(--text-sec); cursor:pointer; padding:6px; border-radius:50%; touch-action:manipulation; -webkit-tap-highlight-color:transparent; transition:transform .05s; }
+.file-actions button .material-icons { font-size:16px; pointer-events:none; }
 .file-card.selected { background:#e3f2fd !important; }
 .sel-check { width:18px; height:18px; flex-shrink:0; accent-color:var(--primary); margin-right:4px; display:none; }
 #file-list.selection-mode .sel-check { display:inline-block; }
 .file-actions button:hover { background:#f5f5f5; color:var(--primary); }
+.file-actions button:active { transform:scale(0.9); background:#e3f2fd; color:var(--primary); }
 .sort-select { flex:1; padding:5px 6px; border-radius:6px; border:1px solid var(--divider); background:var(--surface); font-size:13px; }
 .selection-bar { display:none; align-items:center; gap:5px; margin-bottom:5px; padding:5px 8px; background:var(--surface); border-radius:8px; box-shadow:0 1px 2px rgba(0,0,0,.1); flex-wrap:wrap; }
 .selection-bar.show { display:flex; }
@@ -1369,18 +1377,20 @@ async function copyText(text){
   try {
     if (navigator.clipboard && window.isSecureContext) {
       await navigator.clipboard.writeText(text);
-    } else {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.position = 'fixed';
-      ta.style.opacity = '0';
-      document.body.appendChild(ta);
-      ta.select();
-      const ok = document.execCommand('copy');
-      document.body.removeChild(ta);
-      if (!ok) throw new Error('execCommand copy failed');
+      return;
     }
-  } catch (e) { throw new Error('复制失败: ' + (e.message || e)); }
+  } catch (e) { console.log('clipboard api failed', e); }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  ta.readOnly = true;
+  document.body.appendChild(ta);
+  ta.select();
+  ta.setSelectionRange(0, text.length);
+  const ok = document.execCommand('copy');
+  document.body.removeChild(ta);
+  if (!ok) throw new Error('复制失败');
 }
 
 async function api(url, opts={}){
@@ -1599,17 +1609,12 @@ async function pickTargetFolder(opts = {}){
     selectedPath: '',
     expanded: new Set([''])
   };
-  const isCopy = operation === 'copy';
-  const verb = isCopy ? '复制' : '移动';
-  const copyOptions = '<label style="display:block;margin-bottom:6px;font-size:14px;color:var(--text-sec);">冲突处理</label>' +
+  const conflictOptions = '<label style="display:block;margin-bottom:6px;font-size:14px;color:var(--text-sec);">冲突处理</label>' +
     '<select id="target-conflict" class="target-tree-select">' +
       '<option value="overwrite" selected>覆盖重复文件</option>' +
       '<option value="rename">保留重复文件并重命名</option>' +
       '<option value="skip">跳过重复文件</option>' +
     '</select>';
-  const moveOptions = '<label class="target-tree-option"><input type="radio" name="target-conflict" value="overwrite" checked>覆盖已存在的文件</label>' +
-    '<label class="target-tree-option"><input type="radio" name="target-conflict" value="skip">跳过已存在的文件</label>' +
-    '<label class="target-tree-option"><input type="radio" name="target-conflict" value="newOnly">仅' + verb + '新文件与子目录</label>';
   const content = '<style>' +
     '.target-tree-wrap{max-height:260px;overflow:auto;border:1px solid var(--divider);border-radius:8px;padding:8px;}' +
     '.target-tree-row{display:flex;align-items:center;gap:4px;padding:6px 8px;border-radius:6px;cursor:pointer;user-select:none;}' +
@@ -1619,26 +1624,18 @@ async function pickTargetFolder(opts = {}){
     '.target-tree-row.invalid{opacity:.45;cursor:not-allowed;}' +
     '.target-tree-row.invalid.selected{background:var(--primary);opacity:.7;}' +
     '.target-tree-toggle{width:16px;text-align:center;color:var(--primary);font-size:12px;flex-shrink:0;}' +
-    '.target-tree-option{display:flex;align-items:flex-start;gap:8px;font-size:14px;margin-bottom:8px;cursor:pointer;}' +
-    '.target-tree-option input{margin-top:2px;}' +
     '.target-tree-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;}' +
     '.target-tree-header button{display:flex;align-items:center;gap:4px;padding:6px 10px;border:none;border-radius:6px;background:var(--surface);color:var(--primary);cursor:pointer;font-size:13px;box-shadow:0 0 0 1px var(--divider);}' +
     '.target-tree-select{width:100%;padding:8px;border:1px solid var(--divider);border-radius:6px;font-size:14px;background:var(--surface);color:var(--text);}' +
     '</style>' +
     '<div class="target-tree-header"><span style="font-weight:500;font-size:16px;">选择目标文件夹</span><button id="target-new-folder"><span class="material-icons" style="font-size:16px;">create_new_folder</span>新建文件夹</button></div>' +
     '<div id="target-tree" class="target-tree-wrap"></div>' +
-    '<div style="margin-top:12px;">' + (isCopy ? copyOptions : moveOptions) + '</div>';
+    '<div style="margin-top:12px;">' + conflictOptions + '</div>';
   return new Promise(resolve => {
     openModal('', content, () => {
       const target = targetPickState ? targetPickState.selectedPath : '';
-      let mode;
-      if(operation === 'copy'){
-        const sel = document.getElementById('target-conflict');
-        mode = sel ? sel.value : 'overwrite';
-      } else {
-        const modeEl = document.querySelector('input[name="target-conflict"]:checked');
-        mode = modeEl ? modeEl.value : 'overwrite';
-      }
+      const sel = document.getElementById('target-conflict');
+      const mode = sel ? sel.value : 'overwrite';
       closeModal();
       targetPickState = null;
       resolve({ target: target, mode: mode });
@@ -1754,18 +1751,22 @@ async function downloadFile(p){
   location.href='/download/'+encodeURIComponent(node.ssid)+'/'+encodeURIComponent(node.name);
 }
 async function shareFile(p){
-  const node=await api('/api/file?path='+encodeURIComponent(p));
-  if(!node) return;
-  const url=location.origin+'/share/'+node.ssid;
-  await copyText(url);
-  showMsg('分享链接已复制');
+  try {
+    const node=await api('/api/file?path='+encodeURIComponent(p));
+    if(!node) return;
+    const url=location.origin+'/share/'+node.ssid;
+    await copyText(url);
+    showMsg('分享链接已复制');
+  } catch(e) { showMsg('复制失败: '+(e.message||e)); }
 }
 async function copyDirectLink(p){
-  const node=await api('/api/file?path='+encodeURIComponent(p));
-  if(!node) return;
-  const url=location.origin+'/direct/'+node.ssid+'/'+encodeURIComponent(node.name);
-  await copyText(url);
-  showMsg('直链已复制');
+  try {
+    const node=await api('/api/file?path='+encodeURIComponent(p));
+    if(!node) return;
+    const url=location.origin+'/direct/'+node.ssid+'/'+encodeURIComponent(node.name);
+    await copyText(url);
+    showMsg('直链已复制');
+  } catch(e) { showMsg('复制失败: '+(e.message||e)); }
 }
 function downloadFolder(p){
   location.href='/api/folder/download?path='+encodeURIComponent(p);
@@ -2180,18 +2181,20 @@ async function copyText(text){
   try {
     if (navigator.clipboard && window.isSecureContext) {
       await navigator.clipboard.writeText(text);
-    } else {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.position = 'fixed';
-      ta.style.opacity = '0';
-      document.body.appendChild(ta);
-      ta.select();
-      const ok = document.execCommand('copy');
-      document.body.removeChild(ta);
-      if (!ok) throw new Error('execCommand copy failed');
+      return;
     }
-  } catch (e) { throw new Error('复制失败: ' + (e.message || e)); }
+  } catch (e) { console.log('clipboard api failed', e); }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  ta.readOnly = true;
+  document.body.appendChild(ta);
+  ta.select();
+  ta.setSelectionRange(0, text.length);
+  const ok = document.execCommand('copy');
+  document.body.removeChild(ta);
+  if (!ok) throw new Error('复制失败');
 }
 async function api(url, opts={}){
   const r=await fetch(url, opts);
@@ -2366,8 +2369,8 @@ async function renderZip(url){
   }
 }
 function downloadFile(){ if(!fileNode){ showMsg('文件未加载'); return; } location.href='/download/'+fileNode.ssid+'/'+encodeURIComponent(fileNode.name); }
-async function shareFile(){ if(!fileNode){ showMsg('文件未加载'); return; } await copyText(location.origin+'/share/'+fileNode.ssid); showMsg('分享链接已复制'); }
-async function copyDirectLink(){ if(!fileNode){ showMsg('文件未加载'); return; } const url=location.origin+'/direct/'+fileNode.ssid+'/'+encodeURIComponent(fileNode.name); await copyText(url); showMsg('直链已复制'); }
+async function shareFile(){ if(!fileNode){ showMsg('文件未加载'); return; } try { await copyText(location.origin+'/share/'+fileNode.ssid); showMsg('分享链接已复制'); } catch(e){ showMsg('复制失败: '+(e.message||e)); } }
+async function copyDirectLink(){ if(!fileNode){ showMsg('文件未加载'); return; } try { const url=location.origin+'/direct/'+fileNode.ssid+'/'+encodeURIComponent(fileNode.name); await copyText(url); showMsg('直链已复制'); } catch(e){ showMsg('复制失败: '+(e.message||e)); } }
 async function renameFile(){ if(!fileNode){ showMsg('文件未加载'); return; } const n=prompt('新名称',fileNode.name); if(!n||n===fileNode.name) return; await api('/api/file/rename',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({path,newName:n})}); location.reload(); }
 async function deleteFile(){ if(!fileNode){ showMsg('文件未加载'); return; } if(!confirm('确定删除?')) return; await api('/api/file?path='+encodeURIComponent(path),{method:'DELETE'}); location.href='/?path='+encodeURIComponent(path.split('/').slice(0,-1).join('/')); }
 async function saveText(){
