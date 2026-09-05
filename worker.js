@@ -1857,7 +1857,7 @@ async function uploadOne(file, dir){
   addLocalTask(baseTask);
   loadTasks();
   const CHUNK_SIZE = 5 * 1024 * 1024;
-  const MAX_CONCURRENT = 20000;
+  const MAX_CONCURRENT = 16;
   try{
     if (file.size <= CHUNK_SIZE) {
       const form = new FormData();
@@ -2919,20 +2919,38 @@ async function handleRequest(request, env, ctx = null) {
           };
           reportTimer = setInterval(reportSpeed, 800);
 
-          for (let i = 0; i < chunks; i++) {
-            if (await isTaskCancelled(env, taskId)) {
-              clearInterval(reportTimer);
-              reportTimer = null;
-              await updateTask(env, taskId, { status: 'cancelled', message: '已取消', progress: 0 });
-              return;
+          const GH_THREADS = 16;
+          const queue = [];
+          for (let i = 0; i < chunks; i++) queue.push(i);
+          let completedChunks = 0;
+          let uploadError = null;
+
+          async function uploadOneChunk() {
+            while (queue.length > 0) {
+              if (uploadError) return;
+              if (await isTaskCancelled(env, taskId)) {
+                await updateTask(env, taskId, { status: 'cancelled', message: '已取消', progress: 0 });
+                return;
+              }
+              const i = queue.shift();
+              try {
+                const b = await getKV(uploadId, env).get(uploadId + '_chunk_' + i, { type: 'arrayBuffer' });
+                if (!b) throw new Error('分片 ' + (i + 1) + ' 在服务端丢失');
+                await githubUploadFile(uploadId, 'chunk_' + i, b, env, 'chunk ' + i);
+                uploadedBytes += b.byteLength;
+                await getKV(uploadId, env).delete(uploadId + '_chunk_' + i);
+                completedChunks++;
+                await updateTask(env, taskId, { message: 'GitHub写入 ' + completedChunks + '/' + chunks, progress: 92 + Math.floor((completedChunks / chunks) * 7) });
+              } catch (e) {
+                uploadError = e;
+              }
             }
-            const b = await getKV(uploadId, env).get(uploadId + '_chunk_' + i, { type: 'arrayBuffer' });
-            if (!b) throw new Error('分片 ' + (i + 1) + ' 在服务端丢失');
-            await githubUploadFile(uploadId, 'chunk_' + i, b, env, 'chunk ' + i);
-            uploadedBytes += b.byteLength;
-            await getKV(uploadId, env).delete(uploadId + '_chunk_' + i);
-            await updateTask(env, taskId, { message: 'GitHub写入 ' + (i + 1) + '/' + chunks, progress: 92 + Math.floor(((i + 1) / chunks) * 7) });
           }
+
+          const workers = [];
+          for (let t = 0; t < Math.min(GH_THREADS, chunks); t++) workers.push(uploadOneChunk());
+          await Promise.all(workers);
+          if (uploadError) throw uploadError;
           clearInterval(reportTimer);
           reportTimer = null;
         } catch (e) {
