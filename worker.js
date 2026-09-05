@@ -645,24 +645,25 @@ async function saveFile(fileBuffer, filename, env, taskId = null) {
   await githubCreateRepo(id, env);
 
   if (size <= GITHUB_SINGLE_LIMIT) {
-    await report('上传到 GitHub...', 30);
+    await report('GitHub写入 1/1', 30);
     await githubUploadFile(id, filename, fileBuffer, env);
     await report('完成', 100, { status: 'done' });
     return { ssid: id, storage: 'github', size, filename, chunks: 1, githubPath: filename };
   }
 
   const chunks = Math.ceil(size / CHUNK_SIZE);
-  await report(`分片上传 (${chunks} 片)...`, 15, { totalChunks: chunks });
+  await report(`GitHub写入 0/${chunks}`, 15, { totalChunks: chunks });
   let uploadedBytes = 0;
   let reportTimer = null;
   const reportSpeed = () => {
     const elapsed = (Date.now() - startTime) / 1000;
     const speed = elapsed > 0 ? uploadedBytes / elapsed : 0;
     const progress = 15 + Math.min(80, Math.floor((uploadedBytes / size) * 80));
+    const currentChunk = chunks > 0 ? Math.min(chunks, Math.ceil((uploadedBytes / size) * chunks)) : 0;
     updateTask(env, taskId, {
-      message: '上传到 GitHub... ' + formatSize(uploadedBytes) + ' / ' + formatSize(size) + ' · ' + formatSpeed(speed),
+      message: 'GitHub写入 ' + formatSize(uploadedBytes) + '/' + formatSize(size) + ' · ' + formatSpeed(speed),
       progress,
-      currentChunk: chunks > 0 ? Math.min(chunks, Math.ceil((uploadedBytes / size) * chunks)) : 0
+      currentChunk
     }).catch(() => {});
   };
   reportTimer = setInterval(reportSpeed, 800);
@@ -671,10 +672,9 @@ async function saveFile(fileBuffer, filename, env, taskId = null) {
       const start = i * CHUNK_SIZE;
       const end = Math.min(start + CHUNK_SIZE, size);
       const chunk = fileBuffer.slice(start, end);
-      await report(`上传分片 ${i + 1}/${chunks} 到 GitHub...`, 15 + Math.floor((i / chunks) * 80), { currentChunk: i + 1 });
       await githubUploadFile(id, `chunk_${i}`, chunk, env, `upload chunk ${i}`);
       uploadedBytes += chunk.byteLength;
-      await report(`分片 ${i + 1}/${chunks} 已校验通过`, 15 + Math.floor(((i + 1) / chunks) * 80), { currentChunk: i + 1 });
+      await report(`GitHub写入 ${i + 1}/${chunks}`, 15 + Math.floor(((i + 1) / chunks) * 80), { currentChunk: i + 1 });
     }
   } finally {
     clearInterval(reportTimer);
@@ -1730,8 +1730,8 @@ async function uploadOne(file, dir){
       function updateProgress(force){
         const doneBytes = calcDoneBytes();
         const progress = Math.min(90, Math.floor((doneBytes / file.size) * 90));
-        const stage = isSerial ? '已写入 GitHub ' : '已上传 ';
-        addLocalTask({ ...baseTask, message: stage + formatSize(doneBytes) + ' / ' + formatSize(file.size) + speedState.str, progress: progress });
+        const stage = isSerial ? 'GitHub写入 ' : '已上传 ';
+        addLocalTask({ ...baseTask, message: stage + formatSize(doneBytes) + '/' + formatSize(file.size) + speedState.str, progress: progress });
         renderTask(force);
       }
       const speedTimer = setInterval(() => {
@@ -1809,7 +1809,7 @@ async function uploadOne(file, dir){
         removeLocalTask(taskId);
         showMsg('上传完成: ' + file.name);
       } else if (start.storage === 'github') {
-        addLocalTask({ ...baseTask, message: '客户端上传完成，服务端写入 GitHub...', progress: 92 });
+        addLocalTask({ ...baseTask, message: 'GitHub写入 0/' + start.chunks, progress: 92 });
         loadTasks();
         showMsg('客户端上传完成，服务端正在写入 GitHub: ' + file.name);
       } else {
@@ -2570,7 +2570,7 @@ async function handleRequest(request, env, ctx = null) {
       id: taskId,
       name: filename,
       status: 'uploading',
-      message: mode === 'serial' ? '大文件串流上传：等待 GitHub 写入中...' : '准备分片上传...',
+      message: mode === 'serial' ? 'GitHub写入 0/' + chunks : '准备分片上传...',
       progress: 0,
       size,
       createdAt: Date.now(),
@@ -2603,7 +2603,7 @@ async function handleRequest(request, env, ctx = null) {
         await kv.delete(chunkKey);
         if (!isNaN(total) && taskId) {
           await updateTask(env, taskId, {
-            message: '分片 ' + (index + 1) + '/' + total + ' 已写入 GitHub',
+            message: 'GitHub写入 ' + (index + 1) + '/' + total,
             progress: Math.min(90, Math.floor(((index + 1) / total) * 90))
           });
         }
@@ -2658,7 +2658,7 @@ async function handleRequest(request, env, ctx = null) {
             const speed = elapsed > 0 ? uploadedBytes / elapsed : 0;
             const progress = 92 + Math.min(7, Math.floor((totalBytes > 0 ? uploadedBytes / totalBytes : 0) * 7));
             updateTask(env, taskId, {
-              message: '服务端写入 GitHub... ' + formatSize(uploadedBytes) + ' / ' + formatSize(totalBytes) + ' · ' + formatSpeed(speed),
+              message: 'GitHub写入 ' + formatSize(uploadedBytes) + '/' + formatSize(totalBytes) + ' · ' + formatSpeed(speed),
               progress
             }).catch(() => {});
           };
@@ -2671,13 +2671,12 @@ async function handleRequest(request, env, ctx = null) {
               await updateTask(env, taskId, { status: 'cancelled', message: '已取消', progress: 0 });
               return;
             }
-            await updateTask(env, taskId, { message: '服务端：读取分片 ' + (i + 1) + '/' + chunks, progress: 92 + Math.floor((i / chunks) * 7) });
             const b = await getKV(uploadId, env).get(uploadId + '_chunk_' + i, { type: 'arrayBuffer' });
             if (!b) throw new Error('分片 ' + (i + 1) + ' 在服务端丢失');
             await githubUploadFile(uploadId, 'chunk_' + i, b, env, 'chunk ' + i);
             uploadedBytes += b.byteLength;
             await getKV(uploadId, env).delete(uploadId + '_chunk_' + i);
-            await updateTask(env, taskId, { message: '服务端：分片 ' + (i + 1) + '/' + chunks + ' 写入并校验通过', progress: 92 + Math.floor(((i + 1) / chunks) * 7) });
+            await updateTask(env, taskId, { message: 'GitHub写入 ' + (i + 1) + '/' + chunks, progress: 92 + Math.floor(((i + 1) / chunks) * 7) });
           }
           clearInterval(reportTimer);
           reportTimer = null;
