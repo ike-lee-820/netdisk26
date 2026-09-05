@@ -149,10 +149,7 @@ function getD1(env) {
 
 async function ensureD1(env) {
   if (d1Initialized) return;
-  await getD1(env).exec(`CREATE TABLE IF NOT EXISTS kv_store (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-  )`);
+  await getD1(env).exec('CREATE TABLE IF NOT EXISTS kv_store (key TEXT PRIMARY KEY, value TEXT NOT NULL);');
   d1Initialized = true;
 }
 
