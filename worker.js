@@ -14,6 +14,12 @@ const GITHUB_SINGLE_LIMIT = 0;                 // GitHub 文件一律分片，�
 const SERIAL_THRESHOLD = 500 * 1024 * 1024;    // >500MB 使用串流逐片上传，避免 KV 堆积
 const CHUNK_SIZE = 10 * 1024 * 1024;           // 10 MB/片
 const CLIENT_CHUNK_SIZE = 5 * 1024 * 1024;     // 客户端每片 5 MB，避免浏览器/Worker 超时
+const GH_PROXY = 'https://v6.gh-proxy.com/';
+
+function proxyUrl(url) {
+  if (!url || url.startsWith(GH_PROXY)) return url;
+  return GH_PROXY + url;
+}
 
 let d1Initialized = false;
 
@@ -562,21 +568,22 @@ async function githubGetDownloadUrl(ssid, path, env) {
 
 async function githubFetchFile(ssid, path, env) {
   const url = await githubGetDownloadUrl(ssid, path, env);
+  const proxiedUrl = proxyUrl(url);
   // raw.githubusercontent.com 不支持 Authorization header，且新文件可能有短暂延迟
   let lastErr = null;
   for (let i = 0; i < 5; i++) {
-    const resp = await fetchWithTimeout(url, {
-      headers: { 'User-Agent': 'netdisk-worker' }
+    const resp = await fetchWithTimeout(proxiedUrl, {
+      headers: { 'User-Agent': 'netdisk-worker', 'Accept-Encoding': 'identity' }
     }, 30000);
     if (resp.ok) return resp;
-    lastErr = `GitHub 下载失败: ${resp.status} ${url}`;
+    lastErr = `GitHub 下载失败: ${resp.status} ${proxiedUrl}`;
     if (resp.status === 404) {
       await new Promise(r => setTimeout(r, 800));
       continue;
     }
     throw new Error(lastErr);
   }
-  throw new Error(lastErr || `GitHub 下载失败: ${url}`);
+  throw new Error(lastErr || `GitHub 下载失败: ${proxiedUrl}`);
 }
 
 async function githubStreamChunks(fileNode, writable, env) {
