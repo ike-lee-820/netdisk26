@@ -133,8 +133,19 @@ function checkPassword(request, env) {
   const password = env.CLOUD_PASSWORD;
   if (!password) return true;
   const cookie = request.headers.get('Cookie') || '';
-  const m = cookie.match(/(?:^|;)\s*auth=([^;]+)/);
-  return m && decodeURIComponent(m[1]) === password;
+  const cm = cookie.match(/(?:^|;)\s*auth=([^;]+)/);
+  if (cm && decodeURIComponent(cm[1]) === password) return true;
+  const auth = request.headers.get('Authorization') || '';
+  const bm = auth.match(/^Bearer\s+(.+)$/i);
+  if (bm && bm[1] === password) return true;
+  const xpw = request.headers.get('X-Password');
+  if (xpw && xpw === password) return true;
+  try {
+    const url = new URL(request.url);
+    const qp = url.searchParams.get('auth');
+    if (qp && qp === password) return true;
+  } catch (_) {}
+  return false;
 }
 
 function requirePassword(request, env) {
@@ -2239,44 +2250,26 @@ async function renderPreview(){
   preview.innerHTML='<div class="empty">正在加载预览...</div>';
   try{
     if(mime.startsWith('video/')){
-      await loadCSS('https://cdn.jsdelivr.net/npm/mui-player@1.8.1/dist/mui-player.min.css');
-      await loadScript('https://cdn.jsdelivr.net/npm/mui-player@1.8.1/dist/mui-player.min.js');
-      await loadScript('https://cdn.jsdelivr.net/npm/mui-player-mobile-plugin@1.4.1/dist/mui-player-mobile-plugin.min.js');
-      preview.innerHTML='<div id="video-zoom-wrap" style="width:100%;height:70vh;overflow:hidden;touch-action:none;position:relative;background:#000;">'+
-        '<div id="mui-player" style="width:100%;height:100%;">'+
-          '<template slot="mute-btn"><span class="material-icons" style="color:#fff;font-size:20px;line-height:1;" id="mute-icon">volume_up</span></template>'+
-        '</div>'+
-      '</div>';
-      const mp=new MuiPlayer({
-        container:'#mui-player',
-        src:url,
-        title:fileNode.name,
-        autoplay:false,
-        preload:'metadata',
-        autoFit:true,
-        width:'100%',
-        height:'100%',
-        lang:'zh-cn',
-        objectFit:'contain',
-        custom:{
-          footerControls:[
-            { slot:'mute-btn', position:'right', tooltip:'静音/取消静音', oftenShow:true, click:function(e){ const v=mp.video(); v.muted=!v.muted; const icon=document.getElementById('mute-icon'); if(icon) icon.textContent=v.muted?'volume_off':'volume_up'; } }
-          ]
-        },
-        plugins:[
-          new MuiPlayerMobilePlugin({
-            showMenuButton:true,
-            defaultMenuConfig:{ showSpeedSwitch:true, showFillSwitch:true, showLoopSwitch:true }
-          })
-        ]
+      await loadCSS('https://vjs.zencdn.net/7.20.3/video-js.css');
+      await loadScript('https://vjs.zencdn.net/7.20.3/video.min.js');
+      await loadScript('https://vjs.zencdn.net/7.20.3/lang/zh-CN.js');
+      const vjsTheme = '<style>'+
+        '.vjs-netdisk-skin .vjs-control-bar,.vjs-netdisk-skin .vjs-menu-content{background:rgba(0,0,0,.78)!important;color:#fff!important;}'+
+        '.vjs-netdisk-skin .vjs-big-play-button{border-color:var(--primary)!important;background:rgba(0,0,0,.5)!important;}'+
+        '.vjs-netdisk-skin .vjs-big-play-button .vjs-icon-placeholder:before{color:var(--primary)!important;}'+
+        '.vjs-netdisk-skin .vjs-play-progress,.vjs-netdisk-skin .vjs-volume-level,.vjs-netdisk-skin .vjs-slider-bar{background:var(--primary)!important;}'+
+        '.vjs-netdisk-skin .vjs-progress-holder{background:rgba(255,255,255,.25)!important;}'+
+        '.vjs-netdisk-skin .vjs-button:hover,.vjs-netdisk-skin .vjs-menu-item.vjs-selected{color:var(--primary)!important;}'+
+        '.vjs-netdisk-skin .vjs-time-tooltip,.vjs-netdisk-skin .vjs-mouse-display{background:var(--primary)!important;color:#fff!important;}'+
+        '</style>';
+      preview.innerHTML=vjsTheme+'<video id="video-player" class="video-js vjs-big-play-centered vjs-fluid vjs-netdisk-skin" controls preload="metadata" style="width:100%;height:70vh;background:#000;"><source src="'+url+'" type="'+mime+'"></video>';
+      const player=videojs('video-player',{
+        language:'zh-CN',
+        fluid:true,
+        aspectRatio:'16:9',
+        html5:{ vhs:{ overrideNative:true, limitRenditionByPlayerDimensions:true } }
       });
-      window.currentMuiPlayer=mp;
-      const wrap=document.getElementById('video-zoom-wrap');
-      const playerEl=document.getElementById('mui-player');
-      let initialDistance=0, initialScale=1, currentScale=1;
-      wrap.addEventListener('touchstart', function(e){ if(e.touches.length===2){ const dx=e.touches[0].clientX-e.touches[1].clientX; const dy=e.touches[0].clientY-e.touches[1].clientY; initialDistance=Math.sqrt(dx*dx+dy*dy); initialScale=currentScale; } });
-      wrap.addEventListener('touchmove', function(e){ if(e.touches.length===2){ const dx=e.touches[0].clientX-e.touches[1].clientX; const dy=e.touches[0].clientY-e.touches[1].clientY; const dist=Math.sqrt(dx*dx+dy*dy); currentScale=Math.max(1, Math.min(initialScale*(dist/initialDistance), 4)); playerEl.style.transform='scale('+currentScale+')'; playerEl.style.transformOrigin='center center'; e.preventDefault(); } });
-      wrap.addEventListener('touchend', function(e){ if(e.touches.length<2 && currentScale<1){ currentScale=1; playerEl.style.transform='scale(1)'; } });
+      window.currentVideoPlayer=player;
     } else if(mime.startsWith('audio/')){
       await loadCSS('https://cdn.jsdelivr.net/npm/plyr@3.7.8/dist/plyr.css');
       await loadScript('https://cdn.jsdelivr.net/npm/plyr@3.7.8/dist/plyr.min.js');
@@ -3344,13 +3337,30 @@ async function handleRequest(request, env, ctx = null) {
 
 // ==================== 入口 ====================
 
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Password, X-Requested-With'
+};
+
+function withCors(response) {
+  const headers = new Headers(response.headers);
+  for (const [k, v] of Object.entries(CORS_HEADERS)) {
+    headers.set(k, v);
+  }
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
 export default {
   async fetch(request, env, ctx) {
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: CORS_HEADERS });
+    }
     try {
-      return await handleRequest(request, env, ctx);
+      return withCors(await handleRequest(request, env, ctx));
     } catch (e) {
       console.error(e);
-      return errorResponse(e.message || 'Internal Error', 500);
+      return withCors(errorResponse(e.message || 'Internal Error', 500));
     }
   }
 };
