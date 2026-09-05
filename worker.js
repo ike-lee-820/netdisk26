@@ -1857,7 +1857,7 @@ async function uploadOne(file, dir){
   addLocalTask(baseTask);
   loadTasks();
   const CHUNK_SIZE = 5 * 1024 * 1024;
-  const MAX_CONCURRENT = 6;
+  const MAX_CONCURRENT = 20000;
   try{
     if (file.size <= CHUNK_SIZE) {
       const form = new FormData();
