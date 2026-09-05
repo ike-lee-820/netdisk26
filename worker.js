@@ -361,6 +361,13 @@ function copyNode(structure, path, targetPath, mode = 'overwrite') {
       }
       return { ok: true };
     }
+    if (mode === 'rename') {
+      const newName = uniqueName(targetNode.children, name);
+      const cloned = cloneNode(node);
+      cloned.name = newName;
+      targetNode.children[newName] = cloned;
+      return { ok: true };
+    }
     removeChild(structure, (targetPath ? targetPath + '/' : '') + name);
   }
   const cloned = cloneNode(node);
@@ -1275,6 +1282,8 @@ body { margin:0; font-family:'Roboto',sans-serif; background:var(--bg); color:va
 .preview-box img, .preview-box video { max-width:100%; border-radius:8px; }
 .preview-box audio { width:100%; }
 .preview-box pre { background:#263238; color:#aed581; padding:12px; border-radius:8px; overflow:auto; max-height:60vh; font-size:13px; }
+.viewer-container { z-index:10000 !important; }
+.viewer-open { overflow:hidden !important; }
 .login-box { max-width:360px; margin:80px auto; }
 </style>
 `;
@@ -1590,12 +1599,23 @@ async function pickTargetFolder(opts = {}){
     selectedPath: '',
     expanded: new Set([''])
   };
-  const verb = operation === 'move' ? '移动' : '复制';
+  const isCopy = operation === 'copy';
+  const verb = isCopy ? '复制' : '移动';
+  const copyOptions = '<label style="display:block;margin-bottom:6px;font-size:14px;color:var(--text-sec);">冲突处理</label>' +
+    '<select id="target-conflict" class="target-tree-select">' +
+      '<option value="overwrite" selected>覆盖重复文件</option>' +
+      '<option value="rename">保留重复文件并重命名</option>' +
+      '<option value="skip">跳过重复文件</option>' +
+    '</select>';
+  const moveOptions = '<label class="target-tree-option"><input type="radio" name="target-conflict" value="overwrite" checked>覆盖已存在的文件</label>' +
+    '<label class="target-tree-option"><input type="radio" name="target-conflict" value="skip">跳过已存在的文件</label>' +
+    '<label class="target-tree-option"><input type="radio" name="target-conflict" value="newOnly">仅' + verb + '新文件与子目录</label>';
   const content = '<style>' +
     '.target-tree-wrap{max-height:260px;overflow:auto;border:1px solid var(--divider);border-radius:8px;padding:8px;}' +
     '.target-tree-row{display:flex;align-items:center;gap:4px;padding:6px 8px;border-radius:6px;cursor:pointer;user-select:none;}' +
     '.target-tree-row:hover{background:var(--divider);}' +
     '.target-tree-row.selected{background:var(--primary);color:#fff;}' +
+    '.target-tree-row.selected .target-tree-toggle,.target-tree-row.selected .material-icons{color:#fff !important;}' +
     '.target-tree-row.invalid{opacity:.45;cursor:not-allowed;}' +
     '.target-tree-row.invalid.selected{background:var(--primary);opacity:.7;}' +
     '.target-tree-toggle{width:16px;text-align:center;color:var(--primary);font-size:12px;flex-shrink:0;}' +
@@ -1603,19 +1623,22 @@ async function pickTargetFolder(opts = {}){
     '.target-tree-option input{margin-top:2px;}' +
     '.target-tree-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;}' +
     '.target-tree-header button{display:flex;align-items:center;gap:4px;padding:6px 10px;border:none;border-radius:6px;background:var(--surface);color:var(--primary);cursor:pointer;font-size:13px;box-shadow:0 0 0 1px var(--divider);}' +
+    '.target-tree-select{width:100%;padding:8px;border:1px solid var(--divider);border-radius:6px;font-size:14px;background:var(--surface);color:var(--text);}' +
     '</style>' +
     '<div class="target-tree-header"><span style="font-weight:500;font-size:16px;">选择目标文件夹</span><button id="target-new-folder"><span class="material-icons" style="font-size:16px;">create_new_folder</span>新建文件夹</button></div>' +
     '<div id="target-tree" class="target-tree-wrap"></div>' +
-    '<div style="margin-top:12px;">' +
-      '<label class="target-tree-option"><input type="radio" name="target-conflict" value="overwrite" checked>覆盖已存在的文件</label>' +
-      '<label class="target-tree-option"><input type="radio" name="target-conflict" value="skip">跳过已存在的文件</label>' +
-      '<label class="target-tree-option"><input type="radio" name="target-conflict" value="newOnly">仅' + verb + '新文件与子目录</label>' +
-    '</div>';
+    '<div style="margin-top:12px;">' + (isCopy ? copyOptions : moveOptions) + '</div>';
   return new Promise(resolve => {
     openModal('', content, () => {
       const target = targetPickState ? targetPickState.selectedPath : '';
-      const modeEl = document.querySelector('input[name="target-conflict"]:checked');
-      const mode = modeEl ? modeEl.value : 'overwrite';
+      let mode;
+      if(operation === 'copy'){
+        const sel = document.getElementById('target-conflict');
+        mode = sel ? sel.value : 'overwrite';
+      } else {
+        const modeEl = document.querySelector('input[name="target-conflict"]:checked');
+        mode = modeEl ? modeEl.value : 'overwrite';
+      }
       closeModal();
       targetPickState = null;
       resolve({ target: target, mode: mode });
@@ -2258,7 +2281,7 @@ async function renderPreview(){
       preview.innerHTML='<div id="zip-list" class="card" style="padding:0;max-height:60vh;overflow:auto;"><div class="empty">正在读取压缩包...</div></div>';
       await renderZip(url);
     } else if(mime.startsWith('image/')){
-      preview.innerHTML='<img id="preview-img" src="'+url+'" alt="'+escapeHtml(fileNode.name)+'" style="max-width:100%;border-radius:8px;cursor:pointer;">';
+      preview.innerHTML='<img id="preview-img" src="'+url+'" alt="'+escapeHtml(fileNode.name)+'" style="max-width:100%;max-height:70vh;width:auto;height:auto;object-fit:contain;display:block;margin:0 auto;border-radius:8px;cursor:pointer;">';
       try{
         await loadCSS('https://cdn.jsdelivr.net/npm/viewerjs@1.11.6/dist/viewer.min.css');
         await loadScript('https://cdn.jsdelivr.net/npm/viewerjs@1.11.6/dist/viewer.min.js');
