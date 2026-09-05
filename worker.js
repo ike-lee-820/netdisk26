@@ -490,13 +490,13 @@ async function verifyGitHubFile(ssid, path, expectedSha, env) {
   return false;
 }
 
-async function githubUploadFile(ssid, path, content, env, message = 'upload') {
+async function githubUploadFile(ssid, path, content, env, message = 'upload', skipVerify = false) {
   const base64 = arrayBufferToBase64(content);
   console.log(`[github] upload ${ssid}/${path} raw=${content.byteLength} base64=${base64.length}`);
   let retries = 0;
   const maxRetries = 5;
   while (true) {
-    const sha = await githubGetFileSha(ssid, path, env);
+    const sha = skipVerify ? null : await githubGetFileSha(ssid, path, env);
     const body = { message, content: base64 };
     if (sha) body.sha = sha;
     const resp = await fetchWithTimeout(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}/contents/${encodeURIComponent(path)}`, {
@@ -514,7 +514,12 @@ async function githubUploadFile(ssid, path, content, env, message = 'upload') {
       let data = null;
       try { data = await resp.json(); } catch (e) {}
       const expectedSha = data && data.content && data.content.sha;
-      console.log(`[github] put ${ssid}/${path} ok, sha=${expectedSha || '?'}, verifying...`);
+      console.log(`[github] put ${ssid}/${path} ok, sha=${expectedSha || '?'}`);
+      if (skipVerify) {
+        console.log(`[github] uploaded ${ssid}/${path} (skip verify)`);
+        return data || { sha: expectedSha };
+      }
+      console.log(`[github] verifying ${ssid}/${path}...`);
       if (await verifyGitHubFile(ssid, path, expectedSha, env)) {
         console.log(`[github] uploaded ${ssid}/${path} verified`);
         return data || { sha: expectedSha };
@@ -738,7 +743,7 @@ async function saveFile(fileBuffer, filename, env, taskId = null) {
       const start = i * CHUNK_SIZE;
       const end = Math.min(start + CHUNK_SIZE, size);
       const chunk = fileBuffer.slice(start, end);
-      await githubUploadFile(id, `chunk_${i}`, chunk, env, `upload chunk ${i}`);
+      await githubUploadFile(id, `chunk_${i}`, chunk, env, `upload chunk ${i}`, true);
       uploadedBytes += chunk.byteLength;
       await report(`GitHub写入 ${i + 1}/${chunks}`, 15 + Math.floor(((i + 1) / chunks) * 80), { currentChunk: i + 1 });
     }
@@ -2856,7 +2861,7 @@ async function handleRequest(request, env, ctx = null) {
     try {
       await kv.put(chunkKey, chunkBuf);
       if (mode === 'serial') {
-        await githubUploadFile(uploadId, 'chunk_' + index, chunkBuf, env, 'chunk ' + index);
+        await githubUploadFile(uploadId, 'chunk_' + index, chunkBuf, env, 'chunk ' + index, true);
         await kv.delete(chunkKey);
         if (!isNaN(total) && taskId) {
           await updateTask(env, taskId, {
@@ -2921,7 +2926,7 @@ async function handleRequest(request, env, ctx = null) {
           };
           reportTimer = setInterval(reportSpeed, 800);
 
-          const GH_THREADS = 16;
+          const GH_THREADS = 5;
           const queue = [];
           for (let i = 0; i < chunks; i++) queue.push(i);
           let completedChunks = 0;
@@ -2938,7 +2943,7 @@ async function handleRequest(request, env, ctx = null) {
               try {
                 const b = await getKV(uploadId, env).get(uploadId + '_chunk_' + i, { type: 'arrayBuffer' });
                 if (!b) throw new Error('分片 ' + (i + 1) + ' 在服务端丢失');
-                await githubUploadFile(uploadId, 'chunk_' + i, b, env, 'chunk ' + i);
+                await githubUploadFile(uploadId, 'chunk_' + i, b, env, 'chunk ' + i, true);
                 uploadedBytes += b.byteLength;
                 await getKV(uploadId, env).delete(uploadId + '_chunk_' + i);
                 completedChunks++;
