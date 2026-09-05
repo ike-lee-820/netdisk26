@@ -12,8 +12,8 @@ const ASSETS_REPO = 'netdisk-assets';
 const KV_SIZE_LIMIT = -1;                      // 所有文件均存 GitHub，KV 仅临时存放上传分片
 const GITHUB_SINGLE_LIMIT = 0;                 // GitHub 文件一律分片，避免 Worker CPU/超时
 const SERIAL_THRESHOLD = 500 * 1024 * 1024;    // >500MB 使用串流逐片上传，避免 KV 堆积
-const CHUNK_SIZE = 10 * 1024 * 1024;           // 10 MB/片
-const CLIENT_CHUNK_SIZE = 5 * 1024 * 1024;     // 客户端每片 5 MB，避免浏览器/Worker 超时
+const CHUNK_SIZE = 50 * 1024 * 1024;           // 10 MB/片
+const CLIENT_CHUNK_SIZE = 50 * 1024 * 1024;     // 客户端每片 5 MB，避免浏览器/Worker 超时
 const GH_PROXY = 'https://v6.gh-proxy.com/';
 
 function proxyUrl(url) {
