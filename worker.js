@@ -2239,10 +2239,16 @@ function settingsPage(settings = {}) {
   const bg = settings.bg || '';
   const cardOpacity = settings.cardOpacity != null ? settings.cardOpacity : 1;
   const fontFamily = settings.fontFamily || '';
+  const fontCss = settings.fontCss || '';
+  const fontCssFamily = settings.fontCssFamily || '';
   const SOURCE_HAN_SERIF = 'SourceHanSerifSC, serif';
-  const useCustomFont = fontFamily && (fontFamily.startsWith('http') || fontFamily.startsWith('/'));
+  const useCustomFontFile = fontFamily && (fontFamily.startsWith('http') || fontFamily.startsWith('/'));
   const useSourceHan = fontFamily === SOURCE_HAN_SERIF;
-  const fontMode = useCustomFont ? 'custom' : (useSourceHan ? 'sourcehan' : 'system');
+  const useCustomCss = Boolean(fontCss && fontCssFamily);
+  let fontMode = 'system';
+  if (useCustomFontFile) fontMode = 'customfile';
+  else if (useSourceHan) fontMode = 'sourcehan';
+  else if (useCustomCss) fontMode = 'customcss';
   const presetColors = ['#1976d2', '#d32f2f', '#388e3c', '#f9a825', '#7b1fa2', '#00796b', '#e64a19', '#5d4037', '#303f9f', '#c2185b'];
   const colorSwatches = presetColors.map(c => `<span class="color-swatch" data-color="${c}" style="width:24px;height:24px;border-radius:50%;background:${c};cursor:pointer;border:2px solid ${c===primary?'#fff':'transparent'};box-shadow:0 0 0 1px ${c===primary?c:'var(--divider)'};"></span>`).join('');
   return page('设置', `
@@ -2265,11 +2271,18 @@ function settingsPage(settings = {}) {
         <input type="radio" name="font-mode" value="sourcehan" ${fontMode === 'sourcehan' ? 'checked' : ''}> 思源宋体
       </label>
       <label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;">
-        <input type="radio" name="font-mode" value="custom" ${fontMode === 'custom' ? 'checked' : ''}> 自定义字体
+        <input type="radio" name="font-mode" value="customcss" ${fontMode === 'customcss' ? 'checked' : ''}> 自定义字体 CSS
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;">
+        <input type="radio" name="font-mode" value="customfile" ${fontMode === 'customfile' ? 'checked' : ''}> 上传字体文件
       </label>
     </div>
-    <div id="font-upload-wrap" style="display:${useCustomFont ? 'flex' : 'none'};gap:8px;margin-bottom:16px;align-items:center;">
-      <input type="text" id="font-value" placeholder="字体 URL" value="${escapeHtml(useCustomFont ? fontFamily : '')}" style="flex:1;">
+    <div id="font-css-wrap" style="display:${useCustomCss ? 'flex' : 'none'};flex-direction:column;gap:6px;margin-bottom:12px;">
+      <input type="text" id="font-css-url" placeholder="CSS 链接，如 https://example.com/font.css" value="${escapeHtml(fontCss)}" style="width:100%;padding:6px 8px;border-radius:6px;border:1px solid var(--divider);font-size:13px;">
+      <input type="text" id="font-css-family" placeholder="font-family 名称，如 SourceHanSerifSC" value="${escapeHtml(fontCssFamily)}" style="width:100%;padding:6px 8px;border-radius:6px;border:1px solid var(--divider);font-size:13px;">
+    </div>
+    <div id="font-upload-wrap" style="display:${useCustomFontFile ? 'flex' : 'none'};gap:8px;margin-bottom:16px;align-items:center;">
+      <input type="text" id="font-value" placeholder="字体文件 URL" value="${escapeHtml(useCustomFontFile ? fontFamily : '')}" style="flex:1;">
       <input type="file" id="font-file" accept=".ttf,.otf,.woff,.woff2" style="display:none">
       <button class="btn-secondary" onclick="document.getElementById('font-file').click()" style="display:flex;align-items:center;gap:4px;padding:6px;border:none;border-radius:6px;cursor:pointer;white-space:nowrap;font-size:12px;"><span class="material-icons" style="font-size:16px;">font_download</span>上传</button>
     </div>
@@ -2295,16 +2308,18 @@ function settingsPage(settings = {}) {
 `, `
 <script>
 const SOURCE_HAN_SERIF = 'SourceHanSerifSC, serif';
-let currentSettings = { primary: '${primary}', bg: '${escapeHtml(bg)}', cardOpacity: ${cardOpacity}, fontFamily: '${escapeHtml(fontFamily)}' };
-function getFontFamily(){
+let currentSettings = { primary: '${primary}', bg: '${escapeHtml(bg)}', cardOpacity: ${cardOpacity}, fontFamily: '${escapeHtml(fontFamily)}', fontCss: '${escapeHtml(fontCss)}', fontCssFamily: '${escapeHtml(fontCssFamily)}' };
+function getFontSettings(){
   const mode = document.querySelector('input[name="font-mode"]:checked').value;
-  if (mode === 'sourcehan') return SOURCE_HAN_SERIF;
-  if (mode === 'custom') return document.getElementById('font-value').value.trim();
-  return '';
+  if (mode === 'sourcehan') return { fontFamily: SOURCE_HAN_SERIF, fontCss: '', fontCssFamily: '' };
+  if (mode === 'customfile') return { fontFamily: document.getElementById('font-value').value.trim(), fontCss: '', fontCssFamily: '' };
+  if (mode === 'customcss') return { fontFamily: '', fontCss: document.getElementById('font-css-url').value.trim(), fontCssFamily: document.getElementById('font-css-family').value.trim() };
+  return { fontFamily: '', fontCss: '', fontCssFamily: '' };
 }
 function updateFontUI(){
   const mode = document.querySelector('input[name="font-mode"]:checked').value;
-  document.getElementById('font-upload-wrap').style.display = mode === 'custom' ? 'flex' : 'none';
+  document.getElementById('font-css-wrap').style.display = mode === 'customcss' ? 'flex' : 'none';
+  document.getElementById('font-upload-wrap').style.display = mode === 'customfile' ? 'flex' : 'none';
 }
 function setPrimaryColor(c){
   const hex = c.toLowerCase();
@@ -2374,11 +2389,14 @@ document.getElementById('font-file').onchange = async function(){
   }
 };
 async function saveSettings(){
+  const font = getFontSettings();
   const settings = {
     primary: document.getElementById('primary-color').value,
     bg: document.getElementById('bg-value').value.trim(),
     cardOpacity: parseFloat(document.getElementById('card-opacity').value),
-    fontFamily: getFontFamily()
+    fontFamily: font.fontFamily,
+    fontCss: font.fontCss,
+    fontCssFamily: font.fontCssFamily
   };
   await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(settings) });
   showMsg('设置已保存');
@@ -2397,18 +2415,31 @@ async function clearAllData(){
 
 function generateThemeCss(settings = {}) {
   const primary = settings.primary || '#1976d2';
-  const bg = settings.bg || '';
+  const bg = (settings.bg || '').replace(/["'`<>]/g, '');
   const cardOpacity = settings.cardOpacity != null ? settings.cardOpacity : 1;
-  const fontFamily = settings.fontFamily || '';
+  const fontFamily = (settings.fontFamily || '').replace(/["'`<>]/g, '');
+  const fontCss = (settings.fontCss || '').replace(/["'`<>]/g, '');
+  let fontCssFamily = (settings.fontCssFamily || '').replace(/["'`]/g, '').trim();
+  if (fontCssFamily && !/^[a-zA-Z0-9_-]+$/.test(fontCssFamily)) {
+    fontCssFamily = '"' + fontCssFamily + '"';
+  }
   const SOURCE_HAN_SERIF_CSS = 'https://v6.gh-proxy.com/github.com/ike-lee-820/font/raw/main/siyuansongti/Font_Source_Han_Serif.css';
-  const isCustomFont = fontFamily && (fontFamily.startsWith('http') || fontFamily.startsWith('/'));
+  const isCustomFontFile = fontFamily && (fontFamily.startsWith('http') || fontFamily.startsWith('/'));
   const isSourceHan = fontFamily === 'SourceHanSerifSC, serif';
+  const isCustomCss = Boolean(fontCss && fontCssFamily);
+  let link = '';
+  if (isSourceHan) {
+    link = '<link rel="stylesheet" href="' + SOURCE_HAN_SERIF_CSS + '">';
+  } else if (isCustomCss) {
+    link = '<link rel="stylesheet" href="' + fontCss + '">';
+  }
   let css = '<style id="theme-style">';
   css += ':root { --primary:' + primary + '; --primary-dark:' + adjustColor(primary, -30) + '; }';
   if (isSourceHan) {
-    css += '@import url("' + SOURCE_HAN_SERIF_CSS + '");';
     css += 'body, input, select, button, textarea { font-family: "SourceHanSerifSC", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important; }';
-  } else if (isCustomFont) {
+  } else if (isCustomCss) {
+    css += 'body, input, select, button, textarea { font-family: ' + fontCssFamily + ', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important; }';
+  } else if (isCustomFontFile) {
     css += '@font-face { font-family: "CustomNetdiskFont"; src: url(' + fontFamily + '); }';
     css += 'body, input, select, button, textarea { font-family: "CustomNetdiskFont", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important; }';
   } else {
@@ -2426,7 +2457,7 @@ function generateThemeCss(settings = {}) {
   const cardBg = cardOpacity < 1 ? 'ffffff' + alpha : 'ffffff';
   css += '.file-card, .sort-select, #btn-select-mode, .selection-bar, .selection-bar button { background-color: #' + cardBg + ' !important; }';
   css += '</style>';
-  return css;
+  return link + css;
 }
 
 function adjustColor(hex, amount) {
@@ -2985,7 +3016,9 @@ async function handleRequest(request, env, ctx = null) {
       primary: body.primary || '#1976d2',
       bg: body.bg || '',
       cardOpacity: body.cardOpacity != null ? body.cardOpacity : 1,
-      fontFamily: body.fontFamily || 'Roboto, sans-serif'
+      fontFamily: body.fontFamily || '',
+      fontCss: body.fontCss || '',
+      fontCssFamily: body.fontCssFamily || ''
     };
     await saveSettings(env, settings);
     return jsonResponse({ ok: true });
