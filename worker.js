@@ -12,8 +12,8 @@ const ASSETS_REPO = 'netdisk-assets';
 const KV_SIZE_LIMIT = -1;                      // 所有文件均存 GitHub，KV 仅临时存放上传分片
 const GITHUB_SINGLE_LIMIT = 0;                 // GitHub 文件一律分片，避免 Worker CPU/超时
 const SERIAL_THRESHOLD = 500 * 1024 * 1024;    // >500MB 使用串流逐片上传，避免 KV 堆积
-const CHUNK_SIZE = 50 * 1024 * 1024;           // 10 MB/片
-const CLIENT_CHUNK_SIZE = 50 * 1024 * 1024;     // 客户端每片 5 MB，避免浏览器/Worker 超时
+const CHUNK_SIZE = 10 * 1024 * 1024;           // 10 MB/片
+const CLIENT_CHUNK_SIZE = 5 * 1024 * 1024;     // 客户端每片 5 MB，避免浏览器/Worker 超时
 const GH_PROXY = 'https://v6.gh-proxy.com/';
 
 function proxyUrl(url) {
@@ -440,16 +440,18 @@ async function githubCreateRepo(ssid, env) {
   console.log(`[github] repo ${ssid} created, verifying availability...`);
 
   // GitHub 创建仓库后可能需要短暂时间才能通过 API 访问，轮询确认
-  for (let i = 0; i < 20; i++) {
-    await new Promise(r => setTimeout(r, 500));
-    const check = await fetchWithTimeout(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}`, { headers: getHeaders }, 20000).catch(() => null);
+  for (let i = 0; i < 10; i++) {
+    await new Promise(r => setTimeout(r, 300));
+    const check = await fetchWithTimeout(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}`, { headers: getHeaders }, 10000).catch(() => null);
     if (check && check.ok) {
       console.log(`[github] repo ${ssid} verified`);
       return data;
     }
     console.log(`[github] repo ${ssid} not visible yet, retry ${i + 1}`);
   }
-  throw new Error(`仓库创建成功但校验失败，无法访问: ${ssid}`);
+  // 校验未通过也继续，后续上传失败会走自身重试
+  console.log(`[github] repo ${ssid} verification skipped, proceed anyway`);
+  return data;
 }
 
 async function githubGetFileSha(ssid, path, env) {
@@ -2817,8 +2819,8 @@ async function handleRequest(request, env, ctx = null) {
     const chunkSize = Math.min(body.clientChunkSize || CLIENT_CHUNK_SIZE, CHUNK_SIZE);
     const chunks = Math.ceil(size / chunkSize);
     const mode = (size > SERIAL_THRESHOLD || storage === 'kv') ? 'serial' : 'batch';
-    if (mode === 'serial') {
-      await updateTask(env, taskId, { message: '大文件串流上传：创建 GitHub 仓库...', progress: 1 });
+    if (storage === 'github') {
+      await updateTask(env, taskId, { message: '创建 GitHub 仓库...', progress: 1 });
       await githubCreateRepo(uploadId, env);
     }
     await addTask(env, {
@@ -2900,7 +2902,7 @@ async function handleRequest(request, env, ctx = null) {
       if (mode === 'serial') {
         await updateTask(env, taskId, { message: '串流上传完成，正在写入目录...', progress: 95 });
       } else if (storage === 'github') {
-        await updateTask(env, taskId, { message: '服务端：创建/校验 GitHub 仓库...', progress: 92 });
+        await updateTask(env, taskId, { message: '服务端：开始写入 GitHub...', progress: 92 });
         let reportTimer = null;
         try {
           await githubCreateRepo(uploadId, env);
