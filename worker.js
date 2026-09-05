@@ -1173,58 +1173,60 @@ const COMMON_HEAD = `
 :root { --primary:#1976d2; --primary-dark:#115293; --surface:#fff; --bg:#f5f5f5; --divider:#e0e0e0; --text:#212121; --text-sec:#757575; --danger:#d32f2f; --success:#388e3c; --warn:#f9a825; }
 * { box-sizing:border-box; }
 body { margin:0; font-family:'Roboto',sans-serif; background:var(--bg); color:var(--text); }
-.appbar { position:fixed; top:0; left:0; right:0; height:56px; background:var(--primary); color:#fff; display:flex; align-items:center; padding:0 16px; z-index:20; box-shadow:0 2px 4px rgba(0,0,0,.2); }
-.appbar h1 { margin:0; font-size:18px; font-weight:500; flex:1; }
-.appbar .material-icons { cursor:pointer; padding:8px; }
-.container { padding:72px 16px 88px 16px; max-width:900px; margin:0 auto; }
+.appbar { position:fixed; top:0; left:0; right:0; height:48px; background:var(--primary); color:#fff; display:flex; align-items:center; padding:0 12px; z-index:20; box-shadow:0 2px 4px rgba(0,0,0,.2); }
+.appbar h1 { margin:0; font-size:16px; font-weight:500; flex:1; }
+.appbar .material-icons { cursor:pointer; padding:6px; font-size:20px; }
+.container { padding:60px 12px 76px 12px; max-width:900px; margin:0 auto; }
 .breadcrumbs { display:flex; align-items:center; gap:4px; margin-bottom:12px; flex-wrap:wrap; }
 .breadcrumbs a { color:var(--primary); text-decoration:none; font-size:14px; }
 .breadcrumbs span { color:var(--text-sec); font-size:14px; }
-.card { background:var(--surface); border-radius:12px; box-shadow:0 1px 3px rgba(0,0,0,.1); padding:12px; margin-bottom:12px; }
-.file-card { background:#fff; border-radius:10px; box-shadow:0 1px 2px rgba(0,0,0,.08); padding:8px 10px; margin-bottom:6px; }
-.file-main { display:flex; align-items:center; gap:8px; cursor:pointer; }
-.file-icon { width:32px; height:32px; border-radius:6px; background:#e3f2fd; display:flex; align-items:center; justify-content:center; color:var(--primary); flex-shrink:0; }
-.file-icon .material-icons { font-size:20px; }
+.card { background:var(--surface); border-radius:10px; box-shadow:0 1px 3px rgba(0,0,0,.1); padding:10px; margin-bottom:10px; }
+.file-card { background:#fff; border-radius:8px; box-shadow:0 1px 2px rgba(0,0,0,.08); padding:6px 8px; margin-bottom:5px; }
+.file-main { display:flex; align-items:center; gap:6px; cursor:pointer; }
+.file-icon { width:28px; height:28px; border-radius:5px; background:#e3f2fd; display:flex; align-items:center; justify-content:center; color:var(--primary); flex-shrink:0; }
+.file-icon .material-icons { font-size:18px; }
 .file-name-wrap { flex:1; min-width:0; overflow:hidden; }
-.file-name { display:inline-block; font-size:14px; font-weight:500; white-space:nowrap; }
+.file-name { display:inline-block; font-size:13px; font-weight:500; white-space:nowrap; }
 .file-name.marquee { padding-left:100%; animation:marquee 8s linear infinite; }
 @keyframes marquee { 0% { transform:translateX(0); } 100% { transform:translateX(-100%); } }
-.file-meta { font-size:11px; color:var(--text-sec); margin-top:1px; }
-.file-actions { display:flex; gap:4px; margin-top:6px; justify-content:flex-end; flex-wrap:wrap; }
-.file-actions button { background:none; border:none; color:var(--text-sec); cursor:pointer; padding:4px; border-radius:50%; }
-.file-actions button .material-icons { font-size:18px; }
+.file-meta { font-size:10px; color:var(--text-sec); margin-top:0; }
+.file-actions { display:flex; gap:3px; margin-top:4px; justify-content:flex-end; flex-wrap:wrap; }
+.file-actions button { background:none; border:none; color:var(--text-sec); cursor:pointer; padding:3px; border-radius:50%; }
+.file-actions button .material-icons { font-size:16px; }
 .file-card.selected { background:#e3f2fd !important; }
 .sel-check { width:18px; height:18px; flex-shrink:0; accent-color:var(--primary); margin-right:4px; display:none; }
 #file-list.selection-mode .sel-check { display:inline-block; }
 .file-actions button:hover { background:#f5f5f5; color:var(--primary); }
-.sort-select { flex:1; padding:6px 8px; border-radius:8px; border:1px solid var(--divider); background:var(--surface); font-size:14px; }
-.selection-bar { display:none; align-items:center; gap:6px; margin-bottom:6px; padding:6px 10px; background:var(--surface); border-radius:10px; box-shadow:0 1px 2px rgba(0,0,0,.1); flex-wrap:wrap; }
+.sort-select { flex:1; padding:5px 6px; border-radius:6px; border:1px solid var(--divider); background:var(--surface); font-size:13px; }
+.selection-bar { display:none; align-items:center; gap:5px; margin-bottom:5px; padding:5px 8px; background:var(--surface); border-radius:8px; box-shadow:0 1px 2px rgba(0,0,0,.1); flex-wrap:wrap; }
 .selection-bar.show { display:flex; }
-.selection-bar button { padding:5px 8px; border:none; border-radius:6px; cursor:pointer; font-size:12px; background:#e0e0e0; color:var(--text); }
-#btn-select-mode { padding:6px; }
-#btn-select-mode .material-icons { font-size:20px; }
+.selection-bar button { padding:4px 6px; border:none; border-radius:5px; cursor:pointer; font-size:11px; background:#e0e0e0; color:var(--text); }
+#btn-select-mode { padding:5px; }
+#btn-select-mode .material-icons { font-size:18px; }
 #btn-select-mode.active { color:var(--primary); background:#e3f2fd; }
-.empty { text-align:center; padding:40px 0; color:var(--text-sec); }
-.bottom-bar { position:fixed; bottom:0; left:0; right:0; height:64px; background:var(--surface); display:flex; box-shadow:0 -2px 6px rgba(0,0,0,.1); z-index:20; }
-.bottom-bar button { flex:1; border:none; background:none; display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--text-sec); cursor:pointer; font-size:12px; gap:2px; }
+.empty { text-align:center; padding:32px 0; color:var(--text-sec); font-size:13px; }
+.bottom-bar { position:fixed; bottom:0; left:0; right:0; height:52px; background:var(--surface); display:flex; box-shadow:0 -2px 6px rgba(0,0,0,.1); z-index:20; }
+.bottom-bar button { flex:1; border:none; background:none; display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--text-sec); cursor:pointer; font-size:11px; gap:1px; }
+.bottom-bar button .material-icons { font-size:20px; }
 .bottom-bar button.active { color:var(--primary); }
 .bottom-bar button:hover { background:#f5f5f5; }
-.fab-menu { position:fixed; bottom:80px; left:50%; transform:translateX(-50%); background:var(--surface); border-radius:12px; box-shadow:0 4px 12px rgba(0,0,0,.2); display:none; flex-direction:column; min-width:180px; z-index:30; }
+.fab-menu { position:fixed; bottom:64px; left:50%; transform:translateX(-50%); background:var(--surface); border-radius:10px; box-shadow:0 4px 12px rgba(0,0,0,.2); display:none; flex-direction:column; min-width:160px; z-index:30; }
 .fab-menu.show { display:flex; }
-.fab-menu button { padding:12px 16px; border:none; background:none; text-align:left; cursor:pointer; font-size:14px; display:flex; align-items:center; gap:8px; }
+.fab-menu button { padding:10px 14px; border:none; background:none; text-align:left; cursor:pointer; font-size:13px; display:flex; align-items:center; gap:8px; }
 .fab-menu button:hover { background:#f5f5f5; }
-.drawer { position:fixed; top:0; right:-320px; width:320px; max-width:90vw; bottom:0; background:var(--surface); box-shadow:-2px 0 8px rgba(0,0,0,.2); z-index:40; transition:right .3s; display:flex; flex-direction:column; }
+.drawer { position:fixed; top:0; right:-300px; width:300px; max-width:85vw; bottom:0; background:var(--surface); box-shadow:-2px 0 8px rgba(0,0,0,.2); z-index:40; transition:right .3s; display:flex; flex-direction:column; }
 .drawer.show { right:0; }
-.drawer-head { height:56px; background:var(--primary); color:#fff; display:flex; align-items:center; padding:0 16px; font-weight:500; }
-.drawer-body { flex:1; overflow-y:auto; padding:12px; }
-.drawer-close { cursor:pointer; }
-.task-item { padding:12px; border-bottom:1px solid var(--divider); }
-.task-title { font-size:14px; font-weight:500; }
-.task-msg { font-size:12px; color:var(--text-sec); margin-top:2px; }
-.task-progress { height:4px; background:var(--divider); border-radius:2px; margin-top:8px; overflow:hidden; }
+.drawer-head { height:48px; background:var(--primary); color:#fff; display:flex; align-items:center; padding:0 12px; font-weight:500; font-size:15px; }
+.drawer-head .material-icons { font-size:20px; }
+.drawer-body { flex:1; overflow-y:auto; padding:8px; }
+.drawer-close { cursor:pointer; padding:6px; }
+.task-item { padding:8px 10px; border-bottom:1px solid var(--divider); }
+.task-title { font-size:13px; font-weight:500; line-height:1.3; }
+.task-msg { font-size:11px; color:var(--text-sec); margin-top:1px; line-height:1.3; }
+.task-progress { height:3px; background:var(--divider); border-radius:1.5px; margin-top:5px; overflow:hidden; }
 .task-progress>div { height:100%; background:var(--primary); transition:width .3s; }
-.task-actions { display:flex; gap:8px; margin-top:8px; }
-.task-actions button { font-size:12px; padding:4px 8px; border:1px solid var(--divider); background:#fff; border-radius:4px; cursor:pointer; }
+.task-actions { display:flex; gap:6px; margin-top:5px; }
+.task-actions button { font-size:11px; padding:3px 6px; border:1px solid var(--divider); background:#fff; border-radius:4px; cursor:pointer; }
 .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:50; display:none; align-items:center; justify-content:center; }
 .modal-overlay.show { display:flex; }
 .modal { background:var(--surface); border-radius:12px; width:90%; max-width:400px; padding:20px; }
@@ -1844,47 +1846,76 @@ async function loadTasks(){
   if(tasks.length===0){ box.innerHTML='<div class="empty">暂无任务</div>'; return; }
   box.innerHTML=tasks.map(t=>{
     const statusColor = t.status==='done'?'var(--success)':(t.status==='error'?'var(--danger)':(t.status==='cancelled'?'var(--text-sec)':'var(--primary)'));
-    return \`<div class="task-item">
+    return \`<div class="task-item" data-task-id="\${escapeHtml(t.id)}">
       <div class="task-title">\${escapeHtml(t.name)} <span style="color:\${statusColor};font-size:12px;">\${t.status}</span></div>
       <div class="task-msg">\${escapeHtml(t.message||'')}</div>
       <div class="task-progress"><div style="width:\${t.progress||0}%"></div></div>
       <div class="task-actions">
-        \${t.status==='uploading'||t.status==='processing'?\`<button onclick="cancelTask('\${t.id}')">取消</button>\`:''}
-        <button onclick="deleteTask('\${t.id}')">删除</button>
+        \${t.status==='uploading'||t.status==='processing'?\`<button onclick="cancelTask('\${t.id}', this)">取消</button>\`:''}
+        <button onclick="deleteTask('\${t.id}', this)">删除</button>
       </div>
     </div>\`;
   }).join('');
 }
-async function cancelTask(id){
+async function cancelTask(id, el){
   const t = localTasks.get(id);
   if (t) { t.status = 'cancelled'; t.message = '已取消'; }
   removeLocalTask(id);
-  renderTask(true);
-  await api('/api/tasks/' + id + '?cancel=1', { method: 'DELETE' });
-  loadTasks();
+  if (el) {
+    const item = el.closest('.task-item');
+    if (item) item.remove();
+  } else { loadTasks(); }
+  try {
+    await api('/api/tasks/' + id + '?cancel=1', { method: 'DELETE' });
+  } catch (e) {
+    showMsg('取消失败: ' + e.message);
+  }
 }
-async function deleteTask(id){
+async function deleteTask(id, el){
   removeLocalTask(id);
-  renderTask(true);
-  await api('/api/tasks/' + id, { method: 'DELETE' });
-  loadTasks();
+  if (el) {
+    const item = el.closest('.task-item');
+    if (item) item.remove();
+  }
+  try {
+    await api('/api/tasks/' + id, { method: 'DELETE' });
+  } catch (e) {
+    showMsg('删除失败: ' + e.message);
+    loadTasks();
+  }
 }
 async function clearDoneTasks(){
   const serverTasks = await api('/api/tasks') || [];
+  const ids = [];
   for (const t of serverTasks) {
     if (t.status === 'done' || t.status === 'error' || t.status === 'cancelled') {
-      await api('/api/tasks/' + t.id, { method: 'DELETE' });
+      ids.push(t.id);
       removeLocalTask(t.id);
     }
   }
-  loadTasks();
-  showMsg('已完成任务已清除');
+  document.querySelectorAll('.task-item').forEach(el => el.remove());
+  if (!ids.length) { showMsg('没有可清除的任务'); return; }
+  try {
+    await api('/api/tasks/batch', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) });
+    showMsg('已清除 ' + ids.length + ' 个任务');
+  } catch (e) {
+    showMsg('清除失败: ' + e.message);
+    loadTasks();
+  }
 }
 
 // 底部菜单
-document.getElementById('btn-tasks').onclick=()=>{ document.getElementById('task-drawer').classList.add('show'); loadTasks(); if(taskTimer)clearInterval(taskTimer); taskTimer=setInterval(loadTasks,1500); };
+function debounce(fn, ms){
+  let timer = null;
+  return function(...args){
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => fn.apply(this, args), ms);
+  };
+}
+const debouncedLoadTasks = debounce(loadTasks, 200);
+document.getElementById('btn-tasks').onclick=()=>{ document.getElementById('task-drawer').classList.add('show'); loadTasks(); if(taskTimer)clearInterval(taskTimer); taskTimer=setInterval(debouncedLoadTasks,2500); };
 document.getElementById('close-tasks').onclick=()=>{ document.getElementById('task-drawer').classList.remove('show'); if(taskTimer)clearInterval(taskTimer); };
-document.getElementById('btn-refresh-tasks').onclick=loadTasks;
+document.getElementById('btn-refresh-tasks').onclick=()=>{ debouncedLoadTasks(); };
 document.getElementById('btn-clear-done').onclick=clearDoneTasks;
 document.getElementById('btn-refresh').onclick=loadList;
 document.getElementById('btn-settings').onclick=()=>{ location.href='/settings'; };
@@ -2208,30 +2239,39 @@ function settingsPage(settings = {}) {
   const bg = settings.bg || '';
   const cardOpacity = settings.cardOpacity != null ? settings.cardOpacity : 1;
   const fontFamily = settings.fontFamily || '';
+  const SOURCE_HAN_SERIF = 'SourceHanSerifSC, serif';
   const useCustomFont = fontFamily && (fontFamily.startsWith('http') || fontFamily.startsWith('/'));
+  const useSourceHan = fontFamily === SOURCE_HAN_SERIF;
+  const fontMode = useCustomFont ? 'custom' : (useSourceHan ? 'sourcehan' : 'system');
+  const presetColors = ['#1976d2', '#d32f2f', '#388e3c', '#f9a825', '#7b1fa2', '#00796b', '#e64a19', '#5d4037', '#303f9f', '#c2185b'];
+  const colorSwatches = presetColors.map(c => `<span class="color-swatch" data-color="${c}" style="width:24px;height:24px;border-radius:50%;background:${c};cursor:pointer;border:2px solid ${c===primary?'#fff':'transparent'};box-shadow:0 0 0 1px ${c===primary?c:'var(--divider)'};"></span>`).join('');
   return page('设置', `
 <div class="appbar"><span class="material-icons" onclick="history.back()">arrow_back</span><h1>设置</h1></div>
 <div class="container">
   <div class="card">
     <h3 style="margin-top:0;">外观</h3>
     <label style="display:block;margin-bottom:8px;font-size:14px;color:var(--text-sec);">主题颜色</label>
-    <div style="display:flex;gap:12px;align-items:center;margin-bottom:16px;">
-      <input type="color" id="primary-color" value="${primary}" style="width:56px;height:36px;padding:0;border:none;background:none;cursor:pointer;">
-      <span id="primary-label" style="font-size:14px;">${primary}</span>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px;">${colorSwatches}</div>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:16px;">
+      <input type="color" id="primary-color" value="${primary}" style="width:48px;height:32px;padding:0;border:none;background:none;cursor:pointer;">
+      <input type="text" id="primary-hex" value="${primary}" maxlength="7" style="width:80px;padding:5px 6px;border-radius:6px;border:1px solid var(--divider);font-size:13px;text-transform:uppercase;">
     </div>
     <label style="display:block;margin-bottom:8px;font-size:14px;color:var(--text-sec);">全局字体</label>
     <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px;">
       <label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;">
-        <input type="radio" name="font-mode" value="system" ${!useCustomFont ? 'checked' : ''}> 手机默认字体
+        <input type="radio" name="font-mode" value="system" ${fontMode === 'system' ? 'checked' : ''}> 手机默认字体
       </label>
       <label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;">
-        <input type="radio" name="font-mode" value="custom" ${useCustomFont ? 'checked' : ''}> 自定义字体
+        <input type="radio" name="font-mode" value="sourcehan" ${fontMode === 'sourcehan' ? 'checked' : ''}> 思源宋体
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;">
+        <input type="radio" name="font-mode" value="custom" ${fontMode === 'custom' ? 'checked' : ''}> 自定义字体
       </label>
     </div>
     <div id="font-upload-wrap" style="display:${useCustomFont ? 'flex' : 'none'};gap:8px;margin-bottom:16px;align-items:center;">
-      <input type="text" id="font-value" placeholder="字体 URL" value="${escapeHtml(fontFamily)}" style="flex:1;">
+      <input type="text" id="font-value" placeholder="字体 URL" value="${escapeHtml(useCustomFont ? fontFamily : '')}" style="flex:1;">
       <input type="file" id="font-file" accept=".ttf,.otf,.woff,.woff2" style="display:none">
-      <button class="btn-secondary" onclick="document.getElementById('font-file').click()" style="display:flex;align-items:center;gap:4px;padding:8px;border:none;border-radius:8px;cursor:pointer;white-space:nowrap;"><span class="material-icons">font_download</span>上传</button>
+      <button class="btn-secondary" onclick="document.getElementById('font-file').click()" style="display:flex;align-items:center;gap:4px;padding:6px;border:none;border-radius:6px;cursor:pointer;white-space:nowrap;font-size:12px;"><span class="material-icons" style="font-size:16px;">font_download</span>上传</button>
     </div>
     <label style="display:block;margin-bottom:8px;font-size:14px;color:var(--text-sec);">文件列表背景</label>
     <div style="display:flex;gap:8px;margin-bottom:8px;">
@@ -2254,14 +2294,27 @@ function settingsPage(settings = {}) {
 <div class="snackbar" id="snackbar"></div>
 `, `
 <script>
+const SOURCE_HAN_SERIF = 'SourceHanSerifSC, serif';
 let currentSettings = { primary: '${primary}', bg: '${escapeHtml(bg)}', cardOpacity: ${cardOpacity}, fontFamily: '${escapeHtml(fontFamily)}' };
 function getFontFamily(){
   const mode = document.querySelector('input[name="font-mode"]:checked').value;
-  return mode === 'custom' ? document.getElementById('font-value').value.trim() : '';
+  if (mode === 'sourcehan') return SOURCE_HAN_SERIF;
+  if (mode === 'custom') return document.getElementById('font-value').value.trim();
+  return '';
 }
 function updateFontUI(){
   const mode = document.querySelector('input[name="font-mode"]:checked').value;
   document.getElementById('font-upload-wrap').style.display = mode === 'custom' ? 'flex' : 'none';
+}
+function setPrimaryColor(c){
+  const hex = c.toLowerCase();
+  document.getElementById('primary-color').value = hex;
+  document.getElementById('primary-hex').value = hex;
+  document.querySelectorAll('.color-swatch').forEach(s => {
+    const active = s.dataset.color === hex;
+    s.style.borderColor = active ? '#fff' : 'transparent';
+    s.style.boxShadow = active ? '0 0 0 1px ' + hex : '0 0 0 1px var(--divider)';
+  });
 }
 function showMsg(msg){ const s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(()=>s.classList.remove('show'),2500); }
 function escapeHtml(t){ return t.replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
@@ -2272,8 +2325,15 @@ async function api(url, opts={}){
   return r.json().catch(()=>null);
 }
 document.getElementById('primary-color').oninput = function(){
-  document.getElementById('primary-label').textContent = this.value;
+  setPrimaryColor(this.value);
 };
+document.getElementById('primary-hex').oninput = function(){
+  const v = this.value.trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(v)) setPrimaryColor(v);
+};
+document.querySelectorAll('.color-swatch').forEach(s => {
+  s.onclick = function() { setPrimaryColor(this.dataset.color); };
+});
 document.getElementById('bg-color').oninput = function(){
   document.getElementById('bg-value').value = this.value;
 };
@@ -2340,9 +2400,15 @@ function generateThemeCss(settings = {}) {
   const bg = settings.bg || '';
   const cardOpacity = settings.cardOpacity != null ? settings.cardOpacity : 1;
   const fontFamily = settings.fontFamily || '';
+  const SOURCE_HAN_SERIF_CSS = 'https://v6.gh-proxy.com/github.com/ike-lee-820/font/raw/main/siyuansongti/Font_Source_Han_Serif.css';
+  const isCustomFont = fontFamily && (fontFamily.startsWith('http') || fontFamily.startsWith('/'));
+  const isSourceHan = fontFamily === 'SourceHanSerifSC, serif';
   let css = '<style id="theme-style">';
   css += ':root { --primary:' + primary + '; --primary-dark:' + adjustColor(primary, -30) + '; }';
-  if (fontFamily) {
+  if (isSourceHan) {
+    css += '@import url("' + SOURCE_HAN_SERIF_CSS + '");';
+    css += 'body, input, select, button, textarea { font-family: "SourceHanSerifSC", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important; }';
+  } else if (isCustomFont) {
     css += '@font-face { font-family: "CustomNetdiskFont"; src: url(' + fontFamily + '); }';
     css += 'body, input, select, button, textarea { font-family: "CustomNetdiskFont", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important; }';
   } else {
@@ -2865,6 +2931,18 @@ async function handleRequest(request, env, ctx = null) {
     if (forbid) return forbid;
     const tasks = await getTasks(env);
     return jsonResponse(tasks);
+  }
+
+  if (path === '/api/tasks/batch' && request.method === 'DELETE') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    const body = await request.json().catch(() => ({}));
+    const ids = Array.isArray(body.ids) ? body.ids : [];
+    if (ids.length) {
+      const tasks = await getTasks(env);
+      await saveTasks(env, tasks.filter(t => !ids.includes(t.id)));
+    }
+    return jsonResponse({ ok: true, deleted: ids.length });
   }
 
   if (path.startsWith('/api/tasks/') && request.method === 'DELETE') {
