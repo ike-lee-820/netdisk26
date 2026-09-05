@@ -269,6 +269,61 @@ function collectPaths(node, base = '') {
   return list;
 }
 
+function collectFolderPaths(node, base = '') {
+  let list = [];
+  if (!node.children) return list;
+  for (const [name, child] of Object.entries(node.children)) {
+    if (child.type !== 'folder') continue;
+    const p = base ? `${base}/${name}` : name;
+    list.push(p);
+    list = list.concat(collectFolderPaths(child, p));
+  }
+  return list;
+}
+
+function cloneNode(node) {
+  if (node.type === 'file') return { ...node, createdAt: Date.now() };
+  const copy = { ...node, children: {} };
+  for (const [name, child] of Object.entries(node.children)) {
+    copy.children[name] = cloneNode(child);
+  }
+  return copy;
+}
+
+function isDescendantOrSelf(parentPath, childPath) {
+  const p = parentPath.replace(/^\/|\/$/g, '');
+  const c = childPath.replace(/^\/|\/$/g, '');
+  if (!p) return true;
+  return c === p || c.startsWith(p + '/');
+}
+
+function moveNode(structure, path, targetPath) {
+  const parts = path.split('/').filter(Boolean);
+  const name = parts[parts.length - 1];
+  const node = getNode(structure, path);
+  if (!node) return { ok: false, error: '源文件不存在' };
+  const targetNode = targetPath ? getNode(structure, targetPath) : structure;
+  if (!targetNode || targetNode.type !== 'folder') return { ok: false, error: '目标文件夹不存在' };
+  if (isDescendantOrSelf(path, targetPath)) return { ok: false, error: '不能移动到自身或子文件夹内' };
+  if (targetNode.children[name]) return { ok: false, error: '目标位置已存在同名文件或文件夹' };
+  deleteNode(structure, path);
+  targetNode.children[name] = node;
+  return { ok: true };
+}
+
+function copyNode(structure, path, targetPath) {
+  const parts = path.split('/').filter(Boolean);
+  const name = parts[parts.length - 1];
+  const node = getNode(structure, path);
+  if (!node) return { ok: false, error: '源文件不存在' };
+  const targetNode = targetPath ? getNode(structure, targetPath) : structure;
+  if (!targetNode || targetNode.type !== 'folder') return { ok: false, error: '目标文件夹不存在' };
+  if (isDescendantOrSelf(path, targetPath)) return { ok: false, error: '不能复制到自身或子文件夹内' };
+  if (targetNode.children[name]) return { ok: false, error: '目标位置已存在同名文件或文件夹' };
+  targetNode.children[name] = cloneNode(node);
+  return { ok: true };
+}
+
 // ==================== GitHub API ====================
 
 async function githubCreateRepo(ssid, env) {
@@ -1105,9 +1160,16 @@ body { margin:0; font-family:'Roboto',sans-serif; background:var(--bg); color:va
 .file-name.marquee { padding-left:100%; animation:marquee 8s linear infinite; }
 @keyframes marquee { 0% { transform:translateX(0); } 100% { transform:translateX(-100%); } }
 .file-meta { font-size:12px; color:var(--text-sec); margin-top:2px; }
-.file-actions { display:flex; gap:8px; margin-top:10px; justify-content:flex-end; }
+.file-actions { display:flex; gap:6px; margin-top:10px; justify-content:flex-end; flex-wrap:wrap; }
 .file-actions button { background:none; border:none; color:var(--text-sec); cursor:pointer; padding:6px; border-radius:50%; }
+.file-card.selected { background:#e3f2fd !important; }
+.sel-check { width:20px; height:20px; flex-shrink:0; accent-color:var(--primary); margin-right:8px; }
 .file-actions button:hover { background:#f5f5f5; color:var(--primary); }
+.sort-select { flex:1; padding:8px; border-radius:8px; border:1px solid var(--divider); background:var(--surface); font-size:14px; }
+.selection-bar { display:none; align-items:center; gap:8px; margin-bottom:10px; padding:8px 12px; background:var(--surface); border-radius:12px; box-shadow:0 1px 3px rgba(0,0,0,.1); flex-wrap:wrap; }
+.selection-bar.show { display:flex; }
+.selection-bar button { padding:6px 10px; border:none; border-radius:8px; cursor:pointer; font-size:13px; background:#e0e0e0; color:var(--text); }
+#btn-select-mode.active { color:var(--primary); background:#e3f2fd; }
 .empty { text-align:center; padding:40px 0; color:var(--text-sec); }
 .bottom-bar { position:fixed; bottom:0; left:0; right:0; height:64px; background:var(--surface); display:flex; box-shadow:0 -2px 6px rgba(0,0,0,.1); z-index:20; }
 .bottom-bar button { flex:1; border:none; background:none; display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--text-sec); cursor:pointer; font-size:12px; gap:2px; }
@@ -1161,6 +1223,25 @@ const HOME_BODY = `
 <div class="appbar"><h1>我的网盘</h1><div style="display:flex;align-items:center;gap:8px;"><span class="material-icons" id="btn-refresh" title="刷新" style="cursor:pointer;padding:8px;">refresh</span><span class="material-icons" id="btn-settings" title="设置" style="cursor:pointer;padding:8px;">settings</span><span class="material-icons" id="btn-logout" title="退出登录" style="cursor:pointer;padding:8px;">logout</span></div></div>
 <div class="container">
   <div class="breadcrumbs" id="breadcrumbs"><a href="/?path=">首页</a></div>
+  <div id="selection-bar" class="selection-bar">
+    <span id="selection-count" style="font-size:14px;flex:1;">已选 0</span>
+    <button id="sel-all">全选</button>
+    <button id="sel-cancel">取消</button>
+    <button id="sel-move">移动</button>
+    <button id="sel-copy">复制</button>
+    <button id="sel-delete" style="color:var(--danger);">删除</button>
+  </div>
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+    <select id="sort-select" class="sort-select">
+      <option value="name-asc">名称正序</option>
+      <option value="name-desc">名称倒序</option>
+      <option value="time-desc">上传时间倒序</option>
+      <option value="time-asc">上传时间正序</option>
+      <option value="size-desc">文件大小倒序</option>
+      <option value="size-asc">文件大小正序</option>
+    </select>
+    <span class="material-icons" id="btn-select-mode" title="多选" style="cursor:pointer;padding:8px;background:var(--surface);border-radius:50%;">check_circle</span>
+  </div>
   <div id="file-list"></div>
 </div>
 <div class="fab-menu" id="new-menu">
@@ -1188,7 +1269,7 @@ const HOME_BODY = `
   <div class="modal">
     <h3 id="modal-title">标题</h3>
     <div id="modal-content"></div>
-    <div class="modal-actions"><button class="btn-secondary" onclick="closeModal()">取消</button><button class="btn-primary" id="modal-ok">确定</button></div>
+    <div class="modal-actions"><button class="btn-secondary" id="modal-cancel" onclick="closeModal()">取消</button><button class="btn-primary" id="modal-ok">确定</button></div>
   </div>
 </div>
 <div class="snackbar" id="snackbar"></div>
@@ -1200,6 +1281,9 @@ const HOME_SCRIPT = `
 <script>
 const params = new URLSearchParams(location.search);
 let currentPath = params.get('path') || '';
+let currentSort = localStorage.getItem('netdisk-sort') || 'name-asc';
+let selectionMode = false;
+let selectedPaths = new Set();
 
 function showMsg(msg){ const s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(()=>s.classList.remove('show'),2500); }
 function escapeHtml(t){ return t.replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',\"'\":'&#39;'}[m])); }
@@ -1229,19 +1313,49 @@ async function api(url, opts={}){
   return r.json().catch(()=>null);
 }
 
+function sortEntries(a,b){
+  const [nameA,nodeA]=a;
+  const [nameB,nodeB]=b;
+  const timeA=nodeA.createdAt||0;
+  const timeB=nodeB.createdAt||0;
+  const sizeA=nodeA.size||0;
+  const sizeB=nodeB.size||0;
+  switch(currentSort){
+    case 'name-asc': return nameA.localeCompare(nameB,'zh-CN');
+    case 'name-desc': return nameB.localeCompare(nameA,'zh-CN');
+    case 'time-asc': return timeA-timeB;
+    case 'time-desc': return timeB-timeA;
+    case 'size-asc': return sizeA-sizeB;
+    case 'size-desc': return sizeB-sizeA;
+    default: return nameA.localeCompare(nameB,'zh-CN');
+  }
+}
+
+function formatTime(ts){
+  if(!ts) return '';
+  const d=new Date(ts);
+  return d.toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+}
+
 async function loadList(){
   const data=await api('/api/structure?path='+encodeURIComponent(currentPath));
   if(!data) return;
   renderBreadcrumbs();
+  document.getElementById('sort-select').value=currentSort;
   const list=document.getElementById('file-list');
-  const folder=data.children?Object.entries(data.children).sort((a,b)=>{ if(a[1].type===b[1].type)return a[0].localeCompare(b[0]); return a[1].type==='folder'?-1:1;}):[];
-  if(folder.length===0){ list.innerHTML='<div class="empty"><span class="material-icons" style="font-size:48px;color:#bdbdbd;">folder_open</span><p>空文件夹</p></div>'; return; }
-  list.innerHTML=folder.map(([name,node])=>{
+  const entries=data.children?Object.entries(data.children).sort(sortEntries):[];
+  if(entries.length===0){ list.innerHTML='<div class="empty"><span class="material-icons" style="font-size:48px;color:#bdbdbd;">folder_open</span><p>空文件夹</p></div>'; updateSelectionUI(); return; }
+  list.innerHTML=entries.map(([name,node])=>{
     const icon = node.type==='folder'?'folder':(getIcon(name));
-    const meta = node.type==='folder'?'文件夹':(formatSize(node.size)||'');
+    const sizeMeta = node.type==='folder'?'文件夹':(formatSize(node.size)||'');
+    const timeMeta = formatTime(node.createdAt);
+    const meta = timeMeta ? (sizeMeta + ' · ' + timeMeta) : sizeMeta;
     const path = currentPath?currentPath+'/'+name:name;
-    return \`<div class="file-card" data-path="\${escapeHtml(path)}" data-type="\${node.type}">
-      <div class="file-main" data-action="open">
+    const isSelected = selectedPaths.has(path);
+    const check = selectionMode ? \`<input type="checkbox" class="sel-check" data-action="select" \${isSelected?'checked':''}>\` : '';
+    return \`<div class="file-card \${isSelected?'selected':''}" data-path="\${escapeHtml(path)}" data-type="\${node.type}" data-action="open">
+      <div class="file-main">
+        \${check}
         <div class="file-icon"><span class="material-icons">\${icon}</span></div>
         <div class="file-name-wrap">
           <div class="file-name" title="\${escapeHtml(name)}">\${escapeHtml(name)}</div>
@@ -1253,12 +1367,15 @@ async function loadList(){
         <button data-action="link" title="复制直链"><span class="material-icons">link</span></button>
         <button data-action="share" title="分享"><span class="material-icons">share</span></button>\`:''}
         \${node.type==='folder'?\`<button data-action="downloadFolder" title="打包下载"><span class="material-icons">folder_zip</span></button>\`:''}
+        <button data-action="move" title="移动"><span class="material-icons">drive_file_move</span></button>
+        <button data-action="copy" title="复制"><span class="material-icons">content_copy</span></button>
         <button data-action="rename" title="重命名"><span class="material-icons">edit</span></button>
         <button data-action="delete" title="删除"><span class="material-icons">delete</span></button>
       </div>
     </div>\`;
   }).join('');
   setupMarquee();
+  updateSelectionUI();
 }
 
 function setupMarquee(){
@@ -1278,14 +1395,135 @@ document.getElementById('file-list').addEventListener('click', e=>{
   const p = item.dataset.path;
   const type = item.dataset.type;
   const action = btn.dataset.action;
+  if(action==='select'){ toggleSelect(p); e.stopPropagation(); return; }
+  if(selectionMode && action==='open'){ toggleSelect(p); return; }
   if(action==='open'){ type==='folder'?openFolder(p):openFile(p); }
   else if(action==='download') downloadFile(p);
   else if(action==='link') copyDirectLink(p);
   else if(action==='share') shareFile(p);
   else if(action==='downloadFolder') downloadFolder(p);
+  else if(action==='move') moveItem(p);
+  else if(action==='copy') copyItem(p);
   else if(action==='rename') renameItem(p);
   else if(action==='delete') deleteItem(p);
 });
+
+function toggleSelectionMode(){
+  selectionMode = !selectionMode;
+  selectedPaths.clear();
+  document.getElementById('btn-select-mode').classList.toggle('active', selectionMode);
+  loadList();
+}
+
+function toggleSelect(p){
+  if(selectedPaths.has(p)) selectedPaths.delete(p);
+  else selectedPaths.add(p);
+  updateSelectionUI();
+  const card = Array.from(document.querySelectorAll('.file-card')).find(c => c.dataset.path === p);
+  if(card) card.classList.toggle('selected', selectedPaths.has(p));
+}
+
+function updateSelectionUI(){
+  const bar = document.getElementById('selection-bar');
+  bar.classList.toggle('show', selectionMode);
+  document.getElementById('selection-count').textContent = '已选 ' + selectedPaths.size;
+  document.querySelectorAll('.file-card').forEach(card=>{
+    const p = card.dataset.path;
+    card.classList.toggle('selected', selectedPaths.has(p));
+    const chk = card.querySelector('.sel-check');
+    if(chk) chk.checked = selectedPaths.has(p);
+  });
+}
+
+function selectAll(){
+  document.querySelectorAll('.file-card').forEach(card=>{
+    selectedPaths.add(card.dataset.path);
+  });
+  updateSelectionUI();
+}
+
+function clearSelection(){
+  selectedPaths.clear();
+  selectionMode = false;
+  document.getElementById('btn-select-mode').classList.remove('active');
+  loadList();
+}
+
+async function pickTargetFolder(currentTarget){
+  const structure = await api('/api/structure?path=');
+  const folders = collectFolderPathsClient(structure);
+  const options = [{path:'',label:'根目录'}].concat(folders.map(f=>({path:f,label:'/'+f})));
+  const target = currentTarget || currentPath || '';
+  const opts = options.map(o=>'<option value="'+escapeHtml(o.path)+'" '+(o.path===target?'selected':'')+'>'+escapeHtml(o.label)+'</option>').join('');
+  return new Promise(resolve=>{
+    openModal('选择目标文件夹', '<select id="target-folder" style="width:100%;padding:10px;border:1px solid var(--divider);border-radius:8px;font-size:14px;">'+opts+'</select>', ()=>{
+      const v = document.getElementById('target-folder').value;
+      closeModal();
+      resolve(v);
+    });
+    document.getElementById('modal-cancel').onclick = ()=>{ closeModal(); resolve(null); };
+  });
+}
+
+function collectFolderPathsClient(node, base=''){
+  let list = [];
+  if(!node.children) return list;
+  for(const [name, child] of Object.entries(node.children)){
+    if(child.type !== 'folder') continue;
+    const p = base ? base+'/'+name : name;
+    list.push(p);
+    list = list.concat(collectFolderPathsClient(child, p));
+  }
+  return list;
+}
+
+async function moveItem(p){
+  const target = await pickTargetFolder();
+  if(target === null) return;
+  await api('/api/file/move', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({path:p, targetPath:target})});
+  showMsg('移动成功');
+  loadList();
+}
+
+async function copyItem(p){
+  const target = await pickTargetFolder();
+  if(target === null) return;
+  await api('/api/file/copy', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({path:p, targetPath:target})});
+  showMsg('复制成功');
+  loadList();
+}
+
+async function batchMove(){
+  if(selectedPaths.size===0){ showMsg('请先选择文件'); return; }
+  const target = await pickTargetFolder();
+  if(target === null) return;
+  const paths = Array.from(selectedPaths);
+  await api('/api/file/move', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({paths, targetPath:target})});
+  showMsg('批量移动成功');
+  selectedPaths.clear();
+  loadList();
+}
+
+async function batchCopy(){
+  if(selectedPaths.size===0){ showMsg('请先选择文件'); return; }
+  const target = await pickTargetFolder();
+  if(target === null) return;
+  const paths = Array.from(selectedPaths);
+  await api('/api/file/copy', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify({paths, targetPath:target})});
+  showMsg('批量复制成功');
+  selectedPaths.clear();
+  loadList();
+}
+
+async function batchDelete(){
+  if(selectedPaths.size===0){ showMsg('请先选择文件'); return; }
+  if(!confirm('确定删除选中的 '+selectedPaths.size+' 项?')) return;
+  const paths = Array.from(selectedPaths);
+  await api('/api/files/batch', {method:'DELETE', headers:{'Content-Type':'application/json'}, body:JSON.stringify({paths})});
+  showMsg('批量删除成功');
+  selectedPaths.clear();
+  loadList();
+}
 
 function getIcon(name){
   const ext=name.split('.').pop().toLowerCase();
@@ -1305,7 +1543,7 @@ function renderBreadcrumbs(){
   document.getElementById('breadcrumbs').innerHTML=html;
 }
 
-function openFolder(p){ currentPath=p; history.pushState(null,'','/?path='+encodeURIComponent(p)); loadList(); }
+function openFolder(p){ currentPath=p; selectedPaths.clear(); history.pushState(null,'','/?path='+encodeURIComponent(p)); loadList(); }
 function openFile(p){ location.href='/file?path='+encodeURIComponent(p); }
 
 async function downloadFile(p){
@@ -1603,6 +1841,13 @@ document.getElementById('btn-refresh-tasks').onclick=loadTasks;
 document.getElementById('btn-clear-done').onclick=clearDoneTasks;
 document.getElementById('btn-refresh').onclick=loadList;
 document.getElementById('btn-settings').onclick=()=>{ location.href='/settings'; };
+document.getElementById('btn-select-mode').onclick=toggleSelectionMode;
+document.getElementById('sel-all').onclick=selectAll;
+document.getElementById('sel-cancel').onclick=clearSelection;
+document.getElementById('sel-move').onclick=batchMove;
+document.getElementById('sel-copy').onclick=batchCopy;
+document.getElementById('sel-delete').onclick=batchDelete;
+document.getElementById('sort-select').onchange=(e)=>{ currentSort=e.target.value; localStorage.setItem('netdisk-sort', currentSort); loadList(); };
 document.getElementById('btn-new').onclick=()=>{ document.getElementById('upload-menu').classList.remove('show'); document.getElementById('new-menu').classList.toggle('show'); };
 document.getElementById('btn-upload').onclick=()=>{ document.getElementById('new-menu').classList.remove('show'); document.getElementById('upload-menu').classList.toggle('show'); };
 document.addEventListener('click',e=>{ if(!e.target.closest('#btn-new')&&!e.target.closest('#new-menu')) document.getElementById('new-menu').classList.remove('show'); if(!e.target.closest('#btn-upload')&&!e.target.closest('#upload-menu')) document.getElementById('upload-menu').classList.remove('show'); });
@@ -1613,6 +1858,7 @@ function openModal(title,content,onOk){
   document.getElementById('modal-title').textContent=title;
   document.getElementById('modal-content').innerHTML=content;
   const ok=document.getElementById('modal-ok'); ok.onclick=onOk;
+  document.getElementById('modal-cancel').onclick = closeModal;
   document.getElementById('modal').classList.add('show');
 }
 function closeModal(){ document.getElementById('modal').classList.remove('show'); }
@@ -2428,6 +2674,64 @@ async function handleRequest(request, env, ctx = null) {
     const body = await request.json();
     const structure = await getStructure(env);
     renameNode(structure, body.path, body.newName);
+    await saveStructure(env, structure);
+    return jsonResponse({ ok: true });
+  }
+
+  if (path === '/api/file/move' && request.method === 'PUT') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    const body = await request.json();
+    const structure = await getStructure(env);
+    const paths = Array.isArray(body.paths) ? body.paths : [body.path];
+    const targetPath = body.targetPath || '';
+    const errors = [];
+    for (const p of paths) {
+      const res = moveNode(structure, p, targetPath);
+      if (!res.ok) errors.push(`${p}: ${res.error}`);
+    }
+    await saveStructure(env, structure);
+    if (errors.length) return errorResponse(errors.join('; '), 400);
+    return jsonResponse({ ok: true });
+  }
+
+  if (path === '/api/file/copy' && request.method === 'PUT') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    const body = await request.json();
+    const structure = await getStructure(env);
+    const paths = Array.isArray(body.paths) ? body.paths : [body.path];
+    const targetPath = body.targetPath || '';
+    const errors = [];
+    for (const p of paths) {
+      const res = copyNode(structure, p, targetPath);
+      if (!res.ok) errors.push(`${p}: ${res.error}`);
+    }
+    await saveStructure(env, structure);
+    if (errors.length) return errorResponse(errors.join('; '), 400);
+    return jsonResponse({ ok: true });
+  }
+
+  if (path === '/api/files/batch' && request.method === 'DELETE') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    const body = await request.json();
+    const paths = body.paths || [];
+    const structure = await getStructure(env);
+    for (const p of paths) {
+      const node = getNode(structure, p);
+      if (!node) continue;
+      if (node.type === 'file') {
+        await deleteFileStorage(node, env);
+      } else {
+        const childPaths = collectPaths(node, p);
+        for (const cp of childPaths) {
+          const child = getNode(structure, cp);
+          if (child && child.type === 'file') await deleteFileStorage(child, env);
+        }
+      }
+      deleteNode(structure, p);
+    }
     await saveStructure(env, structure);
     return jsonResponse({ ok: true });
   }
