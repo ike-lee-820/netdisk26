@@ -1750,15 +1750,49 @@ async function renderPreview(){
   preview.innerHTML='<div class="empty">正在加载预览...</div>';
   try{
     if(mime.startsWith('video/')){
-      await loadCSS('https://cdn.jsdelivr.net/npm/plyr@3.7.8/dist/plyr.css');
-      await loadScript('https://cdn.jsdelivr.net/npm/plyr@3.7.8/dist/plyr.min.js');
-      preview.innerHTML='<video id="media-player" controls playsinline style="width:100%;max-height:70vh;"><source src="'+url+'" type="'+mime+'"></video>';
-      new Plyr('#media-player',{speed:{selected:1,options:[0.5,0.75,1,1.25,1.5,2,3,4]}});
+      await loadCSS('https://cdn.jsdelivr.net/npm/mui-player@1.8.1/dist/mui-player.min.css');
+      await loadScript('https://cdn.jsdelivr.net/npm/mui-player@1.8.1/dist/mui-player.min.js');
+      await loadScript('https://cdn.jsdelivr.net/npm/mui-player-mobile-plugin@1.4.1/dist/mui-player-mobile-plugin.min.js');
+      preview.innerHTML='<div id="video-zoom-wrap" style="width:100%;height:70vh;overflow:hidden;touch-action:none;position:relative;background:#000;">'+
+        '<div id="mui-player" style="width:100%;height:100%;">'+
+          '<template slot="mute-btn"><span class="material-icons" style="color:#fff;font-size:20px;line-height:1;" id="mute-icon">volume_up</span></template>'+
+        '</div>'+
+      '</div>';
+      const mp=new MuiPlayer({
+        container:'#mui-player',
+        src:url,
+        title:fileNode.name,
+        autoplay:false,
+        preload:'metadata',
+        autoFit:true,
+        width:'100%',
+        height:'100%',
+        lang:'zh-cn',
+        objectFit:'contain',
+        custom:{
+          footerControls:[
+            { slot:'mute-btn', position:'right', tooltip:'静音/取消静音', oftenShow:true, click:function(e){ const v=mp.video(); v.muted=!v.muted; const icon=document.getElementById('mute-icon'); if(icon) icon.textContent=v.muted?'volume_off':'volume_up'; } }
+          ]
+        },
+        plugins:[
+          new MuiPlayerMobilePlugin({
+            showMenuButton:true,
+            defaultMenuConfig:{ showSpeedSwitch:true, showFillSwitch:true, showLoopSwitch:true }
+          })
+        ]
+      });
+      window.currentMuiPlayer=mp;
+      const wrap=document.getElementById('video-zoom-wrap');
+      const playerEl=document.getElementById('mui-player');
+      let initialDistance=0, initialScale=1, currentScale=1;
+      wrap.addEventListener('touchstart', function(e){ if(e.touches.length===2){ const dx=e.touches[0].clientX-e.touches[1].clientX; const dy=e.touches[0].clientY-e.touches[1].clientY; initialDistance=Math.sqrt(dx*dx+dy*dy); initialScale=currentScale; } });
+      wrap.addEventListener('touchmove', function(e){ if(e.touches.length===2){ const dx=e.touches[0].clientX-e.touches[1].clientX; const dy=e.touches[0].clientY-e.touches[1].clientY; const dist=Math.sqrt(dx*dx+dy*dy); currentScale=Math.max(1, Math.min(initialScale*(dist/initialDistance), 4)); playerEl.style.transform='scale('+currentScale+')'; playerEl.style.transformOrigin='center center'; e.preventDefault(); } });
+      wrap.addEventListener('touchend', function(e){ if(e.touches.length<2 && currentScale<1){ currentScale=1; playerEl.style.transform='scale(1)'; } });
     } else if(mime.startsWith('audio/')){
       await loadCSS('https://cdn.jsdelivr.net/npm/plyr@3.7.8/dist/plyr.css');
       await loadScript('https://cdn.jsdelivr.net/npm/plyr@3.7.8/dist/plyr.min.js');
       preview.innerHTML='<audio id="media-player" controls style="width:100%;"><source src="'+url+'" type="'+mime+'"></audio>';
-      new Plyr('#media-player',{controls:['play-large','play','progress','current-time','volume','settings','fullscreen'],speed:{selected:1,options:[0.5,0.75,1,1.25,1.5,2,3,4]}});
+      new Plyr('#media-player',{controls:['play','progress']});
     } else if(['txt','md','json','js','css','html','xml'].includes(ext)){
       const r=await fetch(url);
       if(!r.ok) throw new Error('读取文本失败: '+r.status);
@@ -1781,7 +1815,7 @@ async function renderPreview(){
   }catch(e){
     console.error('预览加载失败',e);
     if(mime.startsWith('video/')){
-      preview.innerHTML='<div class="empty">Plyr 加载失败，使用原生播放器</div><video controls style="width:100%;max-height:70vh;"><source src="'+url+'" type="'+mime+'"></video>';
+      preview.innerHTML='<div class="empty">MuiPlayer 加载失败，使用原生播放器</div><video controls playsinline style="width:100%;max-height:70vh;"><source src="'+url+'" type="'+mime+'"></video>';
     }else if(mime.startsWith('audio/')){
       preview.innerHTML='<div class="empty">Plyr 加载失败，使用原生播放器</div><audio controls src="'+url+'" style="width:100%;"></audio>';
     }else if(['txt','md','json','js','css','html','xml'].includes(ext)){
