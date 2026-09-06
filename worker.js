@@ -12,8 +12,8 @@ const ASSETS_REPO = 'netdisk-assets';
 const KV_SIZE_LIMIT = -1;                      // 所有文件均存 GitHub，KV 仅临时存放上传分片
 const GITHUB_SINGLE_LIMIT = 0;                 // GitHub 文件一律分片，避免 Worker CPU/超时
 const SERIAL_THRESHOLD = 500 * 1024 * 1024;    // >500MB 使用串流逐片上传，避免 KV 堆积
-const CHUNK_SIZE = 90 * 1024 * 1024;           // 10 MB/片
-const CLIENT_CHUNK_SIZE = 90 * 1024 * 1024;     // 客户端每片 5 MB，避免浏览器/Worker 超时
+const CHUNK_SIZE = 60 * 1024 * 1024;           // 10 MB/片
+const CLIENT_CHUNK_SIZE = 60 * 1024 * 1024;     // 客户端每片 5 MB，避免浏览器/Worker 超时
 const GH_PROXY = 'https://v6.gh-proxy.com/';
 
 function proxyUrl(url) {
@@ -3026,6 +3026,7 @@ async function handleRequest(request, env, ctx = null) {
     const mode = body.mode || 'batch';
     if (!filePath || !uploadId || !filename || !storage) return errorResponse('缺少完成参数');
 
+    // 客户端上传阶段已完成，立即返回，后续 GitHub 写入在后台执行
     const finishBackground = async () => {
       try {
         const structure = await getStructure(env);
@@ -3064,36 +3065,49 @@ async function handleRequest(request, env, ctx = null) {
                 await updateTask(env, taskId, { status: 'cancelled', message: '已取消', progress: 0 });
                 return;
               }
+
+              // KV 读取重试（最多 20 次，解决最终一致性延迟）
               let chunkBuf = null;
               let kvRetries = 0;
-              while (kvRetries < 10) {
-                chunkBuf = await getKV(uploadId, env).get(uploadId + '_chunk_' + i, { type: 'arrayBuffer' });
-                if (chunkBuf) break;
+              const kvKey = uploadId + '_chunk_' + i;
+              const kv = getKV(uploadId, env);
+              while (kvRetries < 20) {
+                try {
+                  chunkBuf = await kv.get(kvKey, { type: 'arrayBuffer' });
+                  if (chunkBuf && chunkBuf.byteLength > 0) break;
+                } catch (kvErr) {
+                  console.log('[finish] KV get error chunk_' + i + ': ' + kvErr.message);
+                }
                 kvRetries++;
-                console.log(`[finish] KV chunk_${i} not found, retry ${kvRetries}/10`);
-                await new Promise(r => setTimeout(r, 300));
+                console.log('[finish] KV chunk_' + i + ' not found (retry ' + kvRetries + '/20), key=' + kvKey);
+                await new Promise(r => setTimeout(r, 500));
               }
-              if (!chunkBuf) {
-                throw new Error('分片 ' + (i + 1) + ' 在服务端丢失（KV 读取失败）');
+              if (!chunkBuf || chunkBuf.byteLength === 0) {
+                throw new Error('分片 ' + (i + 1) + '/' + chunks + ' 在服务端丢失（KV 读取失败，key=' + kvKey + '）');
               }
+              console.log('[finish] KV chunk_' + i + ' loaded, size=' + chunkBuf.byteLength);
+
+              // GitHub 上传重试
               let ghRetries = 0;
               let lastErr = null;
               while (ghRetries < 5) {
                 try {
                   await githubUploadFile(uploadId, 'chunk_' + i, chunkBuf, env, 'chunk ' + i, true);
+                  console.log('[finish] GitHub chunk_' + i + ' uploaded OK');
                   break;
                 } catch (e) {
                   lastErr = e;
                   ghRetries++;
-                  console.error(`[finish] GitHub chunk_${i} upload failed, retry ${ghRetries}/5:`, e.message);
+                  console.error('[finish] GitHub chunk_' + i + ' upload failed (retry ' + ghRetries + '/5): ' + e.message);
                   await new Promise(r => setTimeout(r, 1000 * ghRetries));
                 }
               }
               if (ghRetries >= 5 && lastErr) {
                 throw new Error('分片 ' + (i + 1) + ' GitHub 上传失败: ' + lastErr.message);
               }
+
               uploadedBytes += chunkBuf.byteLength;
-              await getKV(uploadId, env).delete(uploadId + '_chunk_' + i);
+              await kv.delete(kvKey);
               await updateTask(env, taskId, { message: 'GitHub写入 ' + (i + 1) + '/' + chunks, progress: 92 + Math.floor(((i + 1) / chunks) * 7) });
             }
             clearInterval(reportTimer);
@@ -3150,12 +3164,12 @@ async function handleRequest(request, env, ctx = null) {
     if (ctx && ctx.waitUntil) {
       ctx.waitUntil(finishBackground());
     } else {
+      // 没有 ctx 时同步执行（兼容本地测试）
       await finishBackground();
     }
 
     return jsonResponse({ ok: true, stage: 'server' });
   }
-
 
   // ==================== 手动上传（客户端直传 GitHub）====================
 
