@@ -1841,6 +1841,7 @@ function newFolder(){
 // 上传
 function genTaskId(){ return 'task_'+Date.now()+'_'+Math.random().toString(36).slice(2,9); }
 const cancelledManualUploads = new Set();
+const abortControllers = new Map();
 let localTasks = new Map();
 function addLocalTask(t){ localTasks.set(t.id, t); }
 function removeLocalTask(id){ localTasks.delete(id); }
@@ -1865,18 +1866,23 @@ async function uploadFiles(files){
 async function uploadOne(file, dir){
   const path = dir ? dir + '/' + file.name : file.name;
   const taskId = genTaskId();
-  const baseTask = { id: taskId, name: file.name, status: 'uploading', message: '正在发送...', progress: 1, size: file.size, createdAt: Date.now(), updatedAt: Date.now() };
+  cancelledManualUploads.delete(taskId);
+  const baseTask = { id: taskId, name: file.name, status: 'uploading', message: '准备上传...', progress: 0, size: file.size, createdAt: Date.now(), updatedAt: Date.now() };
   addLocalTask(baseTask);
   loadTasks();
+  const abortCtrl = new AbortController();
+  abortControllers.set(taskId, abortCtrl);
   const CHUNK_SIZE = 5 * 1024 * 1024;
-  const MAX_CONCURRENT = 16;
+
   try{
     if (file.size <= CHUNK_SIZE) {
       const form = new FormData();
       form.append('path', path);
       form.append('file', file);
       form.append('taskId', taskId);
-      await api('/api/upload', { method: 'POST', body: form });
+      addLocalTask({ ...baseTask, message: '正在上传 0/' + formatSize(file.size) + ' · 0 B/s', progress: 5 });
+      loadTasks();
+      await api('/api/upload', { method: 'POST', body: form, signal: abortCtrl.signal });
       removeLocalTask(taskId);
       showMsg('已开始上传: ' + file.name);
     } else {
@@ -1893,6 +1899,7 @@ async function uploadOne(file, dir){
         chunkSizes[i] = end - begin;
       }
       let error = null;
+
       function formatSpeed(bps){
         if (bps >= 1024 * 1024) return (bps / (1024 * 1024)).toFixed(2) + ' MB/s';
         if (bps >= 1024) return (bps / 1024).toFixed(2) + ' KB/s';
@@ -1932,7 +1939,12 @@ async function uploadOne(file, dir){
         }
         updateProgress();
       }, 500);
+
       async function uploadChunk(i){
+        // 检查取消
+        if (cancelledManualUploads.has(taskId) || abortCtrl.signal.aborted) {
+          throw new Error('已取消');
+        }
         const begin = i * chunkSize;
         const end = Math.min(begin + chunkSize, file.size);
         const blob = file.slice(begin, end);
@@ -1949,11 +1961,12 @@ async function uploadOne(file, dir){
         let retries = 0;
         while (true) {
           try {
-            await api('/api/upload/chunk', { method: 'POST', body: form });
+            await api('/api/upload/chunk', { method: 'POST', body: form, signal: abortCtrl.signal });
             completed[i] = true;
             updateProgress(true);
             return;
           } catch (e) {
+            if (e.message === '已取消' || abortCtrl.signal.aborted) throw new Error('已取消');
             retries++;
             const currentSpeed = Math.max(0, (calcDoneBytes() - speedState.lastBytes) / ((Date.now() - speedState.lastTime) / 1000) || 0);
             if (retries > 2) throw new Error('分片 ' + (i + 1) + ' 上传失败: ' + (e.message || e));
@@ -1963,6 +1976,7 @@ async function uploadOne(file, dir){
           }
         }
       }
+
       if (isSerial) {
         showMsg('文件大于 500MB，将逐片写入 GitHub，请勿退出页面');
         for (let i = 0; i < total; i++) {
@@ -1970,6 +1984,7 @@ async function uploadOne(file, dir){
           try { await uploadChunk(i); } catch (e) { error = e; }
         }
       } else {
+        const MAX_CONCURRENT = 6;
         const queue = [];
         for (let i = 0; i < total; i++) queue.push(i);
         async function worker(){
@@ -1990,7 +2005,12 @@ async function uploadOne(file, dir){
       }
       clearInterval(speedTimer);
       if (error) throw error;
+
+      addLocalTask({ ...baseTask, message: '客户端上传完成，等待服务端...', progress: 91 });
+      loadTasks();
+
       const finishRes = await api('/api/upload/finish', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ uploadId: start.uploadId, path: path, filename: file.name, storage: start.storage, size: file.size, chunks: total, taskId: taskId, mode: start.mode || 'batch' }) });
+
       if (isSerial) {
         removeLocalTask(taskId);
         showMsg('上传完成: ' + file.name);
@@ -1998,7 +2018,6 @@ async function uploadOne(file, dir){
         addLocalTask({ ...baseTask, message: 'GitHub写入 0/' + start.chunks, progress: 92 });
         loadTasks();
         showMsg('客户端上传完成，服务端正在写入 GitHub: ' + file.name);
-        // 启动快速轮询，实时跟踪服务端进度
         let pollCount = 0;
         const fastPoll = setInterval(async () => {
           pollCount++;
@@ -2018,11 +2037,20 @@ async function uploadOne(file, dir){
       }
     }
   }catch(e){
-    addLocalTask({ ...baseTask, status: 'error', message: e.message || '上传失败', progress: 0 });
-    loadTasks();
-    showMsg('上传失败: ' + file.name + ' ' + e.message);
+    abortControllers.delete(taskId);
+    cancelledManualUploads.delete(taskId);
+    if (e.message === '已取消' || e.name === 'AbortError') {
+      addLocalTask({ ...baseTask, status: 'cancelled', message: '已取消', progress: 0 });
+      loadTasks();
+      showMsg('上传已取消: ' + file.name);
+    } else {
+      addLocalTask({ ...baseTask, status: 'error', message: e.message || '上传失败', progress: 0 });
+      loadTasks();
+      showMsg('上传失败: ' + file.name + ' ' + e.message);
+    }
     throw e;
   }
+  abortControllers.delete(taskId);
 }
 
 async function manualSelectFile(){ document.getElementById('manual-file-input').click(); }
@@ -2091,10 +2119,16 @@ async function manualUploadOne(file, dir){
     const repo = start.repo;
 
     let uploadedBytes = 0;
+    const startTime = Date.now();
     let lastReport = Date.now();
 
+    function formatSpeed(bps){
+      if (bps >= 1024 * 1024) return (bps / (1024 * 1024)).toFixed(2) + ' MB/s';
+      if (bps >= 1024) return (bps / 1024).toFixed(2) + ' KB/s';
+      return bps.toFixed(0) + ' B/s';
+    }
+
     for (let i = 0; i < total; i++) {
-      // 检查是否已取消
       if (cancelledManualUploads.has(taskId)) {
         console.log('[manual] task ' + taskId + ' cancelled at chunk ' + i);
         addLocalTask({ ...baseTask, status: 'cancelled', message: '已取消', progress: 0 });
@@ -2106,19 +2140,20 @@ async function manualUploadOne(file, dir){
       const end = Math.min(begin + chunkSize, file.size);
       const blob = file.slice(begin, end);
 
-      addLocalTask({ ...baseTask, message: '编码分片 ' + (i + 1) + '/' + total + '...', progress: Math.floor((i / total) * 80) });
+      addLocalTask({ ...baseTask, message: '编码分片 ' + (i + 1) + '/' + total + ' (' + formatSize(blob.size) + ')...', progress: Math.floor((i / total) * 70) });
       loadTasks();
 
       const base64 = await blobToBase64(blob);
 
-      addLocalTask({ ...baseTask, message: '上传分片 ' + (i + 1) + '/' + total + ' (' + formatSize(blob.size) + ')...', progress: Math.floor((i / total) * 80) });
+      const elapsed = (Date.now() - startTime) / 1000;
+      const avgSpeed = elapsed > 0 ? uploadedBytes / elapsed : 0;
+      addLocalTask({ ...baseTask, message: '上传分片 ' + (i + 1) + '/' + total + ' · ' + formatSpeed(avgSpeed), progress: Math.floor((i / total) * 70) });
       loadTasks();
 
       let retries = 0;
       let sha = null;
       let lastErr = null;
       while (retries < 5) {
-        // 检查是否已取消（重试时也检查）
         if (cancelledManualUploads.has(taskId)) {
           console.log('[manual] task ' + taskId + ' cancelled during retry');
           addLocalTask({ ...baseTask, status: 'cancelled', message: '已取消', progress: 0 });
@@ -2147,7 +2182,9 @@ async function manualUploadOne(file, dir){
           throw new Error(lastErr);
         } catch (e) {
           retries++;
-          addLocalTask({ ...baseTask, message: '分片 ' + (i + 1) + ' 失败 (第' + retries + '次重试)...', progress: Math.floor((i / total) * 80) });
+          const currentElapsed = (Date.now() - startTime) / 1000;
+          const currentSpeed = currentElapsed > 0 ? uploadedBytes / currentElapsed : 0;
+          addLocalTask({ ...baseTask, message: '分片 ' + (i + 1) + ' 失败 (第' + retries + '次重试) · ' + formatSpeed(currentSpeed), progress: Math.floor((i / total) * 70) });
           loadTasks();
           if (retries >= 5) throw new Error('分片 ' + (i + 1) + ' 上传失败: ' + (lastErr || e.message));
           await new Promise(r => setTimeout(r, 1500 * retries));
@@ -2159,7 +2196,9 @@ async function manualUploadOne(file, dir){
       const now = Date.now();
       if (now - lastReport > 500) {
         lastReport = now;
-        addLocalTask({ ...baseTask, message: '直传 ' + formatSize(uploadedBytes) + '/' + formatSize(file.size) + ' · 分片' + (i + 1) + '/' + total + ' 完成', progress });
+        const totalElapsed = (now - startTime) / 1000;
+        const speed = totalElapsed > 0 ? uploadedBytes / totalElapsed : 0;
+        addLocalTask({ ...baseTask, message: '直传 ' + formatSize(uploadedBytes) + '/' + formatSize(file.size) + ' · ' + formatSpeed(speed) + ' · 分片' + (i + 1) + '/' + total, progress });
         loadTasks();
       }
 
@@ -2170,7 +2209,6 @@ async function manualUploadOne(file, dir){
       });
     }
 
-    // 检查是否已取消（finish前检查）
     if (cancelledManualUploads.has(taskId)) {
       console.log('[manual] task ' + taskId + ' cancelled before finish');
       addLocalTask({ ...baseTask, status: 'cancelled', message: '已取消', progress: 0 });
@@ -2251,6 +2289,8 @@ async function loadTasks(){
 }
 async function cancelTask(id, el){
   cancelledManualUploads.add(id);
+  const ctrl = abortControllers.get(id);
+  if (ctrl) { try { ctrl.abort(); } catch(e){} }
   const t = localTasks.get(id);
   if (t) { t.status = 'cancelled'; t.message = '已取消'; }
   removeLocalTask(id);
@@ -2266,6 +2306,8 @@ async function cancelTask(id, el){
 }
 async function deleteTask(id, el){
   cancelledManualUploads.add(id);
+  const ctrl = abortControllers.get(id);
+  if (ctrl) { try { ctrl.abort(); } catch(e){} }
   removeLocalTask(id);
   if (el) {
     const item = el.closest('.task-item');
