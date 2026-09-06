@@ -1840,6 +1840,7 @@ function newFolder(){
 
 // 上传
 function genTaskId(){ return 'task_'+Date.now()+'_'+Math.random().toString(36).slice(2,9); }
+const cancelledManualUploads = new Set();
 let localTasks = new Map();
 function addLocalTask(t){ localTasks.set(t.id, t); }
 function removeLocalTask(id){ localTasks.delete(id); }
@@ -2070,6 +2071,7 @@ function blobToBase64(blob){
 async function manualUploadOne(file, dir){
   const path = dir ? dir + '/' + file.name : file.name;
   const taskId = genTaskId();
+  cancelledManualUploads.delete(taskId);
   const baseTask = { id: taskId, name: file.name, status: 'uploading', message: '初始化手动上传...', progress: 0, size: file.size, createdAt: Date.now(), updatedAt: Date.now() };
   addLocalTask(baseTask);
   loadTasks();
@@ -2092,17 +2094,23 @@ async function manualUploadOne(file, dir){
     let lastReport = Date.now();
 
     for (let i = 0; i < total; i++) {
+      // 检查是否已取消
+      if (cancelledManualUploads.has(taskId)) {
+        console.log('[manual] task ' + taskId + ' cancelled at chunk ' + i);
+        addLocalTask({ ...baseTask, status: 'cancelled', message: '已取消', progress: 0 });
+        loadTasks();
+        throw new Error('已取消');
+      }
+
       const begin = i * chunkSize;
       const end = Math.min(begin + chunkSize, file.size);
       const blob = file.slice(begin, end);
 
-      // 更新状态：正在编码
       addLocalTask({ ...baseTask, message: '编码分片 ' + (i + 1) + '/' + total + '...', progress: Math.floor((i / total) * 80) });
       loadTasks();
 
       const base64 = await blobToBase64(blob);
 
-      // 更新状态：正在上传
       addLocalTask({ ...baseTask, message: '上传分片 ' + (i + 1) + '/' + total + ' (' + formatSize(blob.size) + ')...', progress: Math.floor((i / total) * 80) });
       loadTasks();
 
@@ -2110,6 +2118,13 @@ async function manualUploadOne(file, dir){
       let sha = null;
       let lastErr = null;
       while (retries < 5) {
+        // 检查是否已取消（重试时也检查）
+        if (cancelledManualUploads.has(taskId)) {
+          console.log('[manual] task ' + taskId + ' cancelled during retry');
+          addLocalTask({ ...baseTask, status: 'cancelled', message: '已取消', progress: 0 });
+          loadTasks();
+          throw new Error('已取消');
+        }
         try {
           const resp = await fetch('https://api.github.com/repos/' + start.githubUser + '/' + repo + '/contents/chunk_' + i, {
             method: 'PUT',
@@ -2155,6 +2170,14 @@ async function manualUploadOne(file, dir){
       });
     }
 
+    // 检查是否已取消（finish前检查）
+    if (cancelledManualUploads.has(taskId)) {
+      console.log('[manual] task ' + taskId + ' cancelled before finish');
+      addLocalTask({ ...baseTask, status: 'cancelled', message: '已取消', progress: 0 });
+      loadTasks();
+      throw new Error('已取消');
+    }
+
     addLocalTask({ ...baseTask, message: '上报服务器...', progress: 95 });
     loadTasks();
 
@@ -2164,13 +2187,21 @@ async function manualUploadOne(file, dir){
       body: JSON.stringify({ uploadId, path, filename: file.name, size: file.size, chunks: total, taskId })
     });
 
+    cancelledManualUploads.delete(taskId);
     removeLocalTask(taskId);
     showMsg('手动上传完成: ' + file.name);
   } catch (e) {
     console.error('[manual] upload failed:', e);
-    addLocalTask({ ...baseTask, status: 'error', message: e.message || '手动上传失败', progress: 0 });
-    loadTasks();
-    showMsg('手动上传失败: ' + file.name + ' ' + e.message);
+    cancelledManualUploads.delete(taskId);
+    if (e.message === '已取消') {
+      addLocalTask({ ...baseTask, status: 'cancelled', message: '已取消', progress: 0 });
+      loadTasks();
+      showMsg('手动上传已取消: ' + file.name);
+    } else {
+      addLocalTask({ ...baseTask, status: 'error', message: e.message || '手动上传失败', progress: 0 });
+      loadTasks();
+      showMsg('手动上传失败: ' + file.name + ' ' + e.message);
+    }
     throw e;
   }
 }
@@ -2219,6 +2250,7 @@ async function loadTasks(){
   }).join('');
 }
 async function cancelTask(id, el){
+  cancelledManualUploads.add(id);
   const t = localTasks.get(id);
   if (t) { t.status = 'cancelled'; t.message = '已取消'; }
   removeLocalTask(id);
@@ -2233,6 +2265,7 @@ async function cancelTask(id, el){
   }
 }
 async function deleteTask(id, el){
+  cancelledManualUploads.add(id);
   removeLocalTask(id);
   if (el) {
     const item = el.closest('.task-item');
