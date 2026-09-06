@@ -948,7 +948,7 @@ async function buildFolderZipResponse(folderPath, env) {
     const node = getNode(structure, p);
     if (!node || node.type !== 'file') continue;
     files.push({
-      path: p.slice(prefix.length).replace(/\/g, '/'),
+      path: p.slice(prefix.length).replaceAll('\\', '/'),
       ssid: node.ssid,
       name: node.name,
       size: node.size
