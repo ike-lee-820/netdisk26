@@ -10,6 +10,19 @@
       "database_id": "86ee14b0-7fb5-497b-a2cc-733634e84fe8"
     }
   ],
+  "observability": {
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true,
+      "persist": true
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "persist": true
+    }
+  },
   "kv_namespaces": [
     {
       "binding": "FILE_KV_1",
