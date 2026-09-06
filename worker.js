@@ -2041,15 +2041,15 @@ async function loadTasks(){
   if (tasks.length === 0) { box.innerHTML = '<div class="empty">暂无任务</div>'; return; }
   box.innerHTML = tasks.map(t => {
     const statusColor = t.status === 'done' ? 'var(--success)' : (t.status === 'error' ? 'var(--danger)' : (t.status === 'cancelled' ? 'var(--text-sec)' : 'var(--primary)'));
-    return `<div class="task-item" data-task-id="${escapeHtml(t.id)}">
-      <div class="task-title">${escapeHtml(t.name)} <span style="color:${statusColor};font-size:12px;">${t.status}</span></div>
-      <div class="task-msg">${escapeHtml(t.message || '')}</div>
-      <div class="task-progress"><div style="width:${t.progress || 0}%"></div></div>
+    return \`<div class="task-item" data-task-id="\${escapeHtml(t.id)}">
+      <div class="task-title">\${escapeHtml(t.name)} <span style="color:\${statusColor};font-size:12px;">\${t.status}</span></div>
+      <div class="task-msg">\${escapeHtml(t.message || '')}</div>
+      <div class="task-progress"><div style="width:\${t.progress || 0}%"></div></div>
       <div class="task-actions">
-        ${t.status === 'uploading' || t.status === 'processing' ? `<button onclick="cancelTask('${t.id}', this)">取消</button>` : ''}
-        <button onclick="deleteTask('${t.id}', this)">删除</button>
+        \${t.status === 'uploading' || t.status === 'processing' ? \`<button onclick="cancelTask('\${t.id}', this)">取消</button>\` : ''}
+        <button onclick="deleteTask('\${t.id}', this)">删除</button>
       </div>
-    </div>`;
+    </div>\`;
   }).join('');
 }
 async function cancelTask(id, el){
