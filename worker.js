@@ -12,8 +12,8 @@ const ASSETS_REPO = 'netdisk-assets';
 const KV_SIZE_LIMIT = -1;                      // 所有文件均存 GitHub，KV 仅临时存放上传分片
 const GITHUB_SINGLE_LIMIT = 0;                 // GitHub 文件一律分片，避免 Worker CPU/超时
 const SERIAL_THRESHOLD = 500 * 1024 * 1024;    // >500MB 使用串流逐片上传，避免 KV 堆积
-const CHUNK_SIZE = 60 * 1024 * 1024;           // 10 MB/片
-const CLIENT_CHUNK_SIZE = 60 * 1024 * 1024;     // 客户端每片 5 MB，避免浏览器/Worker 超时
+const CHUNK_SIZE = 30 * 1024 * 1024;           // 10 MB/片
+const CLIENT_CHUNK_SIZE = 30 * 1024 * 1024;     // 客户端每片 5 MB，避免浏览器/Worker 超时
 const GH_PROXY = 'https://v6.gh-proxy.com/';
 
 function proxyUrl(url) {
@@ -1997,6 +1997,20 @@ async function uploadOne(file, dir){
         addLocalTask({ ...baseTask, message: 'GitHub写入 0/' + start.chunks, progress: 92 });
         loadTasks();
         showMsg('客户端上传完成，服务端正在写入 GitHub: ' + file.name);
+        // 启动快速轮询，实时跟踪服务端进度
+        let pollCount = 0;
+        const fastPoll = setInterval(async () => {
+          pollCount++;
+          await loadTasks();
+          const t = localTasks.get(taskId) || (await api('/api/tasks') || []).find(x => x.id === taskId);
+          if (!t || t.status === 'done' || t.status === 'error' || t.status === 'cancelled' || pollCount > 120) {
+            clearInterval(fastPoll);
+            if (t && t.status === 'done') {
+              removeLocalTask(taskId);
+              showMsg('上传完成: ' + file.name);
+            }
+          }
+        }, 2000);
       } else {
         removeLocalTask(taskId);
         showMsg('上传完成: ' + file.name);
@@ -2026,15 +2040,30 @@ async function manualUploadFiles(files){
   loadList();
 }
 
+function arrayBufferToBase64Browser(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const len = bytes.byteLength;
+  const chunkSize = 0x8000;
+  for (let i = 0; i < len; i += chunkSize) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
 function blobToBase64(blob){
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onloadend = () => {
-      const base64 = reader.result.split(',')[1];
-      resolve(base64);
+      try {
+        const base64 = arrayBufferToBase64Browser(reader.result);
+        resolve(base64);
+      } catch (e) {
+        reject(e);
+      }
     };
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
+    reader.onerror = () => reject(new Error('FileReader error'));
+    reader.readAsArrayBuffer(blob);
   });
 }
 
@@ -2060,15 +2089,26 @@ async function manualUploadOne(file, dir){
     const repo = start.repo;
 
     let uploadedBytes = 0;
+    let lastReport = Date.now();
 
     for (let i = 0; i < total; i++) {
       const begin = i * chunkSize;
       const end = Math.min(begin + chunkSize, file.size);
       const blob = file.slice(begin, end);
+
+      // 更新状态：正在编码
+      addLocalTask({ ...baseTask, message: '编码分片 ' + (i + 1) + '/' + total + '...', progress: Math.floor((i / total) * 80) });
+      loadTasks();
+
       const base64 = await blobToBase64(blob);
+
+      // 更新状态：正在上传
+      addLocalTask({ ...baseTask, message: '上传分片 ' + (i + 1) + '/' + total + ' (' + formatSize(blob.size) + ')...', progress: Math.floor((i / total) * 80) });
+      loadTasks();
 
       let retries = 0;
       let sha = null;
+      let lastErr = null;
       while (retries < 5) {
         try {
           const resp = await fetch('https://api.github.com/repos/' + start.githubUser + '/' + repo + '/contents/chunk_' + i, {
@@ -2083,20 +2123,30 @@ async function manualUploadOne(file, dir){
           if (resp.ok) {
             const data = await resp.json();
             sha = data.content.sha;
+            console.log('[manual] chunk_' + i + ' uploaded, sha=' + sha);
             break;
           }
-          throw new Error('GitHub ' + resp.status);
+          const errText = await resp.text();
+          lastErr = 'GitHub ' + resp.status + ': ' + errText;
+          console.error('[manual] chunk_' + i + ' failed: ' + lastErr);
+          throw new Error(lastErr);
         } catch (e) {
           retries++;
-          if (retries >= 5) throw e;
-          await new Promise(r => setTimeout(r, 1000 * retries));
+          addLocalTask({ ...baseTask, message: '分片 ' + (i + 1) + ' 失败 (第' + retries + '次重试)...', progress: Math.floor((i / total) * 80) });
+          loadTasks();
+          if (retries >= 5) throw new Error('分片 ' + (i + 1) + ' 上传失败: ' + (lastErr || e.message));
+          await new Promise(r => setTimeout(r, 1500 * retries));
         }
       }
 
       uploadedBytes += blob.size;
       const progress = Math.min(90, Math.floor((uploadedBytes / file.size) * 90));
-      addLocalTask({ ...baseTask, message: '直传 ' + formatSize(uploadedBytes) + '/' + formatSize(file.size), progress });
-      loadTasks();
+      const now = Date.now();
+      if (now - lastReport > 500) {
+        lastReport = now;
+        addLocalTask({ ...baseTask, message: '直传 ' + formatSize(uploadedBytes) + '/' + formatSize(file.size) + ' · 分片' + (i + 1) + '/' + total + ' 完成', progress });
+        loadTasks();
+      }
 
       await api('/api/upload/manual/chunk', {
         method: 'POST',
@@ -2104,6 +2154,9 @@ async function manualUploadOne(file, dir){
         body: JSON.stringify({ uploadId, index: i, sha, total, taskId })
       });
     }
+
+    addLocalTask({ ...baseTask, message: '上报服务器...', progress: 95 });
+    loadTasks();
 
     await api('/api/upload/manual/finish', {
       method: 'POST',
@@ -2114,6 +2167,7 @@ async function manualUploadOne(file, dir){
     removeLocalTask(taskId);
     showMsg('手动上传完成: ' + file.name);
   } catch (e) {
+    console.error('[manual] upload failed:', e);
     addLocalTask({ ...baseTask, status: 'error', message: e.message || '手动上传失败', progress: 0 });
     loadTasks();
     showMsg('手动上传失败: ' + file.name + ' ' + e.message);
@@ -3029,6 +3083,7 @@ async function handleRequest(request, env, ctx = null) {
     // 客户端上传阶段已完成，立即返回，后续 GitHub 写入在后台执行
     const finishBackground = async () => {
       try {
+        console.log('[finish] starting, uploadId=' + uploadId + ', chunks=' + chunks + ', mode=' + mode);
         const structure = await getStructure(env);
         const oldNode = getNode(structure, filePath);
         if (oldNode && oldNode.type === 'file') {
@@ -3039,12 +3094,16 @@ async function handleRequest(request, env, ctx = null) {
         let finalSsid = uploadId;
 
         if (mode === 'serial') {
+          console.log('[finish] serial mode, writing directory only');
           await updateTask(env, taskId, { message: '串流上传完成，正在写入目录...', progress: 95 });
         } else if (storage === 'github') {
+          console.log('[finish] batch github mode, starting upload');
           await updateTask(env, taskId, { message: '服务端：开始写入 GitHub...', progress: 92 });
           let reportTimer = null;
           try {
+            console.log('[finish] creating repo ' + uploadId);
             await githubCreateRepo(uploadId, env);
+            console.log('[finish] repo created');
 
             const totalBytes = Number(size) || 0;
             let uploadedBytes = 0;
@@ -3066,7 +3125,9 @@ async function handleRequest(request, env, ctx = null) {
                 return;
               }
 
-              // KV 读取重试（最多 20 次，解决最终一致性延迟）
+              console.log('[finish] processing chunk ' + i + '/' + chunks);
+
+              // KV 读取重试
               let chunkBuf = null;
               let kvRetries = 0;
               const kvKey = uploadId + '_chunk_' + i;
@@ -3092,6 +3153,7 @@ async function handleRequest(request, env, ctx = null) {
               let lastErr = null;
               while (ghRetries < 5) {
                 try {
+                  console.log('[finish] uploading chunk_' + i + ' to GitHub, attempt ' + (ghRetries + 1));
                   await githubUploadFile(uploadId, 'chunk_' + i, chunkBuf, env, 'chunk ' + i, true);
                   console.log('[finish] GitHub chunk_' + i + ' uploaded OK');
                   break;
@@ -3109,9 +3171,11 @@ async function handleRequest(request, env, ctx = null) {
               uploadedBytes += chunkBuf.byteLength;
               await kv.delete(kvKey);
               await updateTask(env, taskId, { message: 'GitHub写入 ' + (i + 1) + '/' + chunks, progress: 92 + Math.floor(((i + 1) / chunks) * 7) });
+              console.log('[finish] chunk_' + i + ' done, total uploaded=' + formatSize(uploadedBytes));
             }
             clearInterval(reportTimer);
             reportTimer = null;
+            console.log('[finish] all chunks uploaded');
           } catch (e) {
             if (reportTimer) { clearInterval(reportTimer); reportTimer = null; }
             console.error('服务端写入 GitHub 失败', e);
@@ -3141,6 +3205,7 @@ async function handleRequest(request, env, ctx = null) {
           }
         }
 
+        console.log('[finish] writing file structure');
         const structure2 = await getStructure(env);
         setNode(structure2, filePath, {
           type: 'file',
@@ -3153,13 +3218,14 @@ async function handleRequest(request, env, ctx = null) {
         });
         await saveStructure(env, structure2);
         await updateTask(env, taskId, { status: 'done', message: '完成', progress: 100 });
+        console.log('[finish] done');
       } catch (e) {
         console.error('finishBackground 未捕获异常:', e);
         try {
           await updateTask(env, taskId, { status: 'error', message: '服务端处理失败: ' + e.message, progress: 0 });
         } catch (_) {}
       }
-    };
+    };;
 
     if (ctx && ctx.waitUntil) {
       ctx.waitUntil(finishBackground());
