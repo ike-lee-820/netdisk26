@@ -2937,7 +2937,7 @@ function zipPage(folderName, files, folderPath) {
     </div>
   </div>
   <div class="card" id="file-list" style="max-height:50vh;overflow:auto;">
-    ${files.map(f => \`<div style="padding:8px 0;border-bottom:1px solid var(--divider);display:flex;align-items:center;gap:8px;">
+    ' + files.map(f => '<div style="padding:8px 0;border-bottom:1px solid var(--divider);display:flex;align-items:center;gap:8px;">' + 
       <span class="material-icons" style="font-size:18px;color:var(--text-sec);">insert_drive_file</span>
       <span style="flex:1;font-size:13px;word-break:break-all;">${escapeHtml(f.path)}</span>
       <span style="font-size:12px;color:var(--text-sec);">${formatSize(f.size)}</span>
