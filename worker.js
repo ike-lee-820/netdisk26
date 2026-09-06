@@ -948,7 +948,7 @@ async function buildFolderZipResponse(folderPath, env) {
     const node = getNode(structure, p);
     if (!node || node.type !== 'file') continue;
     files.push({
-      path: p.slice(prefix.length).replace(/\\/g, '/'),
+      path: p.slice(prefix.length).replace(/\/g, '/'),
       ssid: node.ssid,
       name: node.name,
       size: node.size
@@ -2919,6 +2919,13 @@ async function preview(){
 
 function zipPage(folderName, files, folderPath) {
   const filesJson = JSON.stringify(files).replace(/</g, '\u003c');
+  const fileListHtml = files.map(f => 
+    `<div style="padding:8px 0;border-bottom:1px solid var(--divider);display:flex;align-items:center;gap:8px;">
+      <span class="material-icons" style="font-size:18px;color:var(--text-sec);">insert_drive_file</span>
+      <span style="flex:1;font-size:13px;word-break:break-all;">${escapeHtml(f.path)}</span>
+      <span style="font-size:12px;color:var(--text-sec);">${formatSize(f.size)}</span>
+    </div>`
+  ).join('');
   return page('打包下载: ' + folderName, `
 <div class="appbar"><span class="material-icons" onclick="history.back()">arrow_back</span><h1>打包下载</h1></div>
 <div class="container">
@@ -2937,11 +2944,7 @@ function zipPage(folderName, files, folderPath) {
     </div>
   </div>
   <div class="card" id="file-list" style="max-height:50vh;overflow:auto;">
-    ' + files.map(f => '<div style="padding:8px 0;border-bottom:1px solid var(--divider);display:flex;align-items:center;gap:8px;">' + 
-      <span class="material-icons" style="font-size:18px;color:var(--text-sec);">insert_drive_file</span>
-      <span style="flex:1;font-size:13px;word-break:break-all;">${escapeHtml(f.path)}</span>
-      <span style="font-size:12px;color:var(--text-sec);">${formatSize(f.size)}</span>
-    </div>\`).join('')}
+    ${fileListHtml}
   </div>
 </div>
 <div class="snackbar" id="snackbar"></div>
@@ -3004,7 +3007,6 @@ async function startZip(){
 </script>
 `, '');
 }
-
 
 function escapeHtml(text) {
   return text.replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
