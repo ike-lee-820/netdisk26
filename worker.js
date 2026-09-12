@@ -1,15 +1,23 @@
 /**
- * Cloudflare Worker 直链网盘（修复版）
- * 修复：多文件并发上传丢失、客户端 16 线程上传、任务创建 64 线程
+ * Cloudflare Worker 直链网盘（完整修复版）
+ * 
+ * 修复内容：
+ * 1. 任务系统改为每任务独立行，彻底消除并发覆盖导致的上传数量限制
+ * 2. 分片直接在自己的请求里写入 GitHub，废弃 waitUntil，修复 7 分片后卡住
+ * 3. 客户端上传至服务器/GitHub 一律 32 线程
+ * 4. 分片大小 70MB
+ * 5. 删除文件/文件夹：直接删仓库 + 32 并发 + 结构先更新，即时响应
+ * 6. 客户端小文件用 XHR 显示上传进度和瞬时速度
  */
+
 const GITHUB_USER = 'ikecode26';
 const GITHUB_API = 'https://api.github.com';
 const ASSETS_REPO = 'netdisk-assets';
 const KV_SIZE_LIMIT = -1;
 const GITHUB_SINGLE_LIMIT = 0;
-const SERIAL_THRESHOLD = 500 * 1024 * 1024;
-const CHUNK_SIZE = 10 * 1024 * 1024;
-const CLIENT_CHUNK_SIZE = 10 * 1024 * 1024;
+const SERIAL_THRESHOLD = 1024 * 1024 * 1024;   // >1GB 用串行
+const CHUNK_SIZE = 70 * 1024 * 1024;            // 70MB 分片
+const CLIENT_CHUNK_SIZE = 70 * 1024 * 1024;     // 70MB 分片
 const GH_PROXY = 'https://v6.gh-proxy.com/';
 
 function proxyUrl(url) {
@@ -96,7 +104,7 @@ function formatSpeed(bps) {
 function getMime(name) {
   const ext = name.split('.').pop().toLowerCase();
   const map = {
-    mp4: 'video/mp4', webm: 'video/webm', mkv: 'video/x-matroska', a3v8: 'video/x-matroska',
+    mp4: 'video/mp4', webm: 'video/webm', mkv: 'video/x-matroska',
     mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', flac: 'audio/flac', m4a: 'audio/mp4',
     txt: 'text/plain', md: 'text/markdown', json: 'application/json', js: 'application/javascript',
     css: 'text/css', html: 'text/html', xml: 'application/xml',
@@ -483,6 +491,10 @@ async function verifyGitHubFile(ssid, path, expectedSha, env) {
 async function githubUploadFile(ssid, path, content, env, message = 'upload', skipVerify = false) {
   const base64 = arrayBufferToBase64(content);
   console.log(`[github] upload ${ssid}/${path} raw=${content.byteLength} base64=${base64.length}`);
+  // GitHub Contents API 请求体限制约 100MB，超限直接报错（避免无谓重试）
+  if (base64.length > 95 * 1024 * 1024) {
+    throw new Error(`分片 base64 后 ${(base64.length / 1024 / 1024).toFixed(1)}MB 超过 GitHub 95MB 限制，请减小分片大小`);
+  }
   let retries = 0;
   const maxRetries = 5;
   while (true) {
@@ -498,7 +510,7 @@ async function githubUploadFile(ssid, path, content, env, message = 'upload', sk
         'User-Agent': 'netdisk-worker'
       },
       body: JSON.stringify(body)
-    }, 120000);
+    }, 180000);
 
     if (resp.ok) {
       let data = null;
@@ -506,12 +518,9 @@ async function githubUploadFile(ssid, path, content, env, message = 'upload', sk
       const expectedSha = data && data.content && data.content.sha;
       console.log(`[github] put ${ssid}/${path} ok, sha=${expectedSha || '?'}`);
       if (skipVerify) {
-        console.log(`[github] uploaded ${ssid}/${path} (skip verify)`);
         return data || { sha: expectedSha };
       }
-      console.log(`[github] verifying ${ssid}/${path}...`);
       if (await verifyGitHubFile(ssid, path, expectedSha, env)) {
-        console.log(`[github] uploaded ${ssid}/${path} verified`);
         return data || { sha: expectedSha };
       }
       console.log(`[github] verification failed for ${ssid}/${path}, retry ${retries + 1}`);
@@ -520,7 +529,6 @@ async function githubUploadFile(ssid, path, content, env, message = 'upload', sk
       console.error(`[github] put ${ssid}/${path} failed ${resp.status}: ${txt}`);
       if ((resp.status === 409 || (resp.status === 422 && txt.includes('sha'))) && retries < maxRetries) {
         retries++;
-        console.log(`[github] ${resp.status} on ${ssid}/${path}, retry ${retries}`);
         await new Promise(r => setTimeout(r, 1000));
         continue;
       }
@@ -534,30 +542,38 @@ async function githubUploadFile(ssid, path, content, env, message = 'upload', sk
 }
 
 async function githubDeleteFile(ssid, path, env) {
-  const infoResp = await loggedFetch(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}/contents/${encodeURIComponent(path)}`, {
-    headers: { 'Authorization': `token ${env.GITHUB_TOKEN}`, 'Accept': 'application/vnd.github+json', 'User-Agent': 'netdisk-worker' }
-  });
-  if (!infoResp.ok) return;
-  const info = await infoResp.json();
-  const sha = Array.isArray(info) ? null : info.sha;
-  if (!sha) return;
-  await loggedFetch(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}/contents/${encodeURIComponent(path)}`, {
-    method: 'DELETE',
-    headers: {
-      'Authorization': `token ${env.GITHUB_TOKEN}`,
-      'Accept': 'application/vnd.github+json',
-      'Content-Type': 'application/json',
-      'User-Agent': 'netdisk-worker'
-    },
-    body: JSON.stringify({ message: 'delete', sha })
-  });
+  try {
+    const infoResp = await loggedFetch(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}/contents/${encodeURIComponent(path)}`, {
+      headers: { 'Authorization': `token ${env.GITHUB_TOKEN}`, 'Accept': 'application/vnd.github+json', 'User-Agent': 'netdisk-worker' }
+    });
+    if (!infoResp.ok) return;
+    const info = await infoResp.json();
+    const sha = Array.isArray(info) ? null : info.sha;
+    if (!sha) return;
+    await loggedFetch(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}/contents/${encodeURIComponent(path)}`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `token ${env.GITHUB_TOKEN}`,
+        'Accept': 'application/vnd.github+json',
+        'Content-Type': 'application/json',
+        'User-Agent': 'netdisk-worker'
+      },
+      body: JSON.stringify({ message: 'delete', sha })
+    });
+  } catch (e) {
+    console.error('[githubDeleteFile]', e);
+  }
 }
 
 async function githubDeleteRepo(ssid, env) {
-  await loggedFetch(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}`, {
+  const resp = await fetchWithTimeout(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}`, {
     method: 'DELETE',
     headers: { 'Authorization': `token ${env.GITHUB_TOKEN}`, 'Accept': 'application/vnd.github+json', 'User-Agent': 'netdisk-worker' }
-  });
+  }, 30000);
+  // 404 表示仓库已经不存在，视为成功
+  if (resp.ok || resp.status === 404) return true;
+  const txt = await resp.text();
+  throw new Error(`删除仓库失败: ${resp.status} ${txt}`);
 }
 
 async function githubGetDownloadUrl(ssid, path, env) {
@@ -579,7 +595,7 @@ async function githubFetchFile(ssid, path, env) {
   for (let i = 0; i < 5; i++) {
     const resp = await fetchWithTimeout(proxiedUrl, {
       headers: { 'User-Agent': 'netdisk-worker', 'Accept-Encoding': 'identity' }
-    }, 30000);
+    }, 60000);
     if (resp.ok) return resp;
     lastErr = `GitHub 下载失败: ${resp.status} ${proxiedUrl}`;
     if (resp.status === 404) {
@@ -595,7 +611,6 @@ async function githubStreamChunks(fileNode, writable, env) {
   const writer = writable.getWriter();
   try {
     for (let i = 0; i < fileNode.chunks; i++) {
-      console.log(`[stream] fetch chunk_${i} for ${fileNode.ssid}`);
       const resp = await githubFetchFile(fileNode.ssid, `chunk_${i}`, env);
       const reader = resp.body.getReader();
       while (true) {
@@ -612,75 +627,73 @@ async function githubStreamChunks(fileNode, writable, env) {
     try { await writer.close(); } catch (e) {}
   }
 }
-// ==================== 任务系统（互斥锁保护，修复并发写覆盖）====================
 
-// 串行化所有对 tasks 数组的"读-改-写"，避免并发上传互相覆盖导致任务丢失
-let taskMutex = Promise.resolve();
-function withTaskMutex(fn) {
-  const result = taskMutex.then(fn, fn);
-  taskMutex = result.then(() => {}, () => {});
-  return result;
-}
+// ==================== 任务系统（每任务独立一行，彻底消除并发覆盖）====================
 
 async function getTasks(env) {
-  return await d1Get(env, 'tasks', []);
+  await ensureD1(env);
+  const rows = await getD1(env).prepare(
+    "SELECT value FROM kv_store WHERE key LIKE 'task_%'"
+  ).all();
+  const tasks = [];
+  for (const r of (rows.results || [])) {
+    try { tasks.push(JSON.parse(r.value)); } catch (e) {}
+  }
+  tasks.sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+  return tasks.slice(0, 300);
 }
 
 async function saveTasks(env, tasks) {
-  await d1Set(env, 'tasks', tasks);
+  await ensureD1(env);
+  await getD1(env).prepare("DELETE FROM kv_store WHERE key LIKE 'task_%'").run();
+  for (const t of tasks) {
+    await getD1(env).prepare('INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)')
+      .bind('task_' + t.id, JSON.stringify(t)).run();
+  }
 }
 
 async function addTask(env, task) {
-  return withTaskMutex(async () => {
-    task.startedAt = task.startedAt || Date.now();
-    const tasks = await getTasks(env);
-    // 去重：同 id 覆盖
-    const existIdx = tasks.findIndex(t => t.id === task.id);
-    if (existIdx >= 0) tasks.splice(existIdx, 1);
-    tasks.unshift(task);
-    // 上限保护：避免 D1 单行超 1MB
-    if (tasks.length > 500) tasks.length = 500;
-    await saveTasks(env, tasks);
-    return task;
-  });
+  await ensureD1(env);
+  task.startedAt = task.startedAt || Date.now();
+  task.createdAt = task.createdAt || Date.now();
+  task.updatedAt = Date.now();
+  await getD1(env).prepare('INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)')
+    .bind('task_' + task.id, JSON.stringify(task)).run();
+  return task;
 }
 
 async function updateTask(env, id, updates) {
-  return withTaskMutex(async () => {
-    const tasks = await getTasks(env);
-    const idx = tasks.findIndex(t => t.id === id);
-    if (idx >= 0) {
-      tasks[idx] = { ...tasks[idx], ...updates, updatedAt: Date.now() };
-      await saveTasks(env, tasks);
-    }
-  });
+  await ensureD1(env);
+  const row = await getD1(env).prepare('SELECT value FROM kv_store WHERE key = ?')
+    .bind('task_' + id).first();
+  if (!row || !row.value) return;
+  let task;
+  try { task = JSON.parse(row.value); } catch (e) { return; }
+  Object.assign(task, updates, { updatedAt: Date.now() });
+  await getD1(env).prepare('INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)')
+    .bind('task_' + id, JSON.stringify(task)).run();
 }
 
 async function cancelTask(env, id) {
-  return withTaskMutex(async () => {
-    const tasks = await getTasks(env);
-    const idx = tasks.findIndex(x => x.id === id);
-    if (idx >= 0) {
-      tasks[idx] = { ...tasks[idx], status: 'cancelled', message: '已取消', updatedAt: Date.now() };
-      await saveTasks(env, tasks);
-    }
-  });
+  await updateTask(env, id, { status: 'cancelled', message: '已取消' });
 }
 
 async function deleteTask(env, id) {
-  return withTaskMutex(async () => {
-    const tasks = await getTasks(env);
-    await saveTasks(env, tasks.filter(x => x.id !== id));
-  });
+  await ensureD1(env);
+  await getD1(env).prepare('DELETE FROM kv_store WHERE key = ?').bind('task_' + id).run();
 }
 
 async function isTaskCancelled(env, id) {
-  const tasks = await getTasks(env);
-  const t = tasks.find(x => x.id === id);
-  return !t || t.status === 'cancelled';
+  await ensureD1(env);
+  const row = await getD1(env).prepare('SELECT value FROM kv_store WHERE key = ?')
+    .bind('task_' + id).first();
+  if (!row || !row.value) return true;
+  try {
+    const t = JSON.parse(row.value);
+    return t.status === 'cancelled';
+  } catch (e) { return true; }
 }
 
-// 节流上报：普通进度 600ms 一次，关键状态立即写
 const _taskThrottleCache = new Map();
 async function updateTaskThrottled(env, id, updates) {
   const now = Date.now();
@@ -772,21 +785,48 @@ async function saveFile(fileBuffer, filename, env, taskId = null) {
   return { ssid: id, storage: 'github', size, filename, chunks };
 }
 
+// 删除文件存储：直接删除整个 GitHub 仓库（一次 API 调用）
 async function deleteFileStorage(node, env) {
   if (node.storage === 'kv') {
-    await getKV(node.ssid, env).delete(node.ssid);
-  } else if (node.storage === 'github') {
+    try { await getKV(node.ssid, env).delete(node.ssid); } catch (e) { console.error(e); }
+    return;
+  }
+  if (node.storage === 'github') {
+    try {
+      await githubDeleteRepo(node.ssid, env);
+      return;
+    } catch (e) {
+      console.error('[delete] 删仓库失败，回退到逐片删除', e);
+    }
+    const tasks = [];
     if (node.chunks > 1) {
       for (let i = 0; i < node.chunks; i++) {
-        try { await githubDeleteFile(node.ssid, `chunk_${i}`, env); } catch (e) { console.error(e); }
+        tasks.push(githubDeleteFile(node.ssid, `chunk_${i}`, env));
       }
     } else if (node.chunks === 1) {
-      try { await githubDeleteFile(node.ssid, 'chunk_0', env); } catch (e) { console.error(e); }
-    } else {
-      try { await githubDeleteFile(node.ssid, node.githubPath || node.name, env); } catch (e) { console.error(e); }
+      tasks.push(githubDeleteFile(node.ssid, 'chunk_0', env));
+    } else if (node.githubPath) {
+      tasks.push(githubDeleteFile(node.ssid, node.githubPath, env));
     }
-    try { await githubDeleteRepo(node.ssid, env); } catch (e) { console.error(e); }
+    await Promise.all(tasks);
   }
+}
+
+// 并发删除多个文件存储
+async function deleteFileStoragesConcurrently(nodes, env, concurrency = 32) {
+  let cursor = 0;
+  const arr = nodes.slice();
+  async function worker() {
+    while (true) {
+      const idx = cursor++;
+      if (idx >= arr.length) return;
+      try { await deleteFileStorage(arr[idx], env); } catch (e) { console.error('[batch delete]', e); }
+    }
+  }
+  const runners = [];
+  const n = Math.min(concurrency, arr.length);
+  for (let i = 0; i < n; i++) runners.push(worker());
+  await Promise.all(runners);
 }
 
 async function buildDownloadResponse(node, filename, env, inline = false) {
@@ -1128,17 +1168,19 @@ async function davDelete(davPath, env) {
   const structure = await getStructure(env);
   const node = getNode(structure, davPath);
   if (!node) return new Response('Not Found', { status: 404 });
+  const filesToDelete = [];
   if (node.type === 'file') {
-    await deleteFileStorage(node, env);
+    filesToDelete.push(node);
   } else {
     const paths = collectPaths(node, davPath);
     for (const p of paths) {
       const child = getNode(structure, p);
-      if (child && child.type === 'file') await deleteFileStorage(child, env);
+      if (child && child.type === 'file') filesToDelete.push(child);
     }
   }
   deleteNode(structure, davPath);
   await saveStructure(env, structure);
+  deleteFileStoragesConcurrently(filesToDelete, env, 32).catch(e => console.error(e));
   return new Response(null, { status: 204 });
 }
 
@@ -1236,6 +1278,7 @@ function davLock() {
 function davUnlock() {
   return new Response(null, { status: 204 });
 }
+
 // ==================== HTML 模板 ====================
 
 const COMMON_HEAD = `
@@ -1747,18 +1790,22 @@ async function batchCopy(){
 async function batchDelete(){
   if(selectedPaths.size===0){ showMsg('请先选择文件'); return; }
   if(!confirm('确定删除选中的 '+selectedPaths.size+' 项?')) return;
+  const paths = Array.from(selectedPaths);
+  // 立即从界面移除
+  document.querySelectorAll('.file-card').forEach(card=>{
+    if(selectedPaths.has(card.dataset.path)) card.remove();
+  });
+  selectedPaths.clear();
   try {
-    const paths = Array.from(selectedPaths);
     await api('/api/files/batch', {method:'DELETE', headers:{'Content-Type':'application/json'}, body:JSON.stringify({paths})});
     showMsg('批量删除成功');
-    selectedPaths.clear();
-    loadList();
   } catch(e) { showMsg('批量删除失败: ' + (e.message || e)); }
+  loadList();
 }
 
 function getIcon(name){
   const ext=name.split('.').pop().toLowerCase();
-  if(['mp4','webm','mkv','a3v8'].includes(ext)) return 'movie';
+  if(['mp4','webm','mkv'].includes(ext)) return 'movie';
   if(['mp3','wav','ogg','flac','m4a'].includes(ext)) return 'audiotrack';
   if(['jpg','jpeg','png','gif','webp'].includes(ext)) return 'image';
   if(['zip','rar','7z','tar','gz'].includes(ext)) return 'folder_zip';
@@ -1812,7 +1859,15 @@ async function renameItem(p){
 }
 async function deleteItem(p){
   if(!confirm('确定删除 "'+p.split('/').pop()+'"?')) return;
-  await api('/api/file?path='+encodeURIComponent(p),{method:'DELETE'});
+  // 立即从界面移除
+  document.querySelectorAll('.file-card').forEach(card=>{
+    if(card.dataset.path === p) card.remove();
+  });
+  try {
+    await api('/api/file?path='+encodeURIComponent(p),{method:'DELETE'});
+  } catch(e) {
+    showMsg('删除失败: ' + e.message);
+  }
   loadList();
 }
 
@@ -1841,7 +1896,7 @@ function newFolder(){
   });
 }
 
-// ==================== 上传核心（16/64 线程修复）====================
+// ==================== 上传核心 ====================
 function genTaskId(){ return 'task_'+Date.now()+'_'+Math.random().toString(36).slice(2,9); }
 const cancelledManualUploads = new Set();
 const abortControllers = new Map();
@@ -1849,7 +1904,7 @@ let localTasks = new Map();
 function addLocalTask(t){ localTasks.set(t.id, t); }
 function removeLocalTask(id){ localTasks.delete(id); }
 
-// 通用并发执行器：把 items 分给 concurrency 个 worker 并发处理
+// 通用并发执行器
 async function runWithConcurrency(items, concurrency, worker){
   let cursor = 0;
   const total = items.length;
@@ -1867,12 +1922,9 @@ async function runWithConcurrency(items, concurrency, worker){
   await Promise.all(runners);
 }
 
-// 任务创建并发数（64 线程）
-const TASK_CREATE_CONCURRENCY = 64;
-// 文件上传并发数（16 线程）
-const FILE_UPLOAD_CONCURRENCY = 16;
-// 单个文件分片上传并发数（16 线程）
-const CHUNK_UPLOAD_CONCURRENCY = 16;
+const TASK_CREATE_CONCURRENCY = 64;    // 任务创建 64 线程
+const FILE_UPLOAD_CONCURRENCY = 32;    // 文件上传 32 线程
+const CHUNK_UPLOAD_CONCURRENCY = 32;   // 分片上传 32 线程
 
 function selectFile(){ document.getElementById('file-input').click(); }
 function selectFolder(){ document.getElementById('folder-input').click(); }
@@ -1880,12 +1932,11 @@ function selectFolder(){ document.getElementById('folder-input').click(); }
 document.getElementById('file-input').addEventListener('change', e=>uploadFiles(e.target.files));
 document.getElementById('folder-input').addEventListener('change', e=>uploadFiles(e.target.files));
 
-// 批量上传：任务创建 64 线程，文件上传 16 线程
+// 批量上传：任务创建 64 线程，文件上传 32 线程
 async function uploadFiles(files){
   const fileArr = Array.from(files);
   if(fileArr.length === 0) return;
 
-  // 1) 64 线程并发创建本地任务卡片
   await runWithConcurrency(fileArr, TASK_CREATE_CONCURRENCY, async (file)=>{
     const taskId = genTaskId();
     file._netdiskTaskId = taskId;
@@ -1906,7 +1957,6 @@ async function uploadFiles(files){
   });
   loadTasks();
 
-  // 2) 16 线程并发上传文件
   await runWithConcurrency(fileArr, FILE_UPLOAD_CONCURRENCY, async (file)=>{
     try {
       await uploadOne(file, file._netdiskDir, file._netdiskTaskId);
@@ -1917,14 +1967,14 @@ async function uploadFiles(files){
   loadList();
 }
 
-// 单文件上传
+// 单文件上传（服务器中转）
 async function uploadOne(file, dir, externalTaskId){
   const path = dir ? dir + '/' + file.name : file.name;
   const taskId = externalTaskId || genTaskId();
   cancelledManualUploads.delete(taskId);
   const abortCtrl = new AbortController();
   abortControllers.set(taskId, abortCtrl);
-  const CLIENT_CHUNK = 5 * 1024 * 1024;
+  const CLIENT_CHUNK = CLIENT_CHUNK_SIZE;   // 70MB
 
   const baseTask = { id: taskId, name: file.name, status: 'uploading', message: '准备上传...', progress: 1, size: file.size, createdAt: Date.now(), updatedAt: Date.now() };
   if(!localTasks.has(taskId)) addLocalTask(baseTask);
@@ -1945,20 +1995,67 @@ async function uploadOne(file, dir, externalTaskId){
 
   try {
     if (file.size <= CLIENT_CHUNK) {
+      // 小文件：XHR 带进度
+      const t = localTasks.get(taskId);
+      if(t){ t.message = '上传 ' + fmtProgress(0, file.size); t.progress = 2; t.updatedAt = Date.now(); }
+      debouncedLoadTasks();
+
       const form = new FormData();
       form.append('path', path);
       form.append('file', file);
       form.append('taskId', taskId);
-      const t = localTasks.get(taskId);
-      if(t){ t.message = '上传中...'; t.progress = 5; t.updatedAt = Date.now(); }
-      debouncedLoadTasks();
-      await api('/api/upload', { method: 'POST', body: form, signal: abortCtrl.signal });
+
+      let lastLoaded = 0;
+      let lastTime = Date.now();
+      let smoothSpeed = 0;
+
+      await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/upload');
+        xhr.upload.onprogress = (e) => {
+          if (!e.lengthComputable) return;
+          const now = Date.now();
+          const dt = (now - lastTime) / 1000;
+          if (dt > 0.3) {
+            const instant = (e.loaded - lastLoaded) / dt;
+            smoothSpeed = smoothSpeed * 0.6 + instant * 0.4;
+            lastLoaded = e.loaded;
+            lastTime = now;
+          }
+          const pct = Math.max(2, Math.round((e.loaded / e.total) * 100));
+          const t = localTasks.get(taskId);
+          if(t){
+            t.message = '上传 ' + fmtProgress(e.loaded, e.total) + ' · ' + fmtSpd(smoothSpeed);
+            t.progress = pct;
+            t.updatedAt = Date.now();
+          }
+          debouncedLoadTasks();
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            const t = localTasks.get(taskId);
+            if(t){ t.message = '完成'; t.progress = 100; t.updatedAt = Date.now(); }
+            debouncedLoadTasks();
+            resolve();
+          } else {
+            try {
+              const j = JSON.parse(xhr.responseText);
+              reject(new Error(j.error || ('HTTP ' + xhr.status)));
+            } catch (e) { reject(new Error('HTTP ' + xhr.status)); }
+          }
+        };
+        xhr.onerror = () => reject(new Error('网络错误'));
+        xhr.onabort = () => reject(new Error('已取消'));
+        abortCtrl.signal.addEventListener('abort', () => xhr.abort());
+        xhr.send(form);
+      });
+
       removeLocalTask(taskId);
-      showMsg('上传完成: '+file.name);
+      showMsg('上传完成: ' + file.name);
       return;
     }
 
-    // 大文件分片上传
+    // 大文件：分片并发 32 线程 + 瞬时速度
     const start = await api('/api/upload/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1968,25 +2065,35 @@ async function uploadOne(file, dir, externalTaskId){
 
     const totalChunks = start.chunks;
     const uploadId = start.uploadId;
-    const isSerial = start.mode === 'serial';
     let doneBytes = 0;
+    let completedChunks = 0;
     let uploadError = null;
-    const t0 = Date.now();
-    let speedStr = '0 B/s';
 
+    let lastBytes = 0;
+    let lastTime = Date.now();
+    let smoothSpeed = 0;
     const speedTimer = setInterval(() => {
-      const dt = (Date.now() - t0) / 1000;
-      if (dt > 0) speedStr = fmtSpd(doneBytes / dt);
-    }, 1000);
+      const now = Date.now();
+      const dt = (now - lastTime) / 1000;
+      if (dt > 0.3) {
+        const instant = (doneBytes - lastBytes) / dt;
+        smoothSpeed = smoothSpeed * 0.6 + instant * 0.4;
+        lastBytes = doneBytes;
+        lastTime = now;
+      }
+    }, 500);
 
     const progressTimer = setInterval(() => {
       if (uploadError) return;
-      const pct = Math.min(90, Math.floor((doneBytes / file.size) * 90));
-      const stage = isSerial ? '写入GitHub ' : '上传 ';
+      const pct = Math.min(99, Math.floor((doneBytes / file.size) * 99));
       const t = localTasks.get(taskId);
-      if(t){ t.message = stage + fmtProgress(doneBytes, file.size) + ' · ' + speedStr; t.progress = pct; t.updatedAt = Date.now(); }
+      if(t){
+        t.message = '上传 ' + fmtProgress(doneBytes, file.size) + ' · ' + fmtSpd(smoothSpeed) + ' · 分片 ' + completedChunks + '/' + totalChunks;
+        t.progress = pct;
+        t.updatedAt = Date.now();
+      }
       debouncedLoadTasks();
-    }, 1500);
+    }, 500);
 
     async function uploadSingleChunk(idx) {
       if (abortCtrl.signal.aborted || cancelledManualUploads.has(taskId)) throw new Error('已取消');
@@ -1998,7 +2105,6 @@ async function uploadOne(file, dir, externalTaskId){
       form.append('index', String(idx));
       form.append('total', String(totalChunks));
       form.append('storage', start.storage);
-      form.append('mode', start.mode || 'batch');
       form.append('path', path);
       form.append('filename', file.name);
       form.append('chunk', blob, file.name + '.part' + idx);
@@ -2009,34 +2115,25 @@ async function uploadOne(file, dir, externalTaskId){
         try {
           await api('/api/upload/chunk', { method: 'POST', body: form, signal: abortCtrl.signal });
           doneBytes += blob.size;
+          completedChunks++;
           return;
         } catch (e) {
           if (e.message === '已取消' || abortCtrl.signal.aborted) throw new Error('已取消');
           retries++;
-          if (retries > 2) throw new Error('分片'+(idx+1)+'失败: '+(e.message||e));
+          if (retries > 2) throw new Error('分片' + (idx + 1) + '失败: ' + (e.message || e));
           await new Promise(r => setTimeout(r, 1000));
         }
       }
     }
 
-    if (isSerial) {
-      // 串行：大文件避免 KV 堆积
-      showMsg('文件大于500MB，逐片写入GitHub...');
-      for (let i = 0; i < totalChunks; i++) {
-        if (uploadError) break;
-        try { await uploadSingleChunk(i); }
-        catch (e) { uploadError = e; }
-      }
-    } else {
-      // 并发上传：16 线程
-      const indexes = [];
-      for (let i = 0; i < totalChunks; i++) indexes.push(i);
-      await runWithConcurrency(indexes, CHUNK_UPLOAD_CONCURRENCY, async (idx)=>{
-        if (uploadError) return;
-        try { await uploadSingleChunk(idx); }
-        catch (e) { uploadError = e; }
-      });
-    }
+    // 32 线程并发上传分片
+    const indexes = [];
+    for (let i = 0; i < totalChunks; i++) indexes.push(i);
+    await runWithConcurrency(indexes, CHUNK_UPLOAD_CONCURRENCY, async (idx) => {
+      if (uploadError) return;
+      try { await uploadSingleChunk(idx); }
+      catch (e) { uploadError = e; }
+    });
 
     clearInterval(speedTimer);
     clearInterval(progressTimer);
@@ -2045,42 +2142,23 @@ async function uploadOne(file, dir, externalTaskId){
 
     {
       const t = localTasks.get(taskId);
-      if(t){ t.message = '客户端完成，等待服务端...'; t.progress = 91; t.updatedAt = Date.now(); }
+      if(t){ t.message = '写入目录...'; t.progress = 99; t.updatedAt = Date.now(); }
     }
     debouncedLoadTasks();
 
     await api('/api/upload/finish', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ uploadId, path, filename: file.name, storage: start.storage, size: file.size, chunks: totalChunks, taskId, mode: start.mode || 'batch' })
+      body: JSON.stringify({ uploadId, path, filename: file.name, storage: start.storage, size: file.size, chunks: totalChunks, taskId })
     });
 
-    if (start.storage === 'github' && !isSerial) {
-      // 服务端后台写 GitHub，轮询任务状态
-      let pollCount = 0;
-      const fastPoll = setInterval(async () => {
-        pollCount++;
-        await loadTasks();
-        try {
-          const tasks = await api('/api/tasks') || [];
-          const t = tasks.find(x => x.id === taskId);
-          if (!t || t.status === 'done' || t.status === 'error' || t.status === 'cancelled' || pollCount > 240) {
-            clearInterval(fastPoll);
-            if (t && t.status === 'done') {
-              removeLocalTask(taskId);
-              showMsg('上传完成: '+file.name);
-            }
-          }
-        } catch(e){ clearInterval(fastPoll); }
-      }, 2000);
-    } else {
-      removeLocalTask(taskId);
-      showMsg('上传完成: '+file.name);
-    }
+    const t = localTasks.get(taskId);
+    if(t){ t.status = 'done'; t.message = '完成'; t.progress = 100; t.updatedAt = Date.now(); }
+    debouncedLoadTasks();
+    setTimeout(() => removeLocalTask(taskId), 1500);
+    showMsg('上传完成: '+file.name);
 
   } catch (e) {
-    if (typeof speedTimer !== 'undefined') clearInterval(speedTimer);
-    if (typeof progressTimer !== 'undefined') clearInterval(progressTimer);
     abortControllers.delete(taskId);
     cancelledManualUploads.delete(taskId);
     if (e.message === '已取消' || e.name === 'AbortError') {
@@ -2105,7 +2183,7 @@ async function manualSelectFolder(){ document.getElementById('manual-folder-inpu
 document.getElementById('manual-file-input').addEventListener('change', e=>manualUploadFiles(e.target.files));
 document.getElementById('manual-folder-input').addEventListener('change', e=>manualUploadFiles(e.target.files));
 
-// 手动直传：任务创建 64 线程，文件上传 16 线程
+// 手动直传：任务创建 64 线程，文件上传 32 线程
 async function manualUploadFiles(files){
   const fileArr = Array.from(files);
   if(fileArr.length === 0) return;
@@ -2160,7 +2238,7 @@ function blobToBase64(blob){
   });
 }
 
-// 手动直传单文件：分片 16 线程并发
+// 手动直传单文件：32 线程并发分片 + 瞬时速度
 async function manualUploadOne(file, dir, externalTaskId){
   const path = dir ? dir + '/' + file.name : file.name;
   const taskId = externalTaskId || genTaskId();
@@ -2189,13 +2267,39 @@ async function manualUploadOne(file, dir, externalTaskId){
 
     let uploadedBytes = 0;
     let completedChunks = 0;
-    const startTime = Date.now();
+    let lastBytes = 0;
+    let lastTime = Date.now();
+    let smoothSpeed = 0;
 
     function formatSpeed(bps){
       if (bps >= 1024 * 1024) return (bps / (1024 * 1024)).toFixed(2) + ' MB/s';
       if (bps >= 1024) return (bps / 1024).toFixed(2) + ' KB/s';
       return bps.toFixed(0) + ' B/s';
     }
+
+    const speedTimer = setInterval(() => {
+      const now = Date.now();
+      const dt = (now - lastTime) / 1000;
+      if (dt > 0.3) {
+        const instant = (uploadedBytes - lastBytes) / dt;
+        smoothSpeed = smoothSpeed * 0.6 + instant * 0.4;
+        lastBytes = uploadedBytes;
+        lastTime = now;
+      }
+    }, 500);
+
+    const progressTimer = setInterval(() => {
+      if (cancelledManualUploads.has(taskId)) return;
+      const t = localTasks.get(taskId);
+      if(t){
+        t.message = '直传 ' + formatSize(uploadedBytes) + '/' + formatSize(file.size)
+          + ' · ' + formatSpeed(smoothSpeed)
+          + ' · 分片 ' + completedChunks + '/' + total;
+        t.progress = Math.min(99, Math.floor((uploadedBytes / file.size) * 99));
+        t.updatedAt = Date.now();
+      }
+      debouncedLoadTasks();
+    }, 500);
 
     async function uploadManualChunk(i) {
       if (cancelledManualUploads.has(taskId)) throw new Error('已取消');
@@ -2234,7 +2338,6 @@ async function manualUploadOne(file, dir, externalTaskId){
         }
       }
 
-      // 通知服务器记录 sha（不阻塞后续分片）
       api('/api/upload/manual/chunk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2243,19 +2346,9 @@ async function manualUploadOne(file, dir, externalTaskId){
 
       uploadedBytes += blob.size;
       completedChunks++;
-      const progress = Math.min(90, Math.floor((uploadedBytes / file.size) * 90));
-      const totalElapsed = (Date.now() - startTime) / 1000;
-      const speed = totalElapsed > 0 ? uploadedBytes / totalElapsed : 0;
-      const t = localTasks.get(taskId);
-      if(t){
-        t.message = '直传 ' + formatSize(uploadedBytes) + '/' + formatSize(file.size) + ' · ' + formatSpeed(speed) + ' · 分片' + completedChunks + '/' + total;
-        t.progress = progress;
-        t.updatedAt = Date.now();
-      }
-      debouncedLoadTasks();
     }
 
-    // 16 线程并发上传分片
+    // 32 线程并发上传分片
     const chunkIndexes = [];
     for (let i = 0; i < total; i++) chunkIndexes.push(i);
     await runWithConcurrency(chunkIndexes, CHUNK_UPLOAD_CONCURRENCY, async (i)=>{
@@ -2263,13 +2356,14 @@ async function manualUploadOne(file, dir, externalTaskId){
       await uploadManualChunk(i);
     });
 
-    if (cancelledManualUploads.has(taskId)) {
-      throw new Error('已取消');
-    }
+    clearInterval(speedTimer);
+    clearInterval(progressTimer);
+
+    if (cancelledManualUploads.has(taskId)) throw new Error('已取消');
 
     {
       const t = localTasks.get(taskId);
-      if(t){ t.message = '上报服务器...'; t.progress = 95; t.updatedAt = Date.now(); }
+      if(t){ t.message = '上报服务器...'; t.progress = 99; t.updatedAt = Date.now(); }
     }
     debouncedLoadTasks();
 
@@ -2280,7 +2374,10 @@ async function manualUploadOne(file, dir, externalTaskId){
     });
 
     cancelledManualUploads.delete(taskId);
-    removeLocalTask(taskId);
+    const t = localTasks.get(taskId);
+    if(t){ t.status = 'done'; t.message = '完成'; t.progress = 100; t.updatedAt = Date.now(); }
+    debouncedLoadTasks();
+    setTimeout(() => removeLocalTask(taskId), 1500);
     showMsg('手动上传完成: ' + file.name);
   } catch (e) {
     console.error('[manual] upload failed:', e);
@@ -2438,6 +2535,7 @@ function closeModal(){ document.getElementById('modal').classList.remove('show')
 loadList();
 </script>
 `;
+
 // ==================== 登录页 ====================
 
 function loginPage() {
@@ -2542,7 +2640,7 @@ function loadScript(src, timeout=8000){ return new Promise((resolve,reject)=>{ c
 function loadCSS(href, timeout=8000){ return new Promise((resolve,reject)=>{ const l=document.createElement('link'); l.rel='stylesheet'; l.href=href; const t=setTimeout(()=>reject(new Error('load timeout: '+href)), timeout); l.onload=()=>{ clearTimeout(t); resolve(); }; l.onerror=()=>{ clearTimeout(t); reject(new Error('load failed: '+href)); }; document.head.appendChild(l); }); }
 function getMime(name){
   const ext=name.split('.').pop().toLowerCase();
-  const map={mp4:'video/mp4',webm:'video/webm',a3v8:'video/mp4',mkv:'video/x-matroska',mp3:'audio/mpeg',wav:'audio/wav',ogg:'audio/ogg',flac:'audio/flac',m4a:'audio/mp4',txt:'text/plain',md:'text/markdown',json:'application/json',js:'application/javascript',css:'text/css',html:'text/html',xml:'application/xml',zip:'application/zip',rar:'application/vnd.rar','7z':'application/x-7z-compressed',tar:'application/x-tar',gz:'application/gzip',pdf:'application/pdf',jpg:'image/jpeg',jpeg:'image/jpeg',png:'image/png',gif:'image/gif',webp:'image/webp'};
+  const map={mp4:'video/mp4',webm:'video/webm',mkv:'video/x-matroska',mp3:'audio/mpeg',wav:'audio/wav',ogg:'audio/ogg',flac:'audio/flac',m4a:'audio/mp4',txt:'text/plain',md:'text/markdown',json:'application/json',js:'application/javascript',css:'text/css',html:'text/html',xml:'application/xml',zip:'application/zip',rar:'application/vnd.rar','7z':'application/x-7z-compressed',tar:'application/x-tar',gz:'application/gzip',pdf:'application/pdf',jpg:'image/jpeg',jpeg:'image/jpeg',png:'image/png',gif:'image/gif',webp:'image/webp'};
   return map[ext]||'application/octet-stream';
 }
 async function load(){
@@ -2630,7 +2728,7 @@ async function renderPreview(){
       preview.innerHTML='<div class="empty">预览加载失败: '+escapeHtml(e.message)+'<br><a href="'+url+'" target="_blank">点击测试直链</a><br><a href="'+downloadUrl+'">下载文件</a></div>';
     }
   }
-  const iconMap={'mp4':'movie','a3v8':'movie','mp3':'audiotrack','wav':'audiotrack','ogg':'audiotrack','jpg':'image','jpeg':'image','png':'image','gif':'image','webp':'image','zip':'folder_zip','rar':'folder_zip','7z':'folder_zip','tar':'folder_zip','gz':'folder_zip','txt':'description','md':'description','json':'description','js':'description','css':'description','html':'description'};
+  const iconMap={'mp4':'movie','mp3':'audiotrack','wav':'audiotrack','ogg':'audiotrack','jpg':'image','jpeg':'image','png':'image','gif':'image','webp':'image','zip':'folder_zip','rar':'folder_zip','7z':'folder_zip','tar':'folder_zip','gz':'folder_zip','txt':'description','md':'description','json':'description','js':'description','css':'description','html':'description'};
   document.getElementById('file-icon').textContent=iconMap[ext]||'insert_drive_file';
 }
 async function renderZip(url){
@@ -3208,24 +3306,26 @@ async function handleRequest(request, env, ctx = null) {
     const storage = size <= KV_SIZE_LIMIT ? 'kv' : 'github';
     const chunkSize = Math.min(body.clientChunkSize || CLIENT_CHUNK_SIZE, CHUNK_SIZE);
     const chunks = Math.ceil(size / chunkSize);
-    const mode = (size > SERIAL_THRESHOLD || storage === 'kv') ? 'serial' : 'batch';
+
     if (storage === 'github') {
       await githubCreateRepo(uploadId, env);
     }
+
     await addTask(env, {
       id: taskId,
       name: filename,
       status: 'uploading',
-      message: mode === 'serial' ? 'GitHub写入 0/' + chunks : '准备分片上传...',
+      message: '准备分片上传...',
       progress: 0,
       size,
       createdAt: Date.now(),
       updatedAt: Date.now()
     });
-    return jsonResponse({ uploadId, storage, chunks, chunkSize, taskId, mode });
+
+    return jsonResponse({ uploadId, storage, chunks, chunkSize, taskId });
   }
 
-  // 大文件客户端分片上传：接收单分片
+  // 大文件客户端分片上传：接收单分片并立即写入 GitHub
   if (path === '/api/upload/chunk' && request.method === 'POST') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
@@ -3234,33 +3334,35 @@ async function handleRequest(request, env, ctx = null) {
     const index = parseInt(form.get('index'), 10);
     const total = parseInt(form.get('total'), 10);
     const taskId = form.get('taskId');
+    const storage = form.get('storage') || 'github';
     const chunkFile = form.get('chunk');
-    const mode = form.get('mode') || 'batch';
     if (!uploadId || isNaN(index) || !chunkFile) return errorResponse('缺少分片参数');
+
     const chunkBuf = await chunkFile.arrayBuffer();
-    const kv = getKV(uploadId, env);
-    const chunkKey = uploadId + '_chunk_' + index;
+
     try {
-      await kv.put(chunkKey, chunkBuf);
-      if (mode === 'serial') {
+      if (storage === 'kv') {
+        await getKV(uploadId, env).put(uploadId + '_chunk_' + index, chunkBuf);
+      } else {
         await githubUploadFile(uploadId, 'chunk_' + index, chunkBuf, env, 'chunk ' + index, true);
-        await kv.delete(chunkKey);
-        if (!isNaN(total) && taskId) {
-          await updateTaskThrottled(env, taskId, {
-            message: 'GitHub写入 ' + (index + 1) + '/' + total,
-            progress: Math.min(90, Math.floor(((index + 1) / total) * 90))
-          });
-        }
       }
-      return jsonResponse({ ok: true, index, mode });
+
+      if (!isNaN(total) && taskId) {
+        await updateTaskThrottled(env, taskId, {
+          message: '已写入 ' + (index + 1) + '/' + total + ' 分片',
+          progress: Math.min(90, Math.floor(((index + 1) / total) * 90))
+        });
+      }
+
+      return jsonResponse({ ok: true, index, total });
     } catch (e) {
-      console.error('分片上传失败', e);
+      console.error('分片上传失败', index, e);
       try { await updateTask(env, taskId, { status: 'error', message: e.message || '分片上传失败', progress: 0 }); } catch (_) {}
       return errorResponse(e.message || '分片上传失败', 500);
     }
   }
 
-  // 大文件客户端分片上传：完成并写入目录
+  // 大文件客户端分片上传：完成（所有分片已落 GitHub 或 KV，这里只写目录 + 合并 KV）
   if (path === '/api/upload/finish' && request.method === 'POST') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
@@ -3272,137 +3374,55 @@ async function handleRequest(request, env, ctx = null) {
     const size = body.size;
     const chunks = body.chunks;
     const taskId = body.taskId;
-    const mode = body.mode || 'batch';
     if (!filePath || !uploadId || !filename || !storage) return errorResponse('缺少完成参数');
 
-    const finishBackground = async () => {
-      try {
-        console.log('[finish] starting, uploadId=' + uploadId + ', chunks=' + chunks + ', mode=' + mode + ', size=' + formatSize(size));
-        const structure = await getStructure(env);
-        const oldNode = getNode(structure, filePath);
-        if (oldNode && oldNode.type === 'file') {
-          try { await deleteFileStorage(oldNode, env); } catch (e) { console.error(e); }
-        }
-
-        let finalStorage = storage;
-        let finalSsid = uploadId;
-
-        if (mode === 'serial') {
-          console.log('[finish] serial mode, writing directory only');
-          await updateTask(env, taskId, { message: '串流上传完成，正在写入目录...', progress: 95 });
-        } else if (storage === 'github') {
-          console.log('[finish] batch github mode');
-          await updateTask(env, taskId, { message: '服务端：开始写入 GitHub (' + chunks + ' 片)...', progress: 92 });
-
-          await githubCreateRepo(uploadId, env);
-
-          const totalBytes = Number(size) || 0;
-          let uploadedBytes = 0;
-          const startTime = Date.now();
-
-          for (let i = 0; i < chunks; i++) {
-            if (await isTaskCancelled(env, taskId)) {
-              await updateTask(env, taskId, { status: 'cancelled', message: '已取消', progress: 0 });
-              return;
-            }
-
-            const kvKey = uploadId + '_chunk_' + i;
-            const kv = getKV(uploadId, env);
-
-            let chunkBuf = null;
-            let kvRetries = 0;
-            while (kvRetries < 30) {
-              try {
-                chunkBuf = await kv.get(kvKey, { type: 'arrayBuffer' });
-                if (chunkBuf && chunkBuf.byteLength > 0) break;
-              } catch (kvErr) {
-                console.log('[finish] [' + i + '] KV read error: ' + kvErr.message);
-              }
-              kvRetries++;
-              await new Promise(r => setTimeout(r, 500));
-            }
-            if (!chunkBuf || chunkBuf.byteLength === 0) {
-              throw new Error('分片 ' + (i + 1) + '/' + chunks + ' KV读取失败');
-            }
-
-            let ghRetries = 0;
-            let lastErr = null;
-            while (ghRetries < 3) {
-              try {
-                await githubUploadFile(uploadId, 'chunk_' + i, chunkBuf, env, 'chunk ' + i, true);
-                break;
-              } catch (e) {
-                lastErr = e;
-                ghRetries++;
-                if (ghRetries < 3) await new Promise(r => setTimeout(r, 2000 * ghRetries));
-              }
-            }
-            if (ghRetries >= 3 && lastErr) {
-              throw new Error('分片 ' + (i + 1) + ' GitHub上传失败: ' + lastErr.message);
-            }
-
-            await kv.delete(kvKey);
-
-            uploadedBytes += chunkBuf.byteLength;
-            const elapsed = (Date.now() - startTime) / 1000;
-            const speed = elapsed > 0 ? uploadedBytes / elapsed : 0;
-            const progress = 92 + Math.floor(((i + 1) / chunks) * 7);
-            await updateTaskThrottled(env, taskId, {
-              message: 'GitHub写入 ' + (i + 1) + '/' + chunks + ' · ' + formatSize(uploadedBytes) + '/' + formatSize(totalBytes) + ' · ' + formatSpeed(speed),
-              progress: progress
-            });
-          }
-        } else if (storage === 'kv' && chunks > 1) {
-          try {
-            await updateTask(env, taskId, { message: '服务端合并分片...', progress: 92 });
-            let totalLen = 0;
-            const bufs = [];
-            for (let i = 0; i < chunks; i++) {
-              const b = await getKV(uploadId, env).get(uploadId + '_chunk_' + i, { type: 'arrayBuffer' });
-              bufs.push(new Uint8Array(b));
-              totalLen += b.byteLength;
-            }
-            const combined = new Uint8Array(totalLen);
-            let off = 0;
-            for (const b of bufs) { combined.set(b, off); off += b.byteLength; }
-            await getKV(finalSsid, env).put(finalSsid, combined.buffer);
-            for (let i = 0; i < chunks; i++) await getKV(uploadId, env).delete(uploadId + '_chunk_' + i);
-            finalStorage = 'kv';
-          } catch (e) {
-            console.error('服务端合并分片失败', e);
-            await updateTask(env, taskId, { status: 'error', message: '合并分片失败: ' + e.message, progress: 0 });
-            return;
-          }
-        }
-
-        const structure2 = await getStructure(env);
-        setNode(structure2, filePath, {
-          type: 'file',
-          name: filename,
-          ssid: finalSsid,
-          storage: finalStorage,
-          size,
-          chunks: storage === 'kv' ? 1 : chunks,
-          createdAt: Date.now()
-        });
-        await saveStructure(env, structure2);
-        await updateTask(env, taskId, { status: 'done', message: '完成', progress: 100 });
-        console.log('[finish] done');
-      } catch (e) {
-        console.error('finishBackground 未捕获异常:', e);
-        try {
-          await updateTask(env, taskId, { status: 'error', message: '服务端处理失败: ' + e.message, progress: 0 });
-        } catch (_) {}
+    try {
+      const structure = await getStructure(env);
+      const oldNode = getNode(structure, filePath);
+      if (oldNode && oldNode.type === 'file') {
+        try { await deleteFileStorage(oldNode, env); } catch (e) { console.error(e); }
       }
-    };
 
-    if (ctx && ctx.waitUntil) {
-      ctx.waitUntil(finishBackground());
-    } else {
-      await finishBackground();
+      let finalStorage = storage;
+      let finalSsid = uploadId;
+      let finalChunks = chunks;
+
+      if (storage === 'kv' && chunks > 1) {
+        await updateTask(env, taskId, { message: '合并分片...', progress: 95 });
+        let totalLen = 0;
+        const bufs = [];
+        for (let i = 0; i < chunks; i++) {
+          const b = await getKV(uploadId, env).get(uploadId + '_chunk_' + i, { type: 'arrayBuffer' });
+          if (!b) throw new Error('分片 ' + (i + 1) + ' 丢失');
+          bufs.push(new Uint8Array(b));
+          totalLen += b.byteLength;
+        }
+        const combined = new Uint8Array(totalLen);
+        let off = 0;
+        for (const b of bufs) { combined.set(b, off); off += b.byteLength; }
+        await getKV(uploadId, env).put(uploadId, combined.buffer);
+        for (let i = 0; i < chunks; i++) await getKV(uploadId, env).delete(uploadId + '_chunk_' + i);
+        finalStorage = 'kv';
+        finalChunks = 1;
+      }
+
+      setNode(structure, filePath, {
+        type: 'file',
+        name: filename,
+        ssid: finalSsid,
+        storage: finalStorage,
+        size,
+        chunks: finalChunks,
+        createdAt: Date.now()
+      });
+      await saveStructure(env, structure);
+      await updateTask(env, taskId, { status: 'done', message: '完成', progress: 100 });
+      return jsonResponse({ ok: true });
+    } catch (e) {
+      console.error('finish 失败', e);
+      await updateTask(env, taskId, { status: 'error', message: e.message || '完成失败', progress: 0 });
+      return errorResponse(e.message || '完成失败', 500);
     }
-
-    return jsonResponse({ ok: true, stage: 'server' });
   }
 
   // ==================== 手动上传（客户端直传 GitHub）====================
@@ -3454,7 +3474,7 @@ async function handleRequest(request, env, ctx = null) {
     if (!uploadId || index == null || !sha) return errorResponse('缺少参数');
 
     await updateTaskThrottled(env, taskId, {
-      message: '客户端直传 ' + (index + 1) + '/' + body.total,
+      message: '直传 ' + (index + 1) + '/' + body.total,
       progress: Math.min(90, Math.floor((index + 1) / body.total * 90))
     });
 
@@ -3511,17 +3531,28 @@ async function handleRequest(request, env, ctx = null) {
     const structure = await getStructure(env);
     const node = getNode(structure, p);
     if (!node) return errorResponse('不存在', 404);
+
+    const filesToDelete = [];
     if (node.type === 'file') {
-      await deleteFileStorage(node, env);
+      filesToDelete.push(node);
     } else {
       const paths = collectPaths(node, p);
       for (const cp of paths) {
         const child = getNode(structure, cp);
-        if (child && child.type === 'file') await deleteFileStorage(child, env);
+        if (child && child.type === 'file') filesToDelete.push(child);
       }
     }
+
     deleteNode(structure, p);
     await saveStructure(env, structure);
+
+    const bgTask = (async () => {
+      try { await deleteFileStoragesConcurrently(filesToDelete, env, 32); }
+      catch (e) { console.error('[bg delete]', e); }
+    })();
+    if (ctx && ctx.waitUntil) ctx.waitUntil(bgTask);
+    else bgTask.catch(() => {});
+
     return jsonResponse({ ok: true });
   }
 
@@ -3577,21 +3608,31 @@ async function handleRequest(request, env, ctx = null) {
     const body = await request.json();
     const paths = body.paths || [];
     const structure = await getStructure(env);
+
+    const filesToDelete = [];
     for (const p of paths) {
       const node = getNode(structure, p);
       if (!node) continue;
       if (node.type === 'file') {
-        await deleteFileStorage(node, env);
+        filesToDelete.push(node);
       } else {
         const childPaths = collectPaths(node, p);
         for (const cp of childPaths) {
           const child = getNode(structure, cp);
-          if (child && child.type === 'file') await deleteFileStorage(child, env);
+          if (child && child.type === 'file') filesToDelete.push(child);
         }
       }
       deleteNode(structure, p);
     }
     await saveStructure(env, structure);
+
+    const bgTask = (async () => {
+      try { await deleteFileStoragesConcurrently(filesToDelete, env, 32); }
+      catch (e) { console.error('[bg batch delete]', e); }
+    })();
+    if (ctx && ctx.waitUntil) ctx.waitUntil(bgTask);
+    else bgTask.catch(() => {});
+
     return jsonResponse({ ok: true });
   }
 
@@ -3633,9 +3674,8 @@ async function handleRequest(request, env, ctx = null) {
     if (forbid) return forbid;
     const body = await request.json().catch(() => ({}));
     const ids = Array.isArray(body.ids) ? body.ids : [];
-    if (ids.length) {
-      const tasks = await getTasks(env);
-      await saveTasks(env, tasks.filter(t => !ids.includes(t.id)));
+    for (const id of ids) {
+      try { await deleteTask(env, id); } catch (e) {}
     }
     return jsonResponse({ ok: true, deleted: ids.length });
   }
@@ -3734,25 +3774,32 @@ async function handleRequest(request, env, ctx = null) {
     if (forbid) return forbid;
     const body = await request.json();
     if (body.password !== env.CLOUD_PASSWORD) return errorResponse('密码错误', 403);
+
     const structure = await getStructure(env);
     const allPaths = collectPaths(structure);
+    const filesToDelete = [];
     for (const p of allPaths) {
       const node = getNode(structure, p);
-      if (node && node.type === 'file') {
-        try { await deleteFileStorage(node, env); } catch (e) { console.error(e); }
-      }
+      if (node && node.type === 'file') filesToDelete.push(node);
     }
-    for (const kv of [env.FILE_KV_1, env.FILE_KV_2, env.FILE_KV_3, env.FILE_KV_4, env.FILE_KV_5]) {
-      try {
-        const list = await kv.list();
-        for (const key of list.keys) {
-          try { await kv.delete(key.name); } catch (e) { console.error(e); }
-        }
-      } catch (e) { console.error(e); }
-    }
+
     await d1Set(env, 'file_structure', { type: 'root', name: '', children: {}, createdAt: Date.now() });
-    await d1Set(env, 'tasks', []);
-    await d1Set(env, 'app_settings', {});
+
+    const bgTask = (async () => {
+      try { await deleteFileStoragesConcurrently(filesToDelete, env, 32); } catch (e) { console.error(e); }
+      for (const kv of [env.FILE_KV_1, env.FILE_KV_2, env.FILE_KV_3, env.FILE_KV_4, env.FILE_KV_5]) {
+        try {
+          const list = await kv.list();
+          for (const key of list.keys) {
+            try { await kv.delete(key.name); } catch (e) { console.error(e); }
+          }
+        } catch (e) { console.error(e); }
+      }
+      await getD1(env).prepare("DELETE FROM kv_store WHERE key LIKE 'task_%'").run();
+      await d1Set(env, 'app_settings', {});
+    })();
+    if (ctx && ctx.waitUntil) ctx.waitUntil(bgTask);
+
     return jsonResponse({ ok: true });
   }
 
