@@ -1,16 +1,5 @@
 /**
- * Cloudflare Worker 直链网盘（最终修复版）
- * 
- * 修复：
- * 1. 任务每任务独立一行，消除并发覆盖导致的上传数量限制
- * 2. 分片直接在自己的请求里写 GitHub，修复 7 分片后卡住
- * 3. 客户端上传服务器/GitHub 一律 32 线程
- * 4. 分片大小 70MB
- * 5. 删除文件/文件夹：直接删仓库 + 32 并发 + 结构先更新，即时响应
- * 6. 客户端小文件用 XHR 显示进度和瞬时速度
- * 7. 修复服务器中转上传卡"排队等待"（补 CLIENT_CHUNK_SIZE 常量）
- * 8. 修复手动上传看不到速度/进度（loadTasks 不覆盖本地消息）
- * 9. 服务端消息也带速度和进度
+ * Cloudflare Worker 直链网盘（完整最终版）
  */
 
 const GITHUB_USER = 'ikecode26';
@@ -30,30 +19,15 @@ function proxyUrl(url) {
 
 let d1Initialized = false;
 
-async function loggedFetch(url, options = {}) {
-  const method = options.method || 'GET';
-  console.log(`[fetch] ${method} ${url}`);
-  try {
-    const resp = await fetch(url, options);
-    console.log(`[fetch] ${method} ${url} -> ${resp.status}`);
-    return resp;
-  } catch (e) {
-    console.error(`[fetch] ${method} ${url} failed:`, e);
-    throw e;
-  }
-}
-
 async function fetchWithTimeout(url, options = {}, timeoutMs = 30000) {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await loggedFetch(url, { ...options, signal: controller.signal });
+    return await fetch(url, { ...options, signal: controller.signal });
   } finally {
     clearTimeout(id);
   }
 }
-
-// ==================== 工具函数 ====================
 
 function ssid() {
   const arr = new Uint8Array(16);
@@ -61,31 +35,25 @@ function ssid() {
   return Array.from(arr, b => b.toString(36)).join('').replace(/[^a-z0-9]/g, '') + Date.now().toString(36) + Date.now().toString(36);
 }
 
-function getKV(ssid, env) {
+function getKV(sid, env) {
   const kvs = [env.FILE_KV_1, env.FILE_KV_2, env.FILE_KV_3, env.FILE_KV_4, env.FILE_KV_5];
   let sum = 0;
-  for (let i = 0; i < ssid.length; i++) sum += ssid.charCodeAt(i);
+  for (let i = 0; i < sid.length; i++) sum += sid.charCodeAt(i);
   return kvs[sum % kvs.length];
 }
 
 function arrayBufferToBase64(buffer) {
-  if (typeof Buffer !== 'undefined') {
-    return Buffer.from(buffer).toString('base64');
-  }
+  if (typeof Buffer !== 'undefined') return Buffer.from(buffer).toString('base64');
   const bytes = new Uint8Array(buffer);
-  const len = bytes.byteLength;
-  const chunkSize = 0x8000;
   let binary = '';
-  for (let i = 0; i < len; i += chunkSize) {
-    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
-  }
+  const cs = 0x8000;
+  for (let i = 0; i < bytes.byteLength; i += cs) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + cs));
   return btoa(binary);
 }
 
 function formatSize(bytes) {
   if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const k = 1024, sizes = ['B', 'KB', 'MB', 'GB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
@@ -119,8 +87,6 @@ function errorResponse(msg, status = 400) {
   return jsonResponse({ error: msg }, status);
 }
 
-// ==================== 密码验证 ====================
-
 function checkPassword(request, env) {
   const password = env.CLOUD_PASSWORD;
   if (!password) return true;
@@ -144,8 +110,6 @@ function requirePassword(request, env) {
   if (!checkPassword(request, env)) return errorResponse('需要密码访问', 401);
   return null;
 }
-
-// ==================== D1 通用存储 ====================
 
 function getD1(env) {
   if (!env.NDK) throw new Error('D1 数据库 NDK 未绑定');
@@ -171,23 +135,12 @@ async function d1Set(env, key, value) {
     .bind(key, JSON.stringify(value)).run();
 }
 
-// ==================== 文件结构操作 ====================
-
 async function getStructure(env) {
   return await d1Get(env, 'file_structure', { type: 'root', name: '', children: {}, createdAt: Date.now() });
 }
-
-async function saveStructure(env, structure) {
-  await d1Set(env, 'file_structure', structure);
-}
-
-async function getSettings(env) {
-  return await d1Get(env, 'app_settings', {});
-}
-
-async function saveSettings(env, settings) {
-  await d1Set(env, 'app_settings', settings);
-}
+async function saveStructure(env, structure) { await d1Set(env, 'file_structure', structure); }
+async function getSettings(env) { return await d1Get(env, 'app_settings', {}); }
+async function saveSettings(env, settings) { await d1Set(env, 'app_settings', settings); }
 
 function getNode(structure, path) {
   const parts = path.split('/').filter(Boolean);
@@ -205,9 +158,7 @@ function setNode(structure, path, node) {
   let parent = structure;
   for (let i = 0; i < parts.length - 1; i++) {
     const p = parts[i];
-    if (!parent.children[p]) {
-      parent.children[p] = { type: 'folder', name: p, children: {}, createdAt: Date.now() };
-    }
+    if (!parent.children[p]) parent.children[p] = { type: 'folder', name: p, children: {}, createdAt: Date.now() };
     parent = parent.children[p];
   }
   parent.children[parts[parts.length - 1]] = node;
@@ -221,10 +172,7 @@ function deleteNode(structure, path) {
     if (!parent.children[p]) return false;
     parent = parent.children[p];
   }
-  if (parent.children[parts[parts.length - 1]]) {
-    delete parent.children[parts[parts.length - 1]];
-    return true;
-  }
+  if (parent.children[parts[parts.length - 1]]) { delete parent.children[parts[parts.length - 1]]; return true; }
   return false;
 }
 
@@ -259,9 +207,7 @@ function collectPaths(node, base = '') {
 function cloneNode(node) {
   if (node.type === 'file') return { ...node, createdAt: Date.now() };
   const copy = { ...node, children: {} };
-  for (const [name, child] of Object.entries(node.children)) {
-    copy.children[name] = cloneNode(child);
-  }
+  for (const [name, child] of Object.entries(node.children)) copy.children[name] = cloneNode(child);
   return copy;
 }
 
@@ -292,11 +238,8 @@ function removeChild(structure, childPath) {
 
 function copyMissingChildren(sourceNode, targetNode) {
   for (const [childName, child] of Object.entries(sourceNode.children || {})) {
-    if (!targetNode.children[childName]) {
-      targetNode.children[childName] = cloneNode(child);
-    } else if (child.type === 'folder' && targetNode.children[childName].type === 'folder') {
-      copyMissingChildren(child, targetNode.children[childName]);
-    }
+    if (!targetNode.children[childName]) targetNode.children[childName] = cloneNode(child);
+    else if (child.type === 'folder' && targetNode.children[childName].type === 'folder') copyMissingChildren(child, targetNode.children[childName]);
   }
   return { ok: true };
 }
@@ -336,9 +279,7 @@ function copyNode(structure, path, targetPath, mode = 'overwrite') {
   if (targetNode.children[name]) {
     if (mode === 'skip') return { ok: true };
     if (mode === 'newOnly') {
-      if (node.type === 'folder' && targetNode.children[name].type === 'folder') {
-        return copyMissingChildren(node, targetNode.children[name]);
-      }
+      if (node.type === 'folder' && targetNode.children[name].type === 'folder') return copyMissingChildren(node, targetNode.children[name]);
       return { ok: true };
     }
     if (mode === 'rename') {
@@ -350,14 +291,13 @@ function copyNode(structure, path, targetPath, mode = 'overwrite') {
     }
     removeChild(structure, (targetPath ? targetPath + '/' : '') + name);
   }
-  const cloned = cloneNode(node);
-  targetNode.children[name] = cloned;
+  targetNode.children[name] = cloneNode(node);
   return { ok: true };
 }
 
 // ==================== GitHub API ====================
 
-async function githubCreateRepo(ssid, env) {
+async function githubCreateRepo(sid, env) {
   const headers = {
     'Authorization': `token ${env.GITHUB_TOKEN}`,
     'Accept': 'application/vnd.github+json',
@@ -369,34 +309,29 @@ async function githubCreateRepo(ssid, env) {
     'Accept': 'application/vnd.github+json',
     'User-Agent': 'netdisk-worker'
   };
-
-  const exist = await fetchWithTimeout(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}`, { headers: getHeaders }, 20000).catch(() => null);
-  if (exist && exist.ok) return { name: ssid, reused: true };
-
+  const exist = await fetchWithTimeout(`${GITHUB_API}/repos/${GITHUB_USER}/${sid}`, { headers: getHeaders }, 20000).catch(() => null);
+  if (exist && exist.ok) return { name: sid, reused: true };
   const resp = await fetchWithTimeout(`${GITHUB_API}/user/repos`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ name: ssid, private: false, auto_init: true, description: 'Netdisk storage' })
+    method: 'POST', headers,
+    body: JSON.stringify({ name: sid, private: false, auto_init: true, description: 'Netdisk storage' })
   }, 30000);
-
   if (!resp.ok) {
     const txt = await resp.text();
-    if (resp.status === 422 && txt.includes('name already exists')) return { name: ssid, reused: true };
+    if (resp.status === 422 && txt.includes('name already exists')) return { name: sid, reused: true };
     throw new Error(`创建仓库失败: ${resp.status} ${txt}`);
   }
-
   const data = await resp.json();
   for (let i = 0; i < 10; i++) {
     await new Promise(r => setTimeout(r, 300));
-    const check = await fetchWithTimeout(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}`, { headers: getHeaders }, 10000).catch(() => null);
+    const check = await fetchWithTimeout(`${GITHUB_API}/repos/${GITHUB_USER}/${sid}`, { headers: getHeaders }, 10000).catch(() => null);
     if (check && check.ok) return data;
   }
   return data;
 }
 
-async function githubGetFileSha(ssid, path, env) {
+async function githubGetFileSha(sid, path, env) {
   try {
-    const resp = await fetchWithTimeout(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}/contents/${encodeURIComponent(path)}`, {
+    const resp = await fetchWithTimeout(`${GITHUB_API}/repos/${GITHUB_USER}/${sid}/contents/${encodeURIComponent(path)}`, {
       headers: { 'Authorization': `token ${env.GITHUB_TOKEN}`, 'Accept': 'application/vnd.github+json', 'User-Agent': 'netdisk-worker' }
     }, 20000);
     if (!resp.ok) return null;
@@ -405,18 +340,16 @@ async function githubGetFileSha(ssid, path, env) {
   } catch (e) { return null; }
 }
 
-async function githubUploadFile(ssid, path, content, env, message = 'upload', skipVerify = false) {
+async function githubUploadFile(sid, path, content, env, message = 'upload', skipVerify = false) {
   const base64 = arrayBufferToBase64(content);
-  if (base64.length > 95 * 1024 * 1024) {
-    throw new Error(`分片 base64 后 ${(base64.length / 1024 / 1024).toFixed(1)}MB 超过 GitHub 95MB 限制，请减小分片`);
-  }
+  if (base64.length > 95 * 1024 * 1024) throw new Error(`分片 base64 后 ${(base64.length / 1024 / 1024).toFixed(1)}MB 超过 GitHub 限制`);
   let retries = 0;
   const maxRetries = 5;
   while (true) {
-    const sha = skipVerify ? null : await githubGetFileSha(ssid, path, env);
+    const sha = skipVerify ? null : await githubGetFileSha(sid, path, env);
     const body = { message, content: base64 };
     if (sha) body.sha = sha;
-    const resp = await fetchWithTimeout(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}/contents/${encodeURIComponent(path)}`, {
+    const resp = await fetchWithTimeout(`${GITHUB_API}/repos/${GITHUB_USER}/${sid}/contents/${encodeURIComponent(path)}`, {
       method: 'PUT',
       headers: {
         'Authorization': `token ${env.GITHUB_TOKEN}`,
@@ -426,7 +359,6 @@ async function githubUploadFile(ssid, path, content, env, message = 'upload', sk
       },
       body: JSON.stringify(body)
     }, 180000);
-
     if (resp.ok) {
       let data = null;
       try { data = await resp.json(); } catch (e) {}
@@ -434,17 +366,15 @@ async function githubUploadFile(ssid, path, content, env, message = 'upload', sk
     } else {
       const txt = await resp.text();
       if ((resp.status === 409 || (resp.status === 422 && txt.includes('sha'))) && retries < maxRetries) {
-        retries++;
-        await new Promise(r => setTimeout(r, 1000));
-        continue;
+        retries++; await new Promise(r => setTimeout(r, 1000)); continue;
       }
       throw new Error(`上传 GitHub 失败: ${resp.status} ${txt}`);
     }
   }
 }
 
-async function githubDeleteRepo(ssid, env) {
-  const resp = await fetchWithTimeout(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}`, {
+async function githubDeleteRepo(sid, env) {
+  const resp = await fetchWithTimeout(`${GITHUB_API}/repos/${GITHUB_USER}/${sid}`, {
     method: 'DELETE',
     headers: { 'Authorization': `token ${env.GITHUB_TOKEN}`, 'Accept': 'application/vnd.github+json', 'User-Agent': 'netdisk-worker' }
   }, 30000);
@@ -453,16 +383,16 @@ async function githubDeleteRepo(ssid, env) {
   throw new Error(`删除仓库失败: ${resp.status} ${txt}`);
 }
 
-async function githubDeleteFile(ssid, path, env) {
+async function githubDeleteFile(sid, path, env) {
   try {
-    const infoResp = await fetchWithTimeout(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}/contents/${encodeURIComponent(path)}`, {
+    const infoResp = await fetchWithTimeout(`${GITHUB_API}/repos/${GITHUB_USER}/${sid}/contents/${encodeURIComponent(path)}`, {
       headers: { 'Authorization': `token ${env.GITHUB_TOKEN}`, 'Accept': 'application/vnd.github+json', 'User-Agent': 'netdisk-worker' }
     }, 20000);
     if (!infoResp.ok) return;
     const info = await infoResp.json();
     const sha = Array.isArray(info) ? null : info.sha;
     if (!sha) return;
-    await fetchWithTimeout(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}/contents/${encodeURIComponent(path)}`, {
+    await fetchWithTimeout(`${GITHUB_API}/repos/${GITHUB_USER}/${sid}/contents/${encodeURIComponent(path)}`, {
       method: 'DELETE',
       headers: {
         'Authorization': `token ${env.GITHUB_TOKEN}`,
@@ -472,38 +402,30 @@ async function githubDeleteFile(ssid, path, env) {
       },
       body: JSON.stringify({ message: 'delete', sha })
     }, 20000);
-  } catch (e) { console.error('[githubDeleteFile]', e); }
+  } catch (e) {}
 }
 
-async function githubGetDownloadUrl(ssid, path, env) {
-  const resp = await fetchWithTimeout(`${GITHUB_API}/repos/${GITHUB_USER}/${ssid}/contents/${encodeURIComponent(path)}`, {
+async function githubGetDownloadUrl(sid, path, env) {
+  const resp = await fetchWithTimeout(`${GITHUB_API}/repos/${GITHUB_USER}/${sid}/contents/${encodeURIComponent(path)}`, {
     headers: { 'Authorization': `token ${env.GITHUB_TOKEN}`, 'Accept': 'application/vnd.github+json', 'User-Agent': 'netdisk-worker' }
   }, 20000);
-  if (!resp.ok) {
-    const txt = await resp.text();
-    throw new Error(`获取下载链接失败: ${resp.status} ${txt}`);
-  }
+  if (!resp.ok) throw new Error(`获取下载链接失败: ${resp.status}`);
   const data = await resp.json();
   return data.download_url;
 }
 
-async function githubFetchFile(ssid, path, env) {
-  const url = await githubGetDownloadUrl(ssid, path, env);
+async function githubFetchFile(sid, path, env) {
+  const url = await githubGetDownloadUrl(sid, path, env);
   const proxiedUrl = proxyUrl(url);
   let lastErr = null;
   for (let i = 0; i < 5; i++) {
-    const resp = await fetchWithTimeout(proxiedUrl, {
-      headers: { 'User-Agent': 'netdisk-worker', 'Accept-Encoding': 'identity' }
-    }, 60000);
+    const resp = await fetchWithTimeout(proxiedUrl, { headers: { 'User-Agent': 'netdisk-worker', 'Accept-Encoding': 'identity' } }, 60000);
     if (resp.ok) return resp;
     lastErr = `GitHub 下载失败: ${resp.status}`;
-    if (resp.status === 404) {
-      await new Promise(r => setTimeout(r, 800));
-      continue;
-    }
+    if (resp.status === 404) { await new Promise(r => setTimeout(r, 800)); continue; }
     throw new Error(lastErr);
   }
-  throw new Error(lastErr || `GitHub 下载失败`);
+  throw new Error(lastErr);
 }
 
 async function githubStreamChunks(fileNode, writable, env) {
@@ -518,15 +440,11 @@ async function githubStreamChunks(fileNode, writable, env) {
         await writer.write(value);
       }
     }
-  } catch (e) {
-    await writer.abort(e);
-    throw e;
-  } finally {
-    try { await writer.close(); } catch (e) {}
-  }
+  } catch (e) { await writer.abort(e); throw e; }
+  finally { try { await writer.close(); } catch (e) {} }
 }
 
-// ==================== 任务系统（每任务独立一行）====================
+// ==================== 任务系统 ====================
 
 async function getTasks(env) {
   await ensureD1(env);
@@ -537,15 +455,6 @@ async function getTasks(env) {
   }
   tasks.sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
   return tasks.slice(0, 300);
-}
-
-async function saveTasks(env, tasks) {
-  await ensureD1(env);
-  await getD1(env).prepare("DELETE FROM kv_store WHERE key LIKE 'task_%'").run();
-  for (const t of tasks) {
-    await getD1(env).prepare('INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)')
-      .bind('task_' + t.id, JSON.stringify(t)).run();
-  }
 }
 
 async function addTask(env, task) {
@@ -569,9 +478,7 @@ async function updateTask(env, id, updates) {
     .bind('task_' + id, JSON.stringify(task)).run();
 }
 
-async function cancelTask(env, id) {
-  await updateTask(env, id, { status: 'cancelled', message: '已取消' });
-}
+async function cancelTask(env, id) { await updateTask(env, id, { status: 'cancelled', message: '已取消' }); }
 
 async function deleteTask(env, id) {
   await ensureD1(env);
@@ -592,30 +499,25 @@ async function uploadBackgroundImage(buffer, ext, env) {
   await githubCreateRepo(ASSETS_REPO, env);
   const fileName = 'bg_' + Date.now() + '.' + ext;
   await githubUploadFile(ASSETS_REPO, fileName, buffer, env, 'background image');
-  const url = await githubGetDownloadUrl(ASSETS_REPO, fileName, env);
-  return url;
+  return await githubGetDownloadUrl(ASSETS_REPO, fileName, env);
 }
 
 async function uploadFontFile(buffer, ext, env) {
   await githubCreateRepo(ASSETS_REPO, env);
   const fileName = 'font_' + Date.now() + '.' + ext;
   await githubUploadFile(ASSETS_REPO, fileName, buffer, env, 'custom font');
-  const url = await githubGetDownloadUrl(ASSETS_REPO, fileName, env);
-  return url;
+  return await githubGetDownloadUrl(ASSETS_REPO, fileName, env);
 }
 
 // ==================== 存储核心 ====================
 
 async function deleteFileStorage(node, env) {
   if (node.storage === 'kv') {
-    try { await getKV(node.ssid, env).delete(node.ssid); } catch (e) { console.error(e); }
+    try { await getKV(node.ssid, env).delete(node.ssid); } catch (e) {}
     return;
   }
   if (node.storage === 'github') {
-    try {
-      await githubDeleteRepo(node.ssid, env);
-      return;
-    } catch (e) { console.error('[delete] 删仓库失败', e); }
+    try { await githubDeleteRepo(node.ssid, env); return; } catch (e) {}
     const tasks = [];
     if (node.chunks > 1) {
       for (let i = 0; i < node.chunks; i++) tasks.push(githubDeleteFile(node.ssid, `chunk_${i}`, env));
@@ -635,12 +537,11 @@ async function deleteFileStoragesConcurrently(nodes, env, concurrency = 32) {
     while (true) {
       const idx = cursor++;
       if (idx >= arr.length) return;
-      try { await deleteFileStorage(arr[idx], env); } catch (e) { console.error('[batch delete]', e); }
+      try { await deleteFileStorage(arr[idx], env); } catch (e) {}
     }
   }
   const runners = [];
-  const n = Math.min(concurrency, arr.length);
-  for (let i = 0; i < n; i++) runners.push(worker());
+  for (let i = 0; i < Math.min(concurrency, arr.length); i++) runners.push(worker());
   await Promise.all(runners);
 }
 
@@ -668,7 +569,6 @@ async function buildDownloadResponse(node, filename, env, inline = false) {
     const resp = await githubFetchFile(node.ssid, node.githubPath || node.name || filename, env);
     return new Response(resp.body, { headers });
   } catch (e) {
-    console.error('buildDownloadResponse error', e);
     return errorResponse('文件下载失败: ' + e.message, 500);
   }
 }
@@ -683,26 +583,19 @@ function checkBasicAuth(request, env) {
   if (!m) return false;
   try {
     const creds = atob(m[1]);
-    const pass = creds.split(':').slice(1).join(':');
-    return pass === password;
+    return creds.split(':').slice(1).join(':') === password;
   } catch (e) { return false; }
 }
 
 function davUnauthorized() {
   return new Response('Unauthorized', { status: 401, headers: { 'WWW-Authenticate': 'Basic realm="netdisk"' } });
 }
-
 function davXmlResponse(xml, status = 207) {
   return new Response(xml, { status, headers: { 'Content-Type': 'text/xml; charset=utf-8', 'DAV': '1, 2' } });
 }
-
 function toDavDate(ts) { return new Date(ts).toUTCString(); }
-
 function davHref(path) { return '/webdav' + encodeURI(path).replace(/%2F/g, '/'); }
-
-function escapeXml(text) {
-  return String(text).replace(/[<>&'"]/g, m => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[m]));
-}
+function escapeXml(text) { return String(text).replace(/[<>&'"]/g, m => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[m])); }
 
 function davPropResponse(path, node) {
   const name = path ? path.split('/').filter(Boolean).pop() : '';
@@ -710,11 +603,8 @@ function davPropResponse(path, node) {
   const href = davHref(path || '/');
   const lastMod = toDavDate(node && node.createdAt ? node.createdAt : Date.now());
   let props = `<D:displayname>${escapeXml(name || 'root')}</D:displayname>`;
-  if (isFolder) {
-    props += `<D:resourcetype><D:collection/></D:resourcetype><D:getcontentlength>0</D:getcontentlength>`;
-  } else {
-    props += `<D:resourcetype/><D:getcontentlength>${node.size || 0}</D:getcontentlength><D:getcontenttype>${getMime(name)}</D:getcontenttype>`;
-  }
+  if (isFolder) props += `<D:resourcetype><D:collection/></D:resourcetype><D:getcontentlength>0</D:getcontentlength>`;
+  else props += `<D:resourcetype/><D:getcontentlength>${node.size || 0}</D:getcontentlength><D:getcontenttype>${getMime(name)}</D:getcontenttype>`;
   props += `<D:getlastmodified>${lastMod}</D:getlastmodified>`;
   return `<D:response><D:href>${href}</D:href><D:propstat><D:prop>${props}</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>`;
 }
@@ -723,191 +613,126 @@ async function handleWebDAV(request, env, reqPath) {
   if (!checkBasicAuth(request, env)) return davUnauthorized();
   const davPath = decodeURIComponent(reqPath.slice('/webdav'.length) || '/');
   const method = request.method;
-
   if (method === 'OPTIONS') {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        'DAV': '1, 2',
-        'Allow': 'OPTIONS, GET, HEAD, PUT, DELETE, MKCOL, PROPFIND, PROPPATCH, MOVE, COPY, LOCK, UNLOCK',
-        'MS-Author-Via': 'DAV'
-      }
-    });
+    return new Response(null, { status: 204, headers: { 'DAV': '1, 2', 'Allow': 'OPTIONS, GET, HEAD, PUT, DELETE, MKCOL, PROPFIND, PROPPATCH, MOVE, COPY, LOCK, UNLOCK', 'MS-Author-Via': 'DAV' } });
   }
-  if (method === 'PROPFIND') return await davPropfind(davPath, env, request);
-  if (method === 'GET' || method === 'HEAD') return await davGet(davPath, env, method);
-  if (method === 'PUT') return await davPut(davPath, env, request);
-  if (method === 'DELETE') return await davDelete(davPath, env);
-  if (method === 'MKCOL') return await davMkcol(davPath, env);
-  if (method === 'MOVE') return await davMove(davPath, env, request);
-  if (method === 'COPY') return await davCopy(davPath, env, request);
-  if (method === 'LOCK') return davLock();
-  if (method === 'UNLOCK') return davUnlock();
-  return new Response('Method Not Allowed', { status: 405 });
-}
-
-async function davPropfind(davPath, env, request) {
-  const depth = request.headers.get('Depth') || 'infinity';
-  const structure = await getStructure(env);
-  const node = davPath === '/' ? structure : getNode(structure, davPath);
-  if (!node) return new Response('Not Found', { status: 404 });
-  let responses = [davPropResponse(davPath || '/', node)];
-  if ((node.type === 'folder' || node.type === 'root') && depth !== '0') {
-    for (const [name, child] of Object.entries(node.children || {})) {
-      const childPath = davPath === '/' ? name : davPath + '/' + name;
-      responses.push(davPropResponse(childPath, child));
-      if ((depth === 'infinity' || depth === '-1') && child.type === 'folder') {
-        const subPaths = collectPaths(child, childPath);
-        for (const sp of subPaths) responses.push(davPropResponse(sp, getNode(structure, sp)));
+  if (method === 'PROPFIND') {
+    const depth = request.headers.get('Depth') || 'infinity';
+    const structure = await getStructure(env);
+    const node = davPath === '/' ? structure : getNode(structure, davPath);
+    if (!node) return new Response('Not Found', { status: 404 });
+    let responses = [davPropResponse(davPath || '/', node)];
+    if ((node.type === 'folder' || node.type === 'root') && depth !== '0') {
+      for (const [name, child] of Object.entries(node.children || {})) {
+        const childPath = davPath === '/' ? name : davPath + '/' + name;
+        responses.push(davPropResponse(childPath, child));
+        if ((depth === 'infinity' || depth === '-1') && child.type === 'folder') {
+          for (const sp of collectPaths(child, childPath)) responses.push(davPropResponse(sp, getNode(structure, sp)));
+        }
       }
     }
+    return davXmlResponse(`<?xml version="1.0" encoding="utf-8"?><D:multistatus xmlns:D="DAV:">${responses.join('')}</D:multistatus>`);
   }
-  const xml = `<?xml version="1.0" encoding="utf-8"?><D:multistatus xmlns:D="DAV:">${responses.join('')}</D:multistatus>`;
-  return davXmlResponse(xml);
-}
-
-async function davGet(davPath, env, method) {
-  const structure = await getStructure(env);
-  const node = getNode(structure, davPath);
-  if (!node || node.type !== 'file') return new Response('Not Found', { status: 404 });
-  if (method === 'HEAD') {
-    return new Response(null, {
-      status: 200,
-      headers: {
-        'Content-Type': getMime(node.name),
-        'Content-Length': String(node.size || 0),
-        'Last-Modified': toDavDate(node.createdAt)
-      }
-    });
-  }
-  return buildDownloadResponse(node, node.name, env, true);
-}
-
-async function davPut(davPath, env, request) {
-  const filename = davPath.split('/').pop();
-  if (!filename) return new Response('Conflict', { status: 409 });
-  const buffer = await request.arrayBuffer();
-  const size = buffer.byteLength;
-  const id = ssid();
-  await githubCreateRepo(id, env);
-  const chunks = Math.ceil(size / CHUNK_SIZE);
-  for (let i = 0; i < chunks; i++) {
-    const start = i * CHUNK_SIZE;
-    const end = Math.min(start + CHUNK_SIZE, size);
-    await githubUploadFile(id, `chunk_${i}`, buffer.slice(start, end), env, `chunk ${i}`, true);
-  }
-  const meta = { ssid: id, storage: 'github', size, chunks };
-  const structure = await getStructure(env);
-  const oldNode = getNode(structure, davPath);
-  if (oldNode && oldNode.type === 'file') {
-    try { await deleteFileStorage(oldNode, env); } catch (e) { console.error(e); }
-  }
-  setNode(structure, davPath, {
-    type: 'file', name: filename, ssid: meta.ssid, storage: meta.storage,
-    size: meta.size, chunks: meta.chunks, createdAt: Date.now()
-  });
-  await saveStructure(env, structure);
-  return new Response(null, { status: oldNode ? 204 : 201 });
-}
-
-async function davDelete(davPath, env) {
-  const structure = await getStructure(env);
-  const node = getNode(structure, davPath);
-  if (!node) return new Response('Not Found', { status: 404 });
-  const filesToDelete = [];
-  if (node.type === 'file') filesToDelete.push(node);
-  else {
-    const paths = collectPaths(node, davPath);
-    for (const p of paths) {
-      const child = getNode(structure, p);
-      if (child && child.type === 'file') filesToDelete.push(child);
+  if (method === 'GET' || method === 'HEAD') {
+    const structure = await getStructure(env);
+    const node = getNode(structure, davPath);
+    if (!node || node.type !== 'file') return new Response('Not Found', { status: 404 });
+    if (method === 'HEAD') {
+      return new Response(null, { status: 200, headers: { 'Content-Type': getMime(node.name), 'Content-Length': String(node.size || 0), 'Last-Modified': toDavDate(node.createdAt) } });
     }
+    return buildDownloadResponse(node, node.name, env, true);
   }
-  deleteNode(structure, davPath);
-  await saveStructure(env, structure);
-  deleteFileStoragesConcurrently(filesToDelete, env, 32).catch(e => console.error(e));
-  return new Response(null, { status: 204 });
-}
-
-async function davMkcol(davPath, env) {
-  const structure = await getStructure(env);
-  if (getNode(structure, davPath)) return new Response('Method Not Allowed', { status: 405 });
-  const parts = davPath.split('/').filter(Boolean);
-  let parent = structure;
-  for (const p of parts) {
-    if (!parent.children[p]) parent.children[p] = { type: 'folder', name: p, children: {}, createdAt: Date.now() };
-    parent = parent.children[p];
-  }
-  await saveStructure(env, structure);
-  return new Response(null, { status: 201 });
-}
-
-async function davMove(davPath, env, request) {
-  const dest = request.headers.get('Destination');
-  if (!dest) return new Response('Bad Request', { status: 400 });
-  let destPath = decodeURIComponent(new URL(dest).pathname);
-  if (destPath.startsWith('/webdav')) destPath = destPath.slice('/webdav'.length) || '/';
-  const structure = await getStructure(env);
-  const node = getNode(structure, davPath);
-  if (!node) return new Response('Not Found', { status: 404 });
-  if (node.type === 'file') {
-    setNode(structure, destPath, { ...node, name: destPath.split('/').pop(), createdAt: Date.now() });
-  } else {
-    const paths = collectPaths(node, davPath);
-    for (const p of paths) {
-      const child = getNode(structure, p);
-      if (!child) continue;
-      setNode(structure, destPath + p.slice(davPath.length), { ...child, createdAt: Date.now() });
-    }
-    setNode(structure, destPath, { ...node, name: destPath.split('/').pop(), createdAt: Date.now() });
-  }
-  deleteNode(structure, davPath);
-  await saveStructure(env, structure);
-  return new Response(null, { status: 204 });
-}
-
-async function davCopy(davPath, env, request) {
-  const dest = request.headers.get('Destination');
-  if (!dest) return new Response('Bad Request', { status: 400 });
-  let destPath = decodeURIComponent(new URL(dest).pathname);
-  if (destPath.startsWith('/webdav')) destPath = destPath.slice('/webdav'.length) || '/';
-  const structure = await getStructure(env);
-  const node = getNode(structure, davPath);
-  if (!node) return new Response('Not Found', { status: 404 });
-  if (node.type === 'file') {
-    const resp = await githubFetchFile(node.ssid, 'chunk_0', env);
-    const buf = await resp.arrayBuffer();
+  if (method === 'PUT') {
+    const filename = davPath.split('/').pop();
+    if (!filename) return new Response('Conflict', { status: 409 });
+    const buffer = await request.arrayBuffer();
+    const size = buffer.byteLength;
     const id = ssid();
     await githubCreateRepo(id, env);
-    await githubUploadFile(id, 'chunk_0', buf, env, 'copy', true);
-    setNode(structure, destPath, {
-      type: 'file', name: destPath.split('/').pop(), ssid: id, storage: 'github',
-      size: buf.byteLength, chunks: 1, createdAt: Date.now()
-    });
-  } else return new Response('Not Implemented', { status: 501 });
-  await saveStructure(env, structure);
-  return new Response(null, { status: 204 });
+    const chunks = Math.ceil(size / CHUNK_SIZE);
+    for (let i = 0; i < chunks; i++) {
+      const start = i * CHUNK_SIZE;
+      const end = Math.min(start + CHUNK_SIZE, size);
+      await githubUploadFile(id, `chunk_${i}`, buffer.slice(start, end), env, `chunk ${i}`, true);
+    }
+    const structure = await getStructure(env);
+    const oldNode = getNode(structure, davPath);
+    if (oldNode && oldNode.type === 'file') { try { await deleteFileStorage(oldNode, env); } catch (e) {} }
+    setNode(structure, davPath, { type: 'file', name: filename, ssid: id, storage: 'github', size, chunks, createdAt: Date.now() });
+    await saveStructure(env, structure);
+    return new Response(null, { status: oldNode ? 204 : 201 });
+  }
+  if (method === 'DELETE') {
+    const structure = await getStructure(env);
+    const node = getNode(structure, davPath);
+    if (!node) return new Response('Not Found', { status: 404 });
+    const filesToDelete = [];
+    if (node.type === 'file') filesToDelete.push(node);
+    else {
+      for (const p of collectPaths(node, davPath)) {
+        const child = getNode(structure, p);
+        if (child && child.type === 'file') filesToDelete.push(child);
+      }
+    }
+    deleteNode(structure, davPath);
+    await saveStructure(env, structure);
+    deleteFileStoragesConcurrently(filesToDelete, env, 32).catch(() => {});
+    return new Response(null, { status: 204 });
+  }
+  if (method === 'MKCOL') {
+    const structure = await getStructure(env);
+    if (getNode(structure, davPath)) return new Response('Method Not Allowed', { status: 405 });
+    const parts = davPath.split('/').filter(Boolean);
+    let parent = structure;
+    for (const p of parts) {
+      if (!parent.children[p]) parent.children[p] = { type: 'folder', name: p, children: {}, createdAt: Date.now() };
+      parent = parent.children[p];
+    }
+    await saveStructure(env, structure);
+    return new Response(null, { status: 201 });
+  }
+  if (method === 'MOVE') {
+    const dest = request.headers.get('Destination');
+    if (!dest) return new Response('Bad Request', { status: 400 });
+    let destPath = decodeURIComponent(new URL(dest).pathname);
+    if (destPath.startsWith('/webdav')) destPath = destPath.slice('/webdav'.length) || '/';
+    const structure = await getStructure(env);
+    const node = getNode(structure, davPath);
+    if (!node) return new Response('Not Found', { status: 404 });
+    if (node.type === 'file') {
+      setNode(structure, destPath, { ...node, name: destPath.split('/').pop(), createdAt: Date.now() });
+    } else {
+      for (const p of collectPaths(node, davPath)) {
+        const child = getNode(structure, p);
+        if (!child) continue;
+        setNode(structure, destPath + p.slice(davPath.length), { ...child, createdAt: Date.now() });
+      }
+      setNode(structure, destPath, { ...node, name: destPath.split('/').pop(), createdAt: Date.now() });
+    }
+    deleteNode(structure, davPath);
+    await saveStructure(env, structure);
+    return new Response(null, { status: 204 });
+  }
+  if (method === 'COPY') return new Response('Not Implemented', { status: 501 });
+  if (method === 'LOCK') {
+    const token = 'opaquelocktoken:' + crypto.randomUUID();
+    const xml = `<?xml version="1.0" encoding="utf-8"?><D:prop xmlns:D="DAV:"><D:lockdiscovery><D:activelock><D:locktype><D:write/></D:locktype><D:lockscope><D:exclusive/></D:lockscope><D:depth>infinity</D:depth><D:owner></D:owner><D:timeout>Second-3600</D:timeout><D:locktoken><D:href>${token}</D:href></D:locktoken></D:activelock></D:lockdiscovery></D:prop>`;
+    return new Response(xml, { status: 200, headers: { 'Content-Type': 'text/xml; charset=utf-8', 'Lock-Token': '<' + token + '>' } });
+  }
+  if (method === 'UNLOCK') return new Response(null, { status: 204 });
+  return new Response('Method Not Allowed', { status: 405 });
 }
-
-function davLock() {
-  const token = 'opaquelocktoken:' + crypto.randomUUID();
-  const xml = `<?xml version="1.0" encoding="utf-8"?><D:prop xmlns:D="DAV:"><D:lockdiscovery><D:activelock><D:locktype><D:write/></D:locktype><D:lockscope><D:exclusive/></D:lockscope><D:depth>infinity</D:depth><D:owner></D:owner><D:timeout>Second-3600</D:timeout><D:locktoken><D:href>${token}</D:href></D:locktoken></D:activelock></D:lockdiscovery></D:prop>`;
-  return new Response(xml, { status: 200, headers: { 'Content-Type': 'text/xml; charset=utf-8', 'Lock-Token': '<' + token + '>' } });
-}
-
-function davUnlock() { return new Response(null, { status: 204 }); }
 
 // ==================== HTML 模板 ====================
 
 const COMMON_HEAD = `
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
 <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
 <style>
-:root { --primary:#1976d2; --primary-dark:#115293; --surface:#fff; --bg:#f5f5f5; --divider:#e0e0e0; --text:#212121; --text-sec:#757575; --danger:#d32f2f; --success:#388e3c; --warn:#f9a825; }
+:root { --primary:#1976d2; --surface:#fff; --bg:#f5f5f5; --divider:#e0e0e0; --text:#212121; --text-sec:#757575; --danger:#d32f2f; --success:#388e3c; }
 * { box-sizing:border-box; }
-body { margin:0; font-family:'Roboto',sans-serif; background:var(--bg); color:var(--text); }
+body { margin:0; font-family:system-ui,sans-serif; background:var(--bg); color:var(--text); }
 .appbar { position:fixed; top:0; left:0; right:0; height:48px; background:var(--primary); color:#fff; display:flex; align-items:center; padding:0 12px; z-index:20; box-shadow:0 2px 4px rgba(0,0,0,.2); }
 .appbar h1 { margin:0; font-size:16px; font-weight:500; flex:1; }
 .appbar .material-icons { cursor:pointer; padding:6px; font-size:20px; }
@@ -927,20 +752,17 @@ body { margin:0; font-family:'Roboto',sans-serif; background:var(--bg); color:va
 .file-actions button { background:none; border:none; color:var(--text-sec); cursor:pointer; padding:6px; border-radius:50%; }
 .file-actions button .material-icons { font-size:16px; pointer-events:none; }
 .file-card.selected { background:#e3f2fd !important; }
-.sel-check { width:18px; height:18px; flex-shrink:0; accent-color:var(--primary); margin-right:4px; display:none; }
+.sel-check { width:18px; height:18px; accent-color:var(--primary); margin-right:4px; display:none; }
 #file-list.selection-mode .sel-check { display:inline-block; }
-.file-actions button:hover { background:#f5f5f5; color:var(--primary); }
 .sort-select { flex:1; padding:5px 6px; border-radius:6px; border:1px solid var(--divider); background:var(--surface); font-size:13px; }
 .selection-bar { display:none; align-items:center; gap:5px; margin-bottom:5px; padding:5px 8px; background:var(--surface); border-radius:8px; flex-wrap:wrap; }
 .selection-bar.show { display:flex; }
-.selection-bar button { padding:4px 6px; border:none; border-radius:5px; cursor:pointer; font-size:11px; background:#e0e0e0; color:var(--text); }
-#btn-select-mode { padding:5px; }
+.selection-bar button { padding:4px 6px; border:none; border-radius:5px; cursor:pointer; font-size:11px; background:#e0e0e0; }
 #btn-select-mode.active { color:var(--primary); background:#e3f2fd; }
 .empty { text-align:center; padding:32px 0; color:var(--text-sec); font-size:13px; }
 .bottom-bar { position:fixed; bottom:0; left:0; right:0; height:52px; background:var(--surface); display:flex; box-shadow:0 -2px 6px rgba(0,0,0,.1); z-index:20; }
-.bottom-bar button { flex:1; border:none; background:none; display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--text-sec); cursor:pointer; font-size:11px; gap:1px; }
+.bottom-bar button { flex:1; border:none; background:none; display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--text-sec); cursor:pointer; font-size:11px; }
 .bottom-bar button .material-icons { font-size:20px; }
-.bottom-bar button.active { color:var(--primary); }
 .fab-menu { position:fixed; bottom:64px; left:50%; transform:translateX(-50%); background:var(--surface); border-radius:10px; box-shadow:0 4px 12px rgba(0,0,0,.2); display:none; flex-direction:column; min-width:160px; z-index:30; }
 .fab-menu.show { display:flex; }
 .fab-menu button { padding:10px 14px; border:none; background:none; text-align:left; cursor:pointer; font-size:13px; display:flex; align-items:center; gap:8px; }
@@ -968,8 +790,6 @@ body { margin:0; font-family:'Roboto',sans-serif; background:var(--bg); color:va
 .snackbar.show { display:block; }
 .preview-box { max-width:100%; overflow:auto; }
 .preview-box img, .preview-box video { max-width:100%; border-radius:8px; }
-.preview-box audio { width:100%; }
-.preview-box pre { background:#263238; color:#aed581; padding:12px; border-radius:8px; overflow:auto; max-height:60vh; font-size:13px; }
 .login-box { max-width:360px; margin:80px auto; }
 </style>
 `;
@@ -980,10 +800,8 @@ function page(title, body, scripts = '', themeCss = '') {
   });
 }
 
-// ==================== 主页面 ====================
-
 const HOME_BODY = `
-<div class="appbar"><h1>我的网盘</h1><div style="display:flex;align-items:center;gap:8px;"><span class="material-icons" id="btn-refresh" title="刷新">refresh</span><span class="material-icons" id="btn-settings" title="设置">settings</span><span class="material-icons" id="btn-logout" title="退出">logout</span></div></div>
+<div class="appbar"><h1>我的网盘</h1><div style="display:flex;align-items:center;gap:8px;"><span class="material-icons" id="btn-refresh">refresh</span><span class="material-icons" id="btn-settings">settings</span><span class="material-icons" id="btn-logout">logout</span></div></div>
 <div class="container">
   <div class="breadcrumbs" id="breadcrumbs"><a href="/?path=">首页</a></div>
   <div id="selection-bar" class="selection-bar">
@@ -1000,10 +818,10 @@ const HOME_BODY = `
       <option value="name-desc">名称倒序</option>
       <option value="time-desc">上传时间倒序</option>
       <option value="time-asc">上传时间正序</option>
-      <option value="size-desc">文件大小倒序</option>
-      <option value="size-asc">文件大小正序</option>
+      <option value="size-desc">大小倒序</option>
+      <option value="size-asc">大小正序</option>
     </select>
-    <span class="material-icons" id="btn-select-mode" title="多选" style="cursor:pointer;padding:8px;background:var(--surface);border-radius:50%;">check_circle</span>
+    <span class="material-icons" id="btn-select-mode" style="cursor:pointer;padding:8px;background:var(--surface);border-radius:50%;">check_circle</span>
   </div>
   <div id="file-list"></div>
 </div>
@@ -1023,7 +841,7 @@ const HOME_BODY = `
   <button id="btn-upload"><span class="material-icons">cloud_upload</span>上传</button>
 </div>
 <div class="drawer" id="task-drawer">
-  <div class="drawer-head"><span>任务列表</span><span class="material-icons drawer-close" id="close-tasks" style="cursor:pointer;padding:6px;">close</span></div>
+  <div class="drawer-head"><span>任务列表</span><span class="material-icons" id="close-tasks" style="cursor:pointer;padding:6px;">close</span></div>
   <div class="drawer-body" id="task-list"></div>
   <div style="padding:12px;border-top:1px solid var(--divider);display:flex;gap:8px;">
     <button class="btn-secondary" id="btn-refresh-tasks" style="flex:1;padding:10px;border:none;border-radius:8px;cursor:pointer;">刷新</button>
@@ -1034,7 +852,7 @@ const HOME_BODY = `
   <div class="modal">
     <h3 id="modal-title">标题</h3>
     <div id="modal-content"></div>
-    <div class="modal-actions"><button class="btn-secondary" id="modal-cancel" onclick="closeModal()">取消</button><button class="btn-primary" id="modal-ok">确定</button></div>
+    <div class="modal-actions"><button class="btn-secondary" id="modal-cancel">取消</button><button class="btn-primary" id="modal-ok">确定</button></div>
   </div>
 </div>
 <div class="snackbar" id="snackbar"></div>
@@ -1052,11 +870,10 @@ let currentSort = localStorage.getItem('netdisk-sort') || 'name-asc';
 let selectionMode = false;
 let selectedPaths = new Set();
 
-// ==================== 关键常量（客户端）====================
 const TASK_CREATE_CONCURRENCY = 64;
 const FILE_UPLOAD_CONCURRENCY = 32;
 const CHUNK_UPLOAD_CONCURRENCY = 32;
-const CLIENT_CHUNK_SIZE = 70 * 1024 * 1024;   // 与服务器一致 70MB
+const CLIENT_CHUNK_SIZE = 70 * 1024 * 1024;
 
 function showMsg(msg){ const s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(()=>s.classList.remove('show'),2500); }
 function escapeHtml(t){ return t.replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
@@ -1064,10 +881,9 @@ function formatSize(b){ if(!b)return '0 B'; const k=1024, s=['B','KB','MB','GB']
 async function copyText(text){
   try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return; } } catch (e) {}
   const ta = document.createElement('textarea');
-  ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'; ta.readOnly = true;
-  document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, text.length);
-  const ok = document.execCommand('copy'); document.body.removeChild(ta);
-  if (!ok) throw new Error('复制失败');
+  ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.select();
+  document.execCommand('copy'); document.body.removeChild(ta);
 }
 async function api(url, opts={}){
   const r=await fetch(url, opts);
@@ -1090,6 +906,15 @@ function sortEntries(a,b){
   }
 }
 function formatTime(ts){ if(!ts) return ''; return new Date(ts).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}); }
+function getIcon(name){
+  const ext=name.split('.').pop().toLowerCase();
+  if(['mp4','webm','mkv'].includes(ext)) return 'movie';
+  if(['mp3','wav','ogg','flac','m4a'].includes(ext)) return 'audiotrack';
+  if(['jpg','jpeg','png','gif','webp'].includes(ext)) return 'image';
+  if(['zip','rar','7z','tar','gz'].includes(ext)) return 'folder_zip';
+  if(['txt','md','json','js','css','html'].includes(ext)) return 'description';
+  return 'insert_drive_file';
+}
 
 async function loadList(){
   const data=await api('/api/structure?path='+encodeURIComponent(currentPath));
@@ -1110,9 +935,7 @@ async function loadList(){
       <div class="file-main">
         <input type="checkbox" class="sel-check" data-action="select" \${isSelected?'checked':''}>
         <div class="file-icon"><span class="material-icons">\${icon}</span></div>
-        <div class="file-name-wrap">
-          <div class="file-name" title="\${escapeHtml(name)}">\${escapeHtml(name)}</div>
-        </div>
+        <div class="file-name-wrap"><div class="file-name" title="\${escapeHtml(name)}">\${escapeHtml(name)}</div></div>
       </div>
       <div class="file-meta">\${meta}</div>
       <div class="file-actions">
@@ -1158,13 +981,9 @@ function toggleSelectionMode(){
   document.getElementById('file-list').classList.toggle('selection-mode', selectionMode);
   updateSelectionUI();
 }
-function toggleSelect(p){
-  if(selectedPaths.has(p)) selectedPaths.delete(p); else selectedPaths.add(p);
-  updateSelectionUI();
-}
+function toggleSelect(p){ if(selectedPaths.has(p)) selectedPaths.delete(p); else selectedPaths.add(p); updateSelectionUI(); }
 function updateSelectionUI(){
-  const bar = document.getElementById('selection-bar');
-  bar.classList.toggle('show', selectionMode);
+  document.getElementById('selection-bar').classList.toggle('show', selectionMode);
   document.getElementById('selection-count').textContent = '已选 ' + selectedPaths.size;
   document.querySelectorAll('.file-card').forEach(card=>{
     const p = card.dataset.path;
@@ -1173,7 +992,7 @@ function updateSelectionUI(){
     if(chk) chk.checked = selectedPaths.has(p);
   });
 }
-function selectAll(){ document.querySelectorAll('.file-card').forEach(card=>selectedPaths.add(card.dataset.path)); updateSelectionUI(); }
+function selectAll(){ document.querySelectorAll('.file-card').forEach(c=>selectedPaths.add(c.dataset.path)); updateSelectionUI(); }
 function clearSelection(){ selectedPaths.clear(); selectionMode = false; document.getElementById('btn-select-mode').classList.remove('active'); document.getElementById('file-list').classList.remove('selection-mode'); updateSelectionUI(); }
 
 let targetPickState = null;
@@ -1190,16 +1009,11 @@ function buildTargetTreeRows(node, basePath, level){
   const selected = targetPickState.selectedPath === path;
   const expanded = targetPickState.expanded.has(path);
   let html = '<div class="target-tree-row' + (selected ? ' selected' : '') + (invalid ? ' invalid' : '') + '" data-path="' + escapeHtml(path) + '" style="padding-left:' + (level * 16) + 'px;">';
-  html += '<span class="target-tree-toggle" data-path="' + escapeHtml(path) + '">';
-  html += children.length ? (expanded ? '&#9660;' : '&#9654;') : '<span style="visibility:hidden">&#9654;</span>';
-  html += '</span>';
+  html += '<span class="target-tree-toggle" data-path="' + escapeHtml(path) + '">' + (children.length ? (expanded ? '▼' : '▶') : '<span style="visibility:hidden">▶</span>') + '</span>';
   html += '<span class="material-icons" style="font-size:18px;color:var(--primary);margin-right:4px;">folder</span>';
   html += '<span style="flex:1;">' + escapeHtml(isRoot ? 'root' : node.name) + '</span></div>';
   if(children.length && expanded){
-    for(const [name, child] of children){
-      const childPath = path ? path + '/' + name : name;
-      html += buildTargetTreeRows(child, childPath, level + 1);
-    }
+    for(const [name, child] of children) html += buildTargetTreeRows(child, path ? path + '/' + name : name, level + 1);
   }
   return html;
 }
@@ -1221,11 +1035,10 @@ async function pickTargetFolder(opts = {}){
     '.target-tree-row{display:flex;align-items:center;gap:4px;padding:6px 8px;border-radius:6px;cursor:pointer;user-select:none;}' +
     '.target-tree-row:hover{background:var(--divider);}' +
     '.target-tree-row.selected{background:var(--primary);color:#fff;}' +
-    '.target-tree-row.selected .target-tree-toggle,.target-tree-row.selected .material-icons{color:#fff !important;}' +
     '.target-tree-row.invalid{opacity:.45;cursor:not-allowed;}' +
     '.target-tree-toggle{width:16px;text-align:center;color:var(--primary);font-size:12px;flex-shrink:0;}' +
     '.target-tree-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;}' +
-    '.target-tree-header button{display:flex;align-items:center;gap:4px;padding:6px 10px;border:none;border-radius:6px;background:var(--surface);color:var(--primary);cursor:pointer;font-size:13px;box-shadow:0 0 0 1px var(--divider);}' +
+    '.target-tree-header button{padding:6px 10px;border:none;border-radius:6px;background:var(--surface);color:var(--primary);cursor:pointer;font-size:13px;box-shadow:0 0 0 1px var(--divider);}' +
     '.target-tree-select{width:100%;padding:8px;border:1px solid var(--divider);border-radius:6px;font-size:14px;}' +
     '</style>' +
     '<div class="target-tree-header"><span style="font-weight:500;font-size:16px;">选择目标文件夹</span><button id="target-new-folder">新建文件夹</button></div>' +
@@ -1311,16 +1124,6 @@ async function batchDelete(){
     showMsg('批量删除成功');
   } catch(e) { showMsg('批量删除失败: ' + (e.message || e)); }
   loadList();
-}
-
-function getIcon(name){
-  const ext=name.split('.').pop().toLowerCase();
-  if(['mp4','webm','mkv'].includes(ext)) return 'movie';
-  if(['mp3','wav','ogg','flac','m4a'].includes(ext)) return 'audiotrack';
-  if(['jpg','jpeg','png','gif','webp'].includes(ext)) return 'image';
-  if(['zip','rar','7z','tar','gz'].includes(ext)) return 'folder_zip';
-  if(['txt','md','json','js','css','html'].includes(ext)) return 'description';
-  return 'insert_drive_file';
 }
 
 function renderBreadcrumbs(){
@@ -1423,11 +1226,9 @@ function selectFolder(){ document.getElementById('folder-input').click(); }
 document.getElementById('file-input').addEventListener('change', e=>uploadFiles(e.target.files));
 document.getElementById('folder-input').addEventListener('change', e=>uploadFiles(e.target.files));
 
-// 批量上传：任务创建 64 线程，文件上传 32 线程
 async function uploadFiles(files){
   const fileArr = Array.from(files);
   if(fileArr.length === 0) return;
-
   await runWithConcurrency(fileArr, TASK_CREATE_CONCURRENCY, async (file)=>{
     const taskId = genTaskId();
     file._netdiskTaskId = taskId;
@@ -1435,14 +1236,9 @@ async function uploadFiles(files){
     file._netdiskDir = folderPrefix
       ? (currentPath ? currentPath + '/' + folderPrefix.slice(0,-1) : folderPrefix.slice(0,-1))
       : currentPath;
-    addLocalTask({
-      id: taskId, name: file.name, status: 'uploading',
-      message: '排队等待...', progress: 0, size: file.size,
-      createdAt: Date.now(), updatedAt: Date.now()
-    });
+    addLocalTask({ id: taskId, name: file.name, status: 'uploading', message: '排队等待...', progress: 0, size: file.size, createdAt: Date.now(), updatedAt: Date.now() });
   });
   loadTasks();
-
   await runWithConcurrency(fileArr, FILE_UPLOAD_CONCURRENCY, async (file)=>{
     try { await uploadOne(file, file._netdiskDir, file._netdiskTaskId); }
     catch(e){ console.error('上传失败', file.name, e); }
@@ -1450,7 +1246,6 @@ async function uploadFiles(files){
   loadList();
 }
 
-// 单文件上传（服务器中转）
 async function uploadOne(file, dir, externalTaskId){
   const path = dir ? dir + '/' + file.name : file.name;
   const taskId = externalTaskId || genTaskId();
@@ -1461,10 +1256,7 @@ async function uploadOne(file, dir, externalTaskId){
 
   const baseTask = { id: taskId, name: file.name, status: 'uploading', message: '准备上传...', progress: 1, size: file.size, createdAt: Date.now(), updatedAt: Date.now() };
   if(!localTasks.has(taskId)) addLocalTask(baseTask);
-  else {
-    const t = localTasks.get(taskId);
-    t.status = 'uploading'; t.message = '准备上传...'; t.progress = 1; t.updatedAt = Date.now();
-  }
+  else { const t = localTasks.get(taskId); t.status = 'uploading'; t.message = '准备上传...'; t.progress = 1; t.updatedAt = Date.now(); }
   debouncedLoadTasks();
 
   function fmtSpd(bps){
@@ -1475,18 +1267,16 @@ async function uploadOne(file, dir, externalTaskId){
   function fmtProgress(done, total){ return formatSize(done)+'/'+formatSize(total); }
 
   try {
+    // 小文件：单请求 XHR
     if (file.size <= CLIENT_CHUNK) {
       const t = localTasks.get(taskId);
       if(t){ t.message = '上传 ' + fmtProgress(0, file.size); t.progress = 2; t.updatedAt = Date.now(); }
       debouncedLoadTasks();
-
       const form = new FormData();
       form.append('path', path);
       form.append('file', file);
       form.append('taskId', taskId);
-
       let lastLoaded = 0, lastTime = Date.now(), smoothSpeed = 0;
-
       await new Promise((resolve, reject) => {
         const xhr = new XMLHttpRequest();
         xhr.open('POST', '/api/upload');
@@ -1501,10 +1291,7 @@ async function uploadOne(file, dir, externalTaskId){
           }
           const pct = Math.max(2, Math.round((e.loaded / e.total) * 100));
           const tt = localTasks.get(taskId);
-          if(tt){
-            tt.message = '上传 ' + fmtProgress(e.loaded, e.total) + ' · ' + fmtSpd(smoothSpeed);
-            tt.progress = pct; tt.updatedAt = Date.now();
-          }
+          if(tt){ tt.message = '上传 ' + fmtProgress(e.loaded, e.total) + ' · ' + fmtSpd(smoothSpeed); tt.progress = pct; tt.updatedAt = Date.now(); }
           debouncedLoadTasks();
         };
         xhr.onload = () => {
@@ -1522,13 +1309,12 @@ async function uploadOne(file, dir, externalTaskId){
         abortCtrl.signal.addEventListener('abort', () => xhr.abort());
         xhr.send(form);
       });
-
       removeLocalTask(taskId);
       showMsg('上传完成: ' + file.name);
       return;
     }
 
-    // 大文件：分片并发 32 线程
+    // 大文件：分片 32 线程 + XHR 实时进度
     const start = await api('/api/upload/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1538,25 +1324,28 @@ async function uploadOne(file, dir, externalTaskId){
 
     const totalChunks = start.chunks;
     const uploadId = start.uploadId;
-    let doneBytes = 0, completedChunks = 0, uploadError = null;
-    let lastBytes = 0, lastTime = Date.now(), smoothSpeed = 0;
+    let completedChunks = 0;
+    let uploadError = null;
 
-    const speedTimer = setInterval(() => {
-      const now = Date.now();
-      const dt = (now - lastTime) / 1000;
-      if (dt > 0.3) {
-        const instant = (doneBytes - lastBytes) / dt;
-        smoothSpeed = smoothSpeed * 0.6 + instant * 0.4;
-        lastBytes = doneBytes; lastTime = now;
-      }
-    }, 500);
+    const chunkUploadedBytes = new Array(totalChunks).fill(0);
+    let lastBytes = 0, lastTime = Date.now(), smoothSpeed = 0;
 
     const progressTimer = setInterval(() => {
       if (uploadError) return;
-      const pct = Math.min(99, Math.floor((doneBytes / file.size) * 99));
+      let total = 0;
+      for (let k = 0; k < chunkUploadedBytes.length; k++) total += chunkUploadedBytes[k];
+      const now = Date.now();
+      const dt = (now - lastTime) / 1000;
+      if (dt > 0.2) {
+        const instant = (total - lastBytes) / dt;
+        if (instant >= 0) smoothSpeed = smoothSpeed * 0.5 + instant * 0.5;
+        lastBytes = total;
+        lastTime = now;
+      }
+      const pct = Math.min(99, Math.floor((total / file.size) * 99));
       const tt = localTasks.get(taskId);
       if(tt){
-        tt.message = '上传 ' + fmtProgress(doneBytes, file.size) + ' · ' + fmtSpd(smoothSpeed) + ' · 分片 ' + completedChunks + '/' + totalChunks;
+        tt.message = '上传 ' + fmtProgress(total, file.size) + ' · ' + fmtSpd(smoothSpeed) + ' · 分片 ' + completedChunks + '/' + totalChunks;
         tt.progress = pct; tt.updatedAt = Date.now();
       }
       debouncedLoadTasks();
@@ -1580,8 +1369,30 @@ async function uploadOne(file, dir, externalTaskId){
       let retries = 0;
       while (retries < 3) {
         try {
-          await api('/api/upload/chunk', { method: 'POST', body: form, signal: abortCtrl.signal });
-          doneBytes += blob.size; completedChunks++;
+          await new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/api/upload/chunk');
+            if (retries > 0) chunkUploadedBytes[idx] = 0;
+            xhr.upload.onprogress = (e) => {
+              if (!e.lengthComputable) return;
+              chunkUploadedBytes[idx] = e.loaded;
+            };
+            xhr.onload = () => {
+              if (xhr.status >= 200 && xhr.status < 300) {
+                chunkUploadedBytes[idx] = blob.size;
+                resolve();
+              } else {
+                let errMsg = 'HTTP ' + xhr.status;
+                try { const j = JSON.parse(xhr.responseText); errMsg = j.error || errMsg; } catch (_) {}
+                reject(new Error(errMsg));
+              }
+            };
+            xhr.onerror = () => reject(new Error('网络错误'));
+            xhr.onabort = () => reject(new Error('已取消'));
+            abortCtrl.signal.addEventListener('abort', () => xhr.abort());
+            xhr.send(form);
+          });
+          completedChunks++;
           return;
         } catch (e) {
           if (e.message === '已取消' || abortCtrl.signal.aborted) throw new Error('已取消');
@@ -1600,14 +1411,10 @@ async function uploadOne(file, dir, externalTaskId){
       catch (e) { uploadError = e; }
     });
 
-    clearInterval(speedTimer); clearInterval(progressTimer);
-
+    clearInterval(progressTimer);
     if (uploadError) throw uploadError;
 
-    {
-      const tt = localTasks.get(taskId);
-      if(tt){ tt.message = '写入目录...'; tt.progress = 99; tt.updatedAt = Date.now(); }
-    }
+    { const tt = localTasks.get(taskId); if(tt){ tt.message = '写入目录...'; tt.progress = 99; tt.updatedAt = Date.now(); } }
     debouncedLoadTasks();
 
     await api('/api/upload/finish', {
@@ -1621,20 +1428,17 @@ async function uploadOne(file, dir, externalTaskId){
     debouncedLoadTasks();
     setTimeout(() => removeLocalTask(taskId), 1500);
     showMsg('上传完成: '+file.name);
-
   } catch (e) {
     abortControllers.delete(taskId);
     cancelledManualUploads.delete(taskId);
     if (e.message === '已取消' || e.name === 'AbortError') {
       const tt = localTasks.get(taskId);
       if(tt){ tt.status = 'cancelled'; tt.message = '已取消'; tt.progress = 0; tt.updatedAt = Date.now(); }
-      debouncedLoadTasks();
-      showMsg('上传已取消: '+file.name);
+      debouncedLoadTasks(); showMsg('上传已取消: '+file.name);
     } else {
       const tt = localTasks.get(taskId);
       if(tt){ tt.status = 'error'; tt.message = e.message || '上传失败'; tt.progress = 0; tt.updatedAt = Date.now(); }
-      debouncedLoadTasks();
-      showMsg('上传失败: '+file.name+' '+e.message);
+      debouncedLoadTasks(); showMsg('上传失败: '+file.name+' '+e.message);
     }
     throw e;
   }
@@ -1656,11 +1460,7 @@ async function manualUploadFiles(files){
     file._netdiskDir = folderPrefix
       ? (currentPath ? currentPath + '/' + folderPrefix.slice(0,-1) : folderPrefix.slice(0,-1))
       : currentPath;
-    addLocalTask({
-      id: taskId, name: file.name, status: 'uploading',
-      message: '排队等待...', progress: 0, size: file.size,
-      createdAt: Date.now(), updatedAt: Date.now()
-    });
+    addLocalTask({ id: taskId, name: file.name, status: 'uploading', message: '排队等待...', progress: 0, size: file.size, createdAt: Date.now(), updatedAt: Date.now() });
   });
   loadTasks();
   await runWithConcurrency(fileArr, FILE_UPLOAD_CONCURRENCY, async (file)=>{
@@ -1673,10 +1473,8 @@ async function manualUploadFiles(files){
 function arrayBufferToBase64Browser(buffer) {
   const bytes = new Uint8Array(buffer);
   let binary = '';
-  const chunkSize = 0x8000;
-  for (let i = 0; i < bytes.byteLength; i += chunkSize) {
-    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
-  }
+  const cs = 0x8000;
+  for (let i = 0; i < bytes.byteLength; i += cs) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + cs));
   return btoa(binary);
 }
 function blobToBase64(blob){
@@ -1734,9 +1532,7 @@ async function manualUploadOne(file, dir, externalTaskId){
       if (cancelledManualUploads.has(taskId)) return;
       const t = localTasks.get(taskId);
       if(t){
-        t.message = '直传 ' + formatSize(uploadedBytes) + '/' + formatSize(file.size)
-          + ' · ' + formatSpeed(smoothSpeed)
-          + ' · 分片 ' + completedChunks + '/' + total;
+        t.message = '直传 ' + formatSize(uploadedBytes) + '/' + formatSize(file.size) + ' · ' + formatSpeed(smoothSpeed) + ' · 分片 ' + completedChunks + '/' + total;
         t.progress = Math.min(99, Math.floor((uploadedBytes / file.size) * 99));
         t.updatedAt = Date.now();
       }
@@ -1831,28 +1627,22 @@ function debounce(fn, ms){
 
 async function loadTasks(){
   let serverTasks = [];
-  try { serverTasks = await api('/api/tasks') || []; }
-  catch (e) { console.error('获取任务列表失败', e); }
-
+  try { serverTasks = await api('/api/tasks') || []; } catch (e) { console.error('获取任务失败', e); }
   for (const t of serverTasks) {
     const local = localTasks.get(t.id);
     if (local) {
-      // 服务器任务已结束：同步最终状态
       if (t.status === 'done' || t.status === 'error' || t.status === 'cancelled') {
         local.status = t.status;
         if (t.message) local.message = t.message;
         if (t.progress != null) local.progress = t.progress;
         local.updatedAt = t.updatedAt || Date.now();
-      }
-      // 服务器任务还在进行：保留本地详细消息（含速度/进度/分片），仅在无消息时用服务器的
-      else if (!local.message || local.message === '排队等待...' || local.message === '准备上传...') {
+      } else if (!local.message || local.message === '排队等待...' || local.message === '准备上传...') {
         if (t.message) local.message = t.message;
         if (t.progress != null) local.progress = t.progress;
         if (t.updatedAt) local.updatedAt = t.updatedAt;
       }
     }
   }
-
   const map = new Map();
   for (const t of localTasks.values()) map.set(t.id, t);
   for (const t of serverTasks) { if (!map.has(t.id)) map.set(t.id, t); }
@@ -1900,9 +1690,7 @@ async function clearDoneTasks(){
   const serverTasks = await api('/api/tasks') || [];
   const ids = [];
   for (const t of serverTasks) {
-    if (t.status === 'done' || t.status === 'error' || t.status === 'cancelled') {
-      ids.push(t.id); removeLocalTask(t.id);
-    }
+    if (t.status === 'done' || t.status === 'error' || t.status === 'cancelled') { ids.push(t.id); removeLocalTask(t.id); }
   }
   document.querySelectorAll('.task-item').forEach(el => el.remove());
   if (!ids.length) { showMsg('没有可清除的任务'); return; }
@@ -1945,8 +1733,6 @@ loadList();
 </script>
 `;
 
-// ==================== 登录页 ====================
-
 function loginPage() {
   return page('登录', `
 <div class="container login-box">
@@ -1969,8 +1755,6 @@ async function login(){
 `);
 }
 
-// ==================== 文件详情页 ====================
-
 function fileBody(node, filePath) {
   const meta = formatSize(node.size) + ' · ' + new Date(node.createdAt).toLocaleString();
   const downloadUrl = '/download/' + node.ssid + '/' + encodeURIComponent(node.name);
@@ -1985,17 +1769,15 @@ function fileBody(node, filePath) {
         <div id="file-meta" style="color:var(--text-sec);font-size:14px;">${meta}</div>
       </div>
     </div>
-    <div class="preview-box" id="preview">
-      <div class="empty">正在加载预览…<br><a href="${downloadUrl}">如果无响应，请点击此处下载</a></div>
-    </div>
+    <div class="preview-box" id="preview"><div class="empty">正在加载预览…</div></div>
   </div>
   <div class="card" style="display:flex;gap:8px;flex-wrap:wrap;">
     <a class="btn-primary" href="${downloadUrl}" style="display:inline-flex;align-items:center;gap:4px;padding:10px 16px;border:none;border-radius:8px;cursor:pointer;text-decoration:none;"><span class="material-icons">download</span> 下载</a>
-    <button class="btn-secondary" onclick="shareFile()" style="display:flex;align-items:center;gap:4px;padding:10px 16px;border:none;border-radius:8px;cursor:pointer;"><span class="material-icons">share</span> 分享</button>
-    <button class="btn-secondary" onclick="copyDirectLink()" style="display:flex;align-items:center;gap:4px;padding:10px 16px;border:none;border-radius:8px;cursor:pointer;"><span class="material-icons">link</span> 复制直链</button>
-    <button class="btn-secondary" onclick="renameFile()" style="display:flex;align-items:center;gap:4px;padding:10px 16px;border:none;border-radius:8px;cursor:pointer;"><span class="material-icons">edit</span> 重命名</button>
-    <button class="btn-secondary" onclick="deleteFile()" style="display:flex;align-items:center;gap:4px;padding:10px 16px;border:none;border-radius:8px;cursor:pointer;color:var(--danger);"><span class="material-icons">delete</span> 删除</button>
-    <button class="btn-secondary" id="btn-save" onclick="saveText()" style="display:none;align-items:center;gap:4px;padding:10px 16px;border:none;border-radius:8px;cursor:pointer;"><span class="material-icons">save</span> 保存</button>
+    <button class="btn-secondary" onclick="shareFile()" style="padding:10px 16px;border:none;border-radius:8px;cursor:pointer;">分享</button>
+    <button class="btn-secondary" onclick="copyDirectLink()" style="padding:10px 16px;border:none;border-radius:8px;cursor:pointer;">复制直链</button>
+    <button class="btn-secondary" onclick="renameFile()" style="padding:10px 16px;border:none;border-radius:8px;cursor:pointer;">重命名</button>
+    <button class="btn-secondary" onclick="deleteFile()" style="padding:10px 16px;border:none;border-radius:8px;cursor:pointer;color:var(--danger);">删除</button>
+    <button class="btn-secondary" id="btn-save" onclick="saveText()" style="display:none;padding:10px 16px;border:none;border-radius:8px;cursor:pointer;">保存</button>
   </div>
 </div>
 <div class="snackbar" id="snackbar"></div>
@@ -2007,20 +1789,13 @@ const FILE_SCRIPT = `
 const params=new URLSearchParams(location.search);
 const path=params.get('path')||'';
 let fileNode=null;
-let textContent='';
 function showMsg(msg){ const s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(()=>s.classList.remove('show'),2500); }
 function escapeHtml(t){ return t.replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 function formatSize(b){ if(!b)return '0 B'; const k=1024, s=['B','KB','MB','GB']; const i=Math.floor(Math.log(b)/Math.log(k)); return (b/Math.pow(k,i)).toFixed(2)+' '+s[i]; }
-async function copyText(text){
-  try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return; } } catch (e) {}
-  const ta = document.createElement('textarea');
-  ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-  document.body.appendChild(ta); ta.select();
-  document.execCommand('copy'); document.body.removeChild(ta);
-}
+async function copyText(text){ try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return; } } catch(e){} }
 async function api(url, opts={}){
   const r=await fetch(url, opts);
-  if(r.status===401){ location.href='/login?redirect='+encodeURIComponent(location.pathname+location.search); return null; }
+  if(r.status===401){ location.href='/login'; return null; }
   if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
   return r.json().catch(()=>null);
 }
@@ -2052,16 +1827,14 @@ async function renderPreview(){
     preview.innerHTML='<audio controls src="'+url+'" style="width:100%;"></audio>';
   } else if(['txt','md','json','js','css','html','xml'].includes(ext)){
     const r=await fetch(url);
-    textContent=await r.text();
-    preview.innerHTML='<textarea id="fallback-editor" style="width:100%;min-height:400px;font-family:monospace;padding:12px;border:1px solid #e0e0e0;border-radius:8px;background:#fff;">'+escapeHtml(textContent)+'</textarea>';
+    const text=await r.text();
+    preview.innerHTML='<textarea id="fallback-editor" style="width:100%;min-height:400px;font-family:monospace;padding:12px;border:1px solid #e0e0e0;border-radius:8px;background:#fff;">'+escapeHtml(text)+'</textarea>';
     document.getElementById('btn-save').style.display='inline-flex';
   } else if(mime.startsWith('image/')){
     preview.innerHTML='<img src="'+url+'" style="max-width:100%;max-height:70vh;display:block;margin:0 auto;border-radius:8px;">';
   } else {
-    preview.innerHTML='<div class="empty">该文件类型无法预览<br><a href="'+downloadUrl+'">下载文件</a></div>';
+    preview.innerHTML='<div class="empty">无法预览<br><a href="'+downloadUrl+'">下载文件</a></div>';
   }
-  const iconMap={'mp4':'movie','mp3':'audiotrack','wav':'audiotrack','ogg':'audiotrack','jpg':'image','jpeg':'image','png':'image','gif':'image','webp':'image','zip':'folder_zip','rar':'folder_zip','7z':'folder_zip','tar':'folder_zip','gz':'folder_zip','txt':'description','md':'description','json':'description','js':'description','css':'description','html':'description'};
-  document.getElementById('file-icon').textContent=iconMap[ext]||'insert_drive_file';
 }
 async function shareFile(){ if(!fileNode) return; await copyText(location.origin+'/share/'+fileNode.ssid); showMsg('分享链接已复制'); }
 async function copyDirectLink(){ if(!fileNode) return; await copyText(location.origin+'/direct/'+fileNode.ssid+'/'+encodeURIComponent(fileNode.name)); showMsg('直链已复制'); }
@@ -2070,16 +1843,12 @@ async function deleteFile(){ if(!fileNode) return; if(!confirm('确定删除?'))
 async function saveText(){
   const ta=document.getElementById('fallback-editor');
   if(!ta){ showMsg('编辑器未加载'); return; }
-  try{
-    await api('/api/file/content',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({path,content:ta.value})});
-    showMsg('已保存');
-  }catch(e){ showMsg('保存失败: '+e.message); }
+  try{ await api('/api/file/content',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({path,content:ta.value})}); showMsg('已保存'); }
+  catch(e){ showMsg('保存失败: '+e.message); }
 }
 load();
 </script>
 `;
-
-// ==================== 设置页 ====================
 
 function settingsPage(settings = {}) {
   const primary = settings.primary || '#1976d2';
@@ -2132,7 +1901,7 @@ function settingsPage(settings = {}) {
       <input type="file" id="bg-file" accept="image/*" style="display:none">
       <button class="btn-secondary" onclick="document.getElementById('bg-file').click()" style="padding:8px;border:none;border-radius:8px;cursor:pointer;">上传</button>
     </div>
-    <label style="display:block;margin-bottom:8px;font-size:14px;color:var(--text-sec);">文件卡片透明度: <span id="opacity-label">${Math.round(cardOpacity * 100)}%</span></label>
+    <label style="display:block;margin-bottom:8px;font-size:14px;color:var(--text-sec);">卡片透明度: <span id="opacity-label">${Math.round(cardOpacity * 100)}%</span></label>
     <input type="range" id="card-opacity" min="0.2" max="1" step="0.05" value="${cardOpacity}" style="width:100%;margin-bottom:16px;">
   </div>
   <div class="card">
@@ -2172,7 +1941,6 @@ function setPrimaryColor(c){
 function showMsg(msg){ const s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(()=>s.classList.remove('show'),2500); }
 async function api(url, opts={}){
   const r=await fetch(url, opts);
-  if(r.status===401){ location.href='/login?redirect='+encodeURIComponent(location.pathname+location.search); return null; }
   if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||r.statusText); }
   return r.json().catch(()=>null);
 }
@@ -2241,7 +2009,7 @@ function generateThemeCss(settings = {}) {
   if (isSourceHan) link = '<link rel="stylesheet" href="' + SOURCE_HAN_SERIF_CSS + '">';
   else if (isCustomCss) link = '<link rel="stylesheet" href="' + fontCss + '">';
   let css = '<style id="theme-style">';
-  css += ':root { --primary:' + primary + '; --primary-dark:' + adjustColor(primary, -30) + '; }';
+  css += ':root { --primary:' + primary + '; }';
   if (isSourceHan) css += 'body, input, select, button, textarea { font-family: "SourceHanSerifSC", system-ui, sans-serif !important; }';
   else if (isCustomCss) css += 'body, input, select, button, textarea { font-family: ' + fontCssFamily + ', system-ui, sans-serif !important; }';
   else if (isCustomFontFile) {
@@ -2261,18 +2029,6 @@ function generateThemeCss(settings = {}) {
   return link + css;
 }
 
-function adjustColor(hex, amount) {
-  hex = hex.replace('#', '');
-  if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
-  let r = parseInt(hex.slice(0, 2), 16), g = parseInt(hex.slice(2, 4), 16), b = parseInt(hex.slice(4, 6), 16);
-  r = Math.max(0, Math.min(255, r + amount));
-  g = Math.max(0, Math.min(255, g + amount));
-  b = Math.max(0, Math.min(255, b + amount));
-  return '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('');
-}
-
-// ==================== 分享页 ====================
-
 function sharePage(node) {
   return page('分享', `
 <div class="appbar"><h1>文件分享</h1></div>
@@ -2289,8 +2045,6 @@ function sharePage(node) {
 `);
 }
 
-// ==================== ZIP 页 ====================
-
 function zipPage(folderName, files) {
   const filesJson = JSON.stringify(files).replace(/</g, '\u003c');
   const fileListHtml = files.map(f => 
@@ -2305,7 +2059,7 @@ function zipPage(folderName, files) {
   <div class="card">
     <h3 style="margin-top:0;">${escapeHtml(folderName)}</h3>
     <p style="color:var(--text-sec);">共 ${files.length} 个文件</p>
-    <div id="zip-progress" style="margin:16px 0;">
+    <div style="margin:16px 0;">
       <div style="height:4px;background:var(--divider);border-radius:2px;overflow:hidden;">
         <div id="zip-bar" style="height:100%;width:0%;background:var(--primary);transition:width .3s;"></div>
       </div>
@@ -2315,28 +2069,21 @@ function zipPage(folderName, files) {
   </div>
   <div class="card" style="max-height:50vh;overflow:auto;">${fileListHtml}</div>
 </div>
-<div class="snackbar" id="snackbar"></div>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
 <script>
 const files = ${filesJson};
 const folderName = '${escapeHtml(folderName).replace(/'/g, "\\'")}';
-function showMsg(msg){ const s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(()=>s.classList.remove('show'),2500); }
-function formatSize(b){ if(!b)return '0 B'; const k=1024, s=['B','KB','MB','GB']; const i=Math.floor(Math.log(b)/Math.log(k)); return (b/Math.pow(k,i)).toFixed(2)+' '+s[i]; }
 async function startZip(){
   document.getElementById('btn-start').disabled = true;
   const zip = new JSZip();
   const folder = zip.folder(folderName);
-  let doneBytes = 0;
-  let totalBytes = files.reduce((a,f)=>a+(f.size||0), 0);
-  const t0 = Date.now();
   for (let i = 0; i < files.length; i++) {
     const f = files[i];
     document.getElementById('zip-status').textContent = '下载 ' + (i+1) + '/' + files.length;
     const resp = await fetch('/direct/' + f.ssid + '/' + encodeURIComponent(f.name));
     const blob = await resp.blob();
     folder.file(f.path, blob);
-    doneBytes += blob.size;
     document.getElementById('zip-bar').style.width = Math.floor((i/files.length)*50) + '%';
   }
   document.getElementById('zip-status').textContent = '正在生成 ZIP...';
@@ -2366,10 +2113,7 @@ async function handleRequest(request, env, ctx = null) {
     const body = await request.json();
     if (body.password === env.CLOUD_PASSWORD) {
       return new Response(JSON.stringify({ ok: true }), {
-        headers: {
-          'Content-Type': 'application/json',
-          'Set-Cookie': `auth=${encodeURIComponent(env.CLOUD_PASSWORD)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`
-        }
+        headers: { 'Content-Type': 'application/json', 'Set-Cookie': `auth=${encodeURIComponent(env.CLOUD_PASSWORD)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400` }
       });
     }
     return errorResponse('密码错误', 401);
@@ -2449,7 +2193,7 @@ async function handleRequest(request, env, ctx = null) {
         const end = Math.min(start + CHUNK_SIZE, size);
         await githubUploadFile(id, `chunk_${i}`, arrayBuffer.slice(start, end), env, `chunk ${i}`, true);
         await updateTaskThrottled(env, taskId, {
-          message: '写入 ' + (i + 1) + '/' + chunks + ' 分片',
+          message: '写入 ' + (i + 1) + '/' + chunks + ' 分片 · ' + formatSize(Math.min(size, end)) + '/' + formatSize(size),
           progress: 5 + Math.floor(((i + 1) / chunks) * 90)
         });
       }
@@ -2466,14 +2210,11 @@ async function handleRequest(request, env, ctx = null) {
     return jsonResponse({ ok: true, taskId });
   }
 
-  // /api/upload/start
   if (path === '/api/upload/start' && request.method === 'POST') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
     const body = await request.json();
-    const filePath = body.path;
-    const filename = body.filename;
-    const size = body.size;
+    const filePath = body.path, filename = body.filename, size = body.size;
     const taskId = body.taskId || ssid();
     if (!filePath || !filename || size == null) return errorResponse('缺少参数');
     const uploadId = ssid();
@@ -2485,7 +2226,6 @@ async function handleRequest(request, env, ctx = null) {
     return jsonResponse({ uploadId, storage, chunks, chunkSize, taskId });
   }
 
-  // /api/upload/chunk
   if (path === '/api/upload/chunk' && request.method === 'POST') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
@@ -2505,7 +2245,6 @@ async function handleRequest(request, env, ctx = null) {
         await githubUploadFile(uploadId, 'chunk_' + index, chunkBuf, env, 'chunk ' + index, true);
       }
       if (!isNaN(total) && taskId) {
-        // 带速度的进度
         await ensureD1(env);
         const row = await getD1(env).prepare('SELECT value FROM kv_store WHERE key = ?').bind('task_' + taskId).first();
         let msg = '已写入 ' + (index + 1) + '/' + total + ' 分片';
@@ -2529,25 +2268,17 @@ async function handleRequest(request, env, ctx = null) {
     }
   }
 
-  // /api/upload/finish
   if (path === '/api/upload/finish' && request.method === 'POST') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
     const body = await request.json();
-    const filePath = body.path;
-    const uploadId = body.uploadId;
-    const filename = body.filename;
-    const storage = body.storage;
-    const size = body.size;
-    const chunks = body.chunks;
-    const taskId = body.taskId;
+    const filePath = body.path, uploadId = body.uploadId, filename = body.filename;
+    const storage = body.storage, size = body.size, chunks = body.chunks, taskId = body.taskId;
     if (!filePath || !uploadId || !filename || !storage) return errorResponse('缺少参数');
     try {
       const structure = await getStructure(env);
       const oldNode = getNode(structure, filePath);
-      if (oldNode && oldNode.type === 'file') {
-        try { await deleteFileStorage(oldNode, env); } catch (e) { console.error(e); }
-      }
+      if (oldNode && oldNode.type === 'file') { try { await deleteFileStorage(oldNode, env); } catch (e) {} }
       let finalStorage = storage, finalSsid = uploadId, finalChunks = chunks;
       if (storage === 'kv' && chunks > 1) {
         await updateTask(env, taskId, { message: '合并分片...', progress: 95 });
@@ -2564,10 +2295,7 @@ async function handleRequest(request, env, ctx = null) {
         for (let i = 0; i < chunks; i++) await getKV(uploadId, env).delete(uploadId + '_chunk_' + i);
         finalStorage = 'kv'; finalChunks = 1;
       }
-      setNode(structure, filePath, {
-        type: 'file', name: filename, ssid: finalSsid, storage: finalStorage,
-        size, chunks: finalChunks, createdAt: Date.now()
-      });
+      setNode(structure, filePath, { type: 'file', name: filename, ssid: finalSsid, storage: finalStorage, size, chunks: finalChunks, createdAt: Date.now() });
       await saveStructure(env, structure);
       await updateTask(env, taskId, { status: 'done', message: '完成', progress: 100 });
       return jsonResponse({ ok: true });
@@ -2577,7 +2305,6 @@ async function handleRequest(request, env, ctx = null) {
     }
   }
 
-  // 手动上传：初始化
   if (path === '/api/upload/manual/start' && request.method === 'POST') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
@@ -2592,14 +2319,12 @@ async function handleRequest(request, env, ctx = null) {
     return jsonResponse({ uploadId, taskId, chunks, chunkSize: CHUNK_SIZE, githubUser: GITHUB_USER, repo: uploadId, token: env.GITHUB_TOKEN });
   }
 
-  // 手动上传：分片通知
   if (path === '/api/upload/manual/chunk' && request.method === 'POST') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
     const body = await request.json();
     const uploadId = body.uploadId, index = body.index, sha = body.sha, taskId = body.taskId;
     if (!uploadId || index == null || !sha) return errorResponse('缺少参数');
-    // 服务端也带速度和进度
     await ensureD1(env);
     const row = await getD1(env).prepare('SELECT value FROM kv_store WHERE key = ?').bind('task_' + taskId).first();
     if (row && row.value) {
@@ -2616,16 +2341,12 @@ async function handleRequest(request, env, ctx = null) {
           progress: Math.min(90, Math.floor((doneChunks / total) * 90))
         });
       } catch (e) {
-        await updateTaskThrottled(env, taskId, {
-          message: '直传 ' + (index + 1) + '/' + body.total,
-          progress: Math.min(90, Math.floor((index + 1) / body.total * 90))
-        });
+        await updateTaskThrottled(env, taskId, { message: '直传 ' + (index + 1) + '/' + body.total, progress: Math.min(90, Math.floor((index + 1) / body.total * 90)) });
       }
     }
     return jsonResponse({ ok: true, index, sha });
   }
 
-  // 手动上传：完成
   if (path === '/api/upload/manual/finish' && request.method === 'POST') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
@@ -2634,9 +2355,7 @@ async function handleRequest(request, env, ctx = null) {
     if (!filePath || !uploadId || !filename || !size || !chunks) return errorResponse('缺少参数');
     const structure = await getStructure(env);
     const oldNode = getNode(structure, filePath);
-    if (oldNode && oldNode.type === 'file') {
-      try { await deleteFileStorage(oldNode, env); } catch (e) { console.error(e); }
-    }
+    if (oldNode && oldNode.type === 'file') { try { await deleteFileStorage(oldNode, env); } catch (e) {} }
     setNode(structure, filePath, { type: 'file', name: filename, ssid: uploadId, storage: 'github', size, chunks, createdAt: Date.now() });
     await saveStructure(env, structure);
     await updateTask(env, taskId, { status: 'done', message: '完成', progress: 100 });
@@ -2663,15 +2382,14 @@ async function handleRequest(request, env, ctx = null) {
     const filesToDelete = [];
     if (node.type === 'file') filesToDelete.push(node);
     else {
-      const paths = collectPaths(node, p);
-      for (const cp of paths) {
+      for (const cp of collectPaths(node, p)) {
         const child = getNode(structure, cp);
         if (child && child.type === 'file') filesToDelete.push(child);
       }
     }
     deleteNode(structure, p);
     await saveStructure(env, structure);
-    const bgTask = (async () => { try { await deleteFileStoragesConcurrently(filesToDelete, env, 32); } catch (e) { console.error(e); } })();
+    const bgTask = (async () => { try { await deleteFileStoragesConcurrently(filesToDelete, env, 32); } catch (e) {} })();
     if (ctx && ctx.waitUntil) ctx.waitUntil(bgTask); else bgTask.catch(() => {});
     return jsonResponse({ ok: true });
   }
@@ -2730,8 +2448,7 @@ async function handleRequest(request, env, ctx = null) {
       if (!node) continue;
       if (node.type === 'file') filesToDelete.push(node);
       else {
-        const childPaths = collectPaths(node, p);
-        for (const cp of childPaths) {
+        for (const cp of collectPaths(node, p)) {
           const child = getNode(structure, cp);
           if (child && child.type === 'file') filesToDelete.push(child);
         }
@@ -2739,7 +2456,7 @@ async function handleRequest(request, env, ctx = null) {
       deleteNode(structure, p);
     }
     await saveStructure(env, structure);
-    const bgTask = (async () => { try { await deleteFileStoragesConcurrently(filesToDelete, env, 32); } catch (e) { console.error(e); } })();
+    const bgTask = (async () => { try { await deleteFileStoragesConcurrently(filesToDelete, env, 32); } catch (e) {} })();
     if (ctx && ctx.waitUntil) ctx.waitUntil(bgTask); else bgTask.catch(() => {});
     return jsonResponse({ ok: true });
   }
@@ -2868,7 +2585,7 @@ async function handleRequest(request, env, ctx = null) {
     }
     await d1Set(env, 'file_structure', { type: 'root', name: '', children: {}, createdAt: Date.now() });
     const bgTask = (async () => {
-      try { await deleteFileStoragesConcurrently(filesToDelete, env, 32); } catch (e) { console.error(e); }
+      try { await deleteFileStoragesConcurrently(filesToDelete, env, 32); } catch (e) {}
       for (const kv of [env.FILE_KV_1, env.FILE_KV_2, env.FILE_KV_3, env.FILE_KV_4, env.FILE_KV_5]) {
         try {
           const list = await kv.list();
