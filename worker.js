@@ -96,7 +96,7 @@ function formatSpeed(bps) {
 function getMime(name) {
   const ext = name.split('.').pop().toLowerCase();
   const map = {
-    mp4: 'video/mp4', webm: 'video/webm', mkv: 'video/x-matroska',
+    mp4: 'video/mp4', webm: 'video/webm', mkv: 'video/x-matroska', a3v8: 'video/x-matroska',
     mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', flac: 'audio/flac', m4a: 'audio/mp4',
     txt: 'text/plain', md: 'text/markdown', json: 'application/json', js: 'application/javascript',
     css: 'text/css', html: 'text/html', xml: 'application/xml',
@@ -1758,7 +1758,7 @@ async function batchDelete(){
 
 function getIcon(name){
   const ext=name.split('.').pop().toLowerCase();
-  if(['mp4','webm','mkv'].includes(ext)) return 'movie';
+  if(['mp4','webm','mkv','a3v8'].includes(ext)) return 'movie';
   if(['mp3','wav','ogg','flac','m4a'].includes(ext)) return 'audiotrack';
   if(['jpg','jpeg','png','gif','webp'].includes(ext)) return 'image';
   if(['zip','rar','7z','tar','gz'].includes(ext)) return 'folder_zip';
@@ -2542,7 +2542,7 @@ function loadScript(src, timeout=8000){ return new Promise((resolve,reject)=>{ c
 function loadCSS(href, timeout=8000){ return new Promise((resolve,reject)=>{ const l=document.createElement('link'); l.rel='stylesheet'; l.href=href; const t=setTimeout(()=>reject(new Error('load timeout: '+href)), timeout); l.onload=()=>{ clearTimeout(t); resolve(); }; l.onerror=()=>{ clearTimeout(t); reject(new Error('load failed: '+href)); }; document.head.appendChild(l); }); }
 function getMime(name){
   const ext=name.split('.').pop().toLowerCase();
-  const map={mp4:'video/mp4',webm:'video/webm',mkv:'video/x-matroska',mp3:'audio/mpeg',wav:'audio/wav',ogg:'audio/ogg',flac:'audio/flac',m4a:'audio/mp4',txt:'text/plain',md:'text/markdown',json:'application/json',js:'application/javascript',css:'text/css',html:'text/html',xml:'application/xml',zip:'application/zip',rar:'application/vnd.rar','7z':'application/x-7z-compressed',tar:'application/x-tar',gz:'application/gzip',pdf:'application/pdf',jpg:'image/jpeg',jpeg:'image/jpeg',png:'image/png',gif:'image/gif',webp:'image/webp'};
+  const map={mp4:'video/mp4',webm:'video/webm',a3v8:'video/mp4',mkv:'video/x-matroska',mp3:'audio/mpeg',wav:'audio/wav',ogg:'audio/ogg',flac:'audio/flac',m4a:'audio/mp4',txt:'text/plain',md:'text/markdown',json:'application/json',js:'application/javascript',css:'text/css',html:'text/html',xml:'application/xml',zip:'application/zip',rar:'application/vnd.rar','7z':'application/x-7z-compressed',tar:'application/x-tar',gz:'application/gzip',pdf:'application/pdf',jpg:'image/jpeg',jpeg:'image/jpeg',png:'image/png',gif:'image/gif',webp:'image/webp'};
   return map[ext]||'application/octet-stream';
 }
 async function load(){
@@ -2630,7 +2630,7 @@ async function renderPreview(){
       preview.innerHTML='<div class="empty">预览加载失败: '+escapeHtml(e.message)+'<br><a href="'+url+'" target="_blank">点击测试直链</a><br><a href="'+downloadUrl+'">下载文件</a></div>';
     }
   }
-  const iconMap={'mp4':'movie','mp3':'audiotrack','wav':'audiotrack','ogg':'audiotrack','jpg':'image','jpeg':'image','png':'image','gif':'image','webp':'image','zip':'folder_zip','rar':'folder_zip','7z':'folder_zip','tar':'folder_zip','gz':'folder_zip','txt':'description','md':'description','json':'description','js':'description','css':'description','html':'description'};
+  const iconMap={'mp4':'movie','a3v8':'movie','mp3':'audiotrack','wav':'audiotrack','ogg':'audiotrack','jpg':'image','jpeg':'image','png':'image','gif':'image','webp':'image','zip':'folder_zip','rar':'folder_zip','7z':'folder_zip','tar':'folder_zip','gz':'folder_zip','txt':'description','md':'description','json':'description','js':'description','css':'description','html':'description'};
   document.getElementById('file-icon').textContent=iconMap[ext]||'insert_drive_file';
 }
 async function renderZip(url){
