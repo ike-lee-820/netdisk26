@@ -77,7 +77,7 @@ function formatSpeed(bps) {
 function getMime(name) {
   const ext = name.split('.').pop().toLowerCase();
   const map = {
-    mp4: 'video/mp4', webm: 'video/webm', mkv: 'video/x-matroska',
+    mp4: 'video/mp4', webm: 'video/webm', mkv: 'video/x-matroska', a3v8: 'video/mp4',
     mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', flac: 'audio/flac', m4a: 'audio/mp4',
     txt: 'text/plain', md: 'text/markdown', json: 'application/json', js: 'application/javascript',
     css: 'text/css', html: 'text/html', xml: 'application/xml',
@@ -917,7 +917,7 @@ function sortEntries(a,b){
 function formatTime(ts){ if(!ts) return ''; return new Date(ts).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}); }
 function getIcon(name){
   const ext=name.split('.').pop().toLowerCase();
-  if(['mp4','webm','mkv'].includes(ext)) return 'movie';
+  if(['mp4','webm','mkv','a3v8'].includes(ext)) return 'movie';
   if(['mp3','wav','ogg','flac','m4a'].includes(ext)) return 'audiotrack';
   if(['jpg','jpeg','png','gif','webp'].includes(ext)) return 'image';
   if(['zip','rar','7z','tar','gz'].includes(ext)) return 'folder_zip';
@@ -1837,7 +1837,7 @@ async function api(url, opts={}){
 }
 function getMime(name){
   const ext=name.split('.').pop().toLowerCase();
-  const map={mp4:'video/mp4',webm:'video/webm',mkv:'video/x-matroska',mp3:'audio/mpeg',wav:'audio/wav',ogg:'audio/ogg',flac:'audio/flac',m4a:'audio/mp4',txt:'text/plain',md:'text/markdown',json:'application/json',js:'application/javascript',css:'text/css',html:'text/html',xml:'application/xml',zip:'application/zip',rar:'application/vnd.rar','7z':'application/x-7z-compressed',tar:'application/x-tar',gz:'application/gzip',pdf:'application/pdf',jpg:'image/jpeg',jpeg:'image/jpeg',png:'image/png',gif:'image/gif',webp:'image/webp'};
+  const map={mp4:'video/mp4',webm:'video/webm',mkv:'video/x-matroska',a3v8:'video/mp4',mp3:'audio/mpeg',wav:'audio/wav',ogg:'audio/ogg',flac:'audio/flac',m4a:'audio/mp4',txt:'text/plain',md:'text/markdown',json:'application/json',js:'application/javascript',css:'text/css',html:'text/html',xml:'application/xml',zip:'application/zip',rar:'application/vnd.rar','7z':'application/x-7z-compressed',tar:'application/x-tar',gz:'application/gzip',pdf:'application/pdf',jpg:'image/jpeg',jpeg:'image/jpeg',png:'image/png',gif:'image/gif',webp:'image/webp'};
   return map[ext]||'application/octet-stream';
 }
 async function load(){
