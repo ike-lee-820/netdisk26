@@ -1,5 +1,14 @@
 /**
- * Cloudflare Worker 直链网盘（完整最终版）
+ * Cloudflare Worker 直链网盘（最终修复版）
+ * 
+ * 核心修复：
+ * 1. 任务每任务独立一行，消除并发覆盖
+ * 2. 分片直接写 GitHub，修复 7 分片后卡住
+ * 3. 32 线程上传，70MB 分片
+ * 4. 删除文件快速（直接删仓库 + 32 并发 + 结构先更新）
+ * 5. 客户端 XHR 显示速度和进度
+ * 6. 修复进度条跳回：进度只由本地控制，服务端 uploading 时绝不覆盖
+ * 7. 进度计算：服务端完成字节 + 传输中字节×0.3 加权，单调递增
  */
 
 const GITHUB_USER = 'ikecode26';
@@ -1267,16 +1276,19 @@ async function uploadOne(file, dir, externalTaskId){
   function fmtProgress(done, total){ return formatSize(done)+'/'+formatSize(total); }
 
   try {
-    // 小文件：单请求 XHR
+    // ============ 小文件：单请求 XHR ============
     if (file.size <= CLIENT_CHUNK) {
       const t = localTasks.get(taskId);
-      if(t){ t.message = '上传 ' + fmtProgress(0, file.size); t.progress = 2; t.updatedAt = Date.now(); }
+      if(t){ t.message = '上传 ' + fmtProgress(0, file.size); t.progress = 1; t.updatedAt = Date.now(); }
       debouncedLoadTasks();
+
       const form = new FormData();
       form.append('path', path);
       form.append('file', file);
       form.append('taskId', taskId);
+
       let lastLoaded = 0, lastTime = Date.now(), smoothSpeed = 0;
+
       await new Promise((resolve, reject) => {
         const xhr = new XMLHttpRequest();
         xhr.open('POST', '/api/upload');
@@ -1289,16 +1301,22 @@ async function uploadOne(file, dir, externalTaskId){
             smoothSpeed = smoothSpeed * 0.6 + instant * 0.4;
             lastLoaded = e.loaded; lastTime = now;
           }
-          const pct = Math.max(2, Math.round((e.loaded / e.total) * 100));
+          // 传输阶段 0-50%，剩余 50% 留给 Worker 写 GitHub
+          const pct = Math.min(50, Math.max(1, Math.round((e.loaded / e.total) * 50)));
           const tt = localTasks.get(taskId);
-          if(tt){ tt.message = '上传 ' + fmtProgress(e.loaded, e.total) + ' · ' + fmtSpd(smoothSpeed); tt.progress = pct; tt.updatedAt = Date.now(); }
+          if(tt){
+            tt.message = '上传 ' + fmtProgress(e.loaded, e.total) + ' · ' + fmtSpd(smoothSpeed);
+            tt.progress = pct;
+            tt.updatedAt = Date.now();
+          }
           debouncedLoadTasks();
         };
         xhr.onload = () => {
           if (xhr.status >= 200 && xhr.status < 300) {
             const tt = localTasks.get(taskId);
-            if(tt){ tt.message = '完成'; tt.progress = 100; tt.updatedAt = Date.now(); }
-            debouncedLoadTasks(); resolve();
+            if(tt){ tt.status = 'done'; tt.message = '完成'; tt.progress = 100; tt.updatedAt = Date.now(); }
+            debouncedLoadTasks();
+            resolve();
           } else {
             try { const j = JSON.parse(xhr.responseText); reject(new Error(j.error || ('HTTP ' + xhr.status))); }
             catch (e) { reject(new Error('HTTP ' + xhr.status)); }
@@ -1309,12 +1327,13 @@ async function uploadOne(file, dir, externalTaskId){
         abortCtrl.signal.addEventListener('abort', () => xhr.abort());
         xhr.send(form);
       });
-      removeLocalTask(taskId);
+
+      setTimeout(() => removeLocalTask(taskId), 2000);
       showMsg('上传完成: ' + file.name);
       return;
     }
 
-    // 大文件：分片 32 线程 + XHR 实时进度
+    // ============ 大文件：分片 32 线程 ============
     const start = await api('/api/upload/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1324,29 +1343,43 @@ async function uploadOne(file, dir, externalTaskId){
 
     const totalChunks = start.chunks;
     const uploadId = start.uploadId;
-    let completedChunks = 0;
     let uploadError = null;
 
-    const chunkUploadedBytes = new Array(totalChunks).fill(0);
-    let lastBytes = 0, lastTime = Date.now(), smoothSpeed = 0;
+    // 两个数组分离：服务端已确认完成 / 客户端传输中的字节
+    const chunkDone = new Array(totalChunks).fill(false);
+    const chunkInFlight = new Array(totalChunks).fill(0);
+    const chunkSizeArr = [];
+    for (let i = 0; i < totalChunks; i++) {
+      const begin = i * CLIENT_CHUNK;
+      const end = Math.min(begin + CLIENT_CHUNK, file.size);
+      chunkSizeArr.push(end - begin);
+    }
+    let serverDoneBytes = 0;
+    let doneChunksCount = 0;
+    let lastServerBytes = 0, lastTime = Date.now(), smoothSpeed = 0;
 
     const progressTimer = setInterval(() => {
       if (uploadError) return;
+      // 进度 = 服务端已完成分片(100%) + 传输中分片(×0.3 加权)
       let total = 0;
-      for (let k = 0; k < chunkUploadedBytes.length; k++) total += chunkUploadedBytes[k];
+      for (let i = 0; i < totalChunks; i++) {
+        if (chunkDone[i]) total += chunkSizeArr[i];
+        else if (chunkInFlight[i] > 0) total += Math.min(chunkInFlight[i], chunkSizeArr[i]) * 0.3;
+      }
       const now = Date.now();
       const dt = (now - lastTime) / 1000;
-      if (dt > 0.2) {
-        const instant = (total - lastBytes) / dt;
-        if (instant >= 0) smoothSpeed = smoothSpeed * 0.5 + instant * 0.5;
-        lastBytes = total;
+      if (dt > 0.3) {
+        const instant = (serverDoneBytes - lastServerBytes) / dt;
+        if (instant >= 0) smoothSpeed = smoothSpeed * 0.6 + instant * 0.4;
+        lastServerBytes = serverDoneBytes;
         lastTime = now;
       }
       const pct = Math.min(99, Math.floor((total / file.size) * 99));
       const tt = localTasks.get(taskId);
-      if(tt){
-        tt.message = '上传 ' + fmtProgress(total, file.size) + ' · ' + fmtSpd(smoothSpeed) + ' · 分片 ' + completedChunks + '/' + totalChunks;
-        tt.progress = pct; tt.updatedAt = Date.now();
+      if (tt) {
+        tt.message = '上传 ' + fmtProgress(Math.floor(total), file.size) + ' · ' + fmtSpd(smoothSpeed) + ' · 分片 ' + doneChunksCount + '/' + totalChunks;
+        tt.progress = pct;
+        tt.updatedAt = Date.now();
       }
       debouncedLoadTasks();
     }, 500);
@@ -1372,14 +1405,18 @@ async function uploadOne(file, dir, externalTaskId){
           await new Promise((resolve, reject) => {
             const xhr = new XMLHttpRequest();
             xhr.open('POST', '/api/upload/chunk');
-            if (retries > 0) chunkUploadedBytes[idx] = 0;
+            if (retries > 0) chunkInFlight[idx] = 0;
             xhr.upload.onprogress = (e) => {
               if (!e.lengthComputable) return;
-              chunkUploadedBytes[idx] = e.loaded;
+              chunkInFlight[idx] = e.loaded;
             };
             xhr.onload = () => {
               if (xhr.status >= 200 && xhr.status < 300) {
-                chunkUploadedBytes[idx] = blob.size;
+                // XHR onload = Worker 已写完 GitHub
+                chunkDone[idx] = true;
+                chunkInFlight[idx] = 0;
+                serverDoneBytes += blob.size;
+                doneChunksCount++;
                 resolve();
               } else {
                 let errMsg = 'HTTP ' + xhr.status;
@@ -1392,7 +1429,6 @@ async function uploadOne(file, dir, externalTaskId){
             abortCtrl.signal.addEventListener('abort', () => xhr.abort());
             xhr.send(form);
           });
-          completedChunks++;
           return;
         } catch (e) {
           if (e.message === '已取消' || abortCtrl.signal.aborted) throw new Error('已取消');
@@ -1426,7 +1462,7 @@ async function uploadOne(file, dir, externalTaskId){
     const tt = localTasks.get(taskId);
     if(tt){ tt.status = 'done'; tt.message = '完成'; tt.progress = 100; tt.updatedAt = Date.now(); }
     debouncedLoadTasks();
-    setTimeout(() => removeLocalTask(taskId), 1500);
+    setTimeout(() => removeLocalTask(taskId), 2000);
     showMsg('上传完成: '+file.name);
   } catch (e) {
     abortControllers.delete(taskId);
@@ -1599,7 +1635,7 @@ async function manualUploadOne(file, dir, externalTaskId){
     const t = localTasks.get(taskId);
     if(t){ t.status = 'done'; t.message = '完成'; t.progress = 100; t.updatedAt = Date.now(); }
     debouncedLoadTasks();
-    setTimeout(() => removeLocalTask(taskId), 1500);
+    setTimeout(() => removeLocalTask(taskId), 2000);
     showMsg('手动上传完成: ' + file.name);
   } catch (e) {
     cancelledManualUploads.delete(taskId);
@@ -1625,9 +1661,11 @@ function debounce(fn, ms){
   };
 }
 
+// ★ 关键修复：服务端 uploading 时绝不覆盖本地，进度只增不减
 async function loadTasks(){
   let serverTasks = [];
   try { serverTasks = await api('/api/tasks') || []; } catch (e) { console.error('获取任务失败', e); }
+
   for (const t of serverTasks) {
     const local = localTasks.get(t.id);
     if (local) {
@@ -1636,13 +1674,11 @@ async function loadTasks(){
         if (t.message) local.message = t.message;
         if (t.progress != null) local.progress = t.progress;
         local.updatedAt = t.updatedAt || Date.now();
-      } else if (!local.message || local.message === '排队等待...' || local.message === '准备上传...') {
-        if (t.message) local.message = t.message;
-        if (t.progress != null) local.progress = t.progress;
-        if (t.updatedAt) local.updatedAt = t.updatedAt;
       }
+      // 服务端 uploading 时：什么都不做，保留本地消息/进度/速度
     }
   }
+
   const map = new Map();
   for (const t of localTasks.values()) map.set(t.id, t);
   for (const t of serverTasks) { if (!map.has(t.id)) map.set(t.id, t); }
