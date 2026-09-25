@@ -1656,8 +1656,10 @@ async function uploadOne(file, dir, externalTaskId){
         } catch (e) {
           retries++;
           lastErr = e.message || String(e);
-          if (retries >= 5) throw new Error('分片 ' + (i + 1) + '/' + total + ' 上传失败: ' + lastErr);
-          await new Promise(r => setTimeout(r, 1500 * retries));
+          if (retries >= 5) throw new Error('分片 ' + (i + 1) + '/' + total + ' 上传失败(已重试5次): ' + lastErr);
+          const waitMs = Math.min(15000, 1000 * Math.pow(2, retries - 1)) + Math.floor(Math.random() * 500);
+        console.log('[chunk] retry ' + retries + ' after ' + waitMs + 'ms');
+        await new Promise(r => setTimeout(r, waitMs));
         }
       }
 
@@ -1667,15 +1669,11 @@ async function uploadOne(file, dir, externalTaskId){
       uploadedBytes += blob.size;
       completedChunks++;
 
-      // 通知服务端（携带已上传字节数，用于服务端精确记录）
-      chunkSha[i] = sha;
+      // 通知服务端
       api('/api/upload/chunk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          uploadId, index: i, sha, total, taskId,
-          uploadedBytes: uploadedBytes + blob.size
-        })
+        body: JSON.stringify({uploadId, index: i, sha, total, taskId, chunkSize: blob.size })
       }).catch(() => {});
     }
 
@@ -1706,7 +1704,7 @@ async function uploadOne(file, dir, externalTaskId){
     const finishResp = await api('/api/upload/finish', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ uploadId, path, filename: file.name, size: file.size, chunks: total, taskId })
+      body: JSON.stringify({uploadId, path, filename: file.name, size: file.size, chunks: total, taskId, chunkSize: blob.size })
     });
     if (!finishResp || !finishResp.ok) {
       throw new Error((finishResp && finishResp.error) || '注册失败');
@@ -1786,16 +1784,27 @@ async function loadTasks(){
     serverTasksCache = await api('/api/tasks') || [];
   } catch (e) { console.error('获取任务失败', e); }
 
-  // ★ 完全用服务端状态覆盖本地（进度、速度、消息都以服务端为准）
+  // 服务端状态同步到本地：单调递增保护
   for (const st of serverTasksCache) {
     const local = localTasks.get(st.id);
     if (local) {
-      // 服务端所有字段直接覆盖本地
       if (st.status) local.status = st.status;
       if (st.message) local.message = st.message;
-      if (st.progress != null) local.progress = st.progress;
-      if (st.uploadedBytes != null) local.uploadedBytes = st.uploadedBytes;
-      if (st.doneChunks != null) local.doneChunks = st.doneChunks;
+      // 进度只增不减
+      if (st.progress != null) {
+        const prev = local.progress || 0;
+        local.progress = Math.max(prev, st.progress);
+      }
+      // 字节只增不减
+      if (st.uploadedBytes != null) {
+        const prev = local.uploadedBytes || 0;
+        local.uploadedBytes = Math.max(prev, st.uploadedBytes);
+      }
+      // 分片数只增不减
+      if (st.doneChunks != null) {
+        const prev = local.doneChunks || 0;
+        local.doneChunks = Math.max(prev, st.doneChunks);
+      }
       if (st.totalChunks != null) local.totalChunks = st.totalChunks;
       if (st.speed != null) local.speed = st.speed;
       if (st.updatedAt) local.updatedAt = st.updatedAt;
@@ -2762,7 +2771,7 @@ async function handleRequest(request, env, ctx = null) {
     const taskId = body.taskId || ssid();
     const chunks = Math.max(1, Math.ceil(size / CHUNK_SIZE));
     await githubCreateRepo(uploadId, env);
-    await addTask(env, { id: taskId, name: filename, status: 'uploading', message: '等待上传...', progress: 0, size, speedWindow: [], chunksDone: {}, createdAt: Date.now(), updatedAt: Date.now() });
+    await addTask(env, { id: taskId, name: filename, status: 'uploading', message: '等待上传...', progress: 0, size, speedWindow: [], chunkMap: {}, createdAt: Date.now(), updatedAt: Date.now() });
     return jsonResponse({ uploadId, taskId, chunks, chunkSize: CHUNK_SIZE, githubUser: GITHUB_USER, repo: uploadId, token: env.GITHUB_TOKEN });
   }
 
@@ -2771,6 +2780,7 @@ async function handleRequest(request, env, ctx = null) {
     if (forbid) return forbid;
     const body = await request.json();
     const uploadId = body.uploadId, index = body.index, sha = body.sha, taskId = body.taskId;
+    const chunkSize = parseInt(body.chunkSize, 10) || 0;
     if (!uploadId || index == null || !sha) return errorResponse('缺少参数');
     await ensureD1(env);
     const row = await getD1(env).prepare('SELECT value FROM kv_store WHERE key = ?').bind('task_' + taskId).first();
@@ -2780,38 +2790,65 @@ async function handleRequest(request, env, ctx = null) {
         const total = body.total || 1;
         const size = task.size || 0;
 
-        // 记录已完成分片集合
-        if (!task.chunksDone) task.chunksDone = {};
-        task.chunksDone[index] = 1;
-        const doneCount = Object.keys(task.chunksDone).length;
+        // ★ 用 index → chunkSize 的映射，防止乱序/重复累加
+        if (!task.chunkMap) task.chunkMap = {};
+        const isFirst = !task.chunkMap[index];
+        if (isFirst) {
+          task.chunkMap[index] = chunkSize > 0 ? chunkSize : Math.min(5 * 1024 * 1024, size);
+        }
+        // 计算累计字节（只增不减）
+        let doneBytes = 0;
+        for (const k in task.chunkMap) doneBytes += task.chunkMap[k];
+        doneBytes = Math.min(size, doneBytes);
+        const doneCount = Object.keys(task.chunkMap).length;
 
-        // 已上传字节（客户端上报为准）
-        const uploadedBytes = body.uploadedBytes ? parseInt(body.uploadedBytes, 10) : Math.min(size, doneCount * 5 * 1024 * 1024);
-        const doneBytes = Math.min(size, uploadedBytes);
-
-        // ★ 瞬时速度：滑动窗口（最近 5 秒）
+        // 只在第一次记录该分片时才更新速度窗口（避免重复点）
         const now = Date.now();
         if (!task.speedWindow) task.speedWindow = [];
-        task.speedWindow.push({ t: now, b: doneBytes });
-        // 只保留最近 5 秒
-        const cutoff = now - 5000;
+        if (isFirst) {
+          task.speedWindow.push({ t: now, b: doneBytes });
+        }
+        // 保留最近 3 秒窗口
+        const cutoff = now - 3000;
         task.speedWindow = task.speedWindow.filter(p => p.t >= cutoff);
+        // 保证单调递增（防止乱序写入导致字节回退）
+        task.speedWindow.sort((a, b) => a.t - b.t);
+        // 过滤掉回退点
+        const cleaned = [];
+        let maxB = 0;
+        for (const p of task.speedWindow) {
+          if (p.b >= maxB) { cleaned.push(p); maxB = p.b; }
+        }
+        task.speedWindow = cleaned;
+
         let speed = 0;
         if (task.speedWindow.length >= 2) {
-          const first = task.speedWindow[0];
-          const last = task.speedWindow[task.speedWindow.length - 1];
-          const dt = (last.t - first.t) / 1000;
-          if (dt > 0.3) speed = (last.b - first.b) / dt;
+          const f = task.speedWindow[0];
+          const l = task.speedWindow[task.speedWindow.length - 1];
+          const dt = (l.t - f.t) / 1000;
+          if (dt > 0.5) speed = (l.b - f.b) / dt;
         }
-        // 保底：用平均速度
+        // 窗口太小：用平均速度保底
         if (speed <= 0) {
-          const elapsed = Math.max(0.1, (now - (task.startedAt || task.createdAt || now)) / 1000);
-          speed = doneBytes / elapsed;
+          const el = Math.max(0.1, (now - (task.startedAt || task.createdAt || now)) / 1000);
+          speed = doneBytes / el;
+        }
+        // 平滑速度：新老加权（3:7）
+        const prevSpeed = task.speed || 0;
+        let smoothSpeed = speed;
+        if (prevSpeed > 0 && speed > 0) {
+          smoothSpeed = prevSpeed * 0.3 + speed * 0.7;
+        } else {
+          smoothSpeed = Math.max(prevSpeed, speed);
         }
 
-        const prog = size > 0 ? Math.min(95, Math.floor((doneBytes / size) * 95)) : Math.floor((doneCount / total) * 95);
+        // 进度只增不减
+        const rawProg = size > 0 ? Math.min(95, Math.floor((doneBytes / size) * 95)) : Math.floor((doneCount / total) * 95);
+        const prevProg = task.progress || 0;
+        const prog = Math.max(prevProg, rawProg);
+
         const msg = '上传 ' + formatSize(doneBytes) + '/' + formatSize(size)
-          + ' · ' + formatSpeed(speed)
+          + ' · ' + formatSpeed(smoothSpeed)
           + ' · 分片 ' + doneCount + '/' + total;
 
         await updateTask(env, taskId, {
@@ -2820,7 +2857,9 @@ async function handleRequest(request, env, ctx = null) {
           uploadedBytes: doneBytes,
           doneChunks: doneCount,
           totalChunks: total,
-          speed: Math.round(speed)
+          speed: Math.round(smoothSpeed),
+          chunkMap: task.chunkMap,
+          speedWindow: task.speedWindow
         });
       } catch (e) {
         console.error('chunk task update error', e);
