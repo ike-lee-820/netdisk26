@@ -5,7 +5,7 @@
 const GITHUB_USER = 'ikecode26';
 const GITHUB_API = 'https://api.github.com';
 const ASSETS_REPO = 'netdisk-assets';
-const CHUNK_SIZE = 5 * 1024 * 1024;
+const CHUNK_SIZE = 2 * 1024 * 1024;
 const GH_PROXY = 'https://v6.gh-proxy.com/';
 
 let d1Initialized = false;
@@ -1026,7 +1026,7 @@ const DEFAULT_DOMAIN = 'https://cloud.myocd.de5.net';
 const TASK_CREATE_CONCURRENCY = 64;   // 任务创建并发
 const FILE_UPLOAD_CONCURRENCY = 5;   // 文件上传并发（同时上传多少个文件）
 const CHUNK_UPLOAD_CONCURRENCY = 32;  // 单文件分片并发
-const CLIENT_CHUNK_SIZE = 5 * 1024 * 1024;   // 20MB 分片
+const CLIENT_CHUNK_SIZE = 2 * 1024 * 1024;   // 20MB 分片
 
 function showMsg(msg){ const s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(()=>s.classList.remove('show'),2500); }
 function escapeHtml(t){ return t.replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
