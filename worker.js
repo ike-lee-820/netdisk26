@@ -2258,7 +2258,7 @@ function sharePageV3(share, tree, themeCss) {
       body: JSON.stringify({ password: pw })
     }).then(function(r){
       if (r.status === 410) {
-        return r.json().then(function(j){ document.body.innerHTML = '<div class="container" style="text-align:center;padding:80px 12px;"><div class="material-icons" style="font-size:72px;color:#bdbdbd;">link_off</div><h2 style="margin:8px 0;">分享已失效</h2><p style="color:var(--text-sec);">' + (j.error || '分享已失效') + '</p><button class="btn-primary" onclick="location.href=\'/\'" style="padding:10px 24px;border:none;border-radius:8px;cursor:pointer;margin-top:16px;">返回首页</button></div>'; });
+        return r.json().then(function(j){ document.body.innerHTML = '<div class="container" style="text-align:center;padding:80px 12px;"><div class="material-icons" style="font-size:72px;color:#bdbdbd;">link_off</div><h2 style="margin:8px 0;">分享已失效</h2><p style="color:var(--text-sec);">' + (j.error || '分享已失效') + '</p></div>'; });
       }
       if (!r.ok) { document.getElementById('pwd-err').textContent = '提取码错误'; return null; }
       return r.json();
@@ -2450,7 +2450,6 @@ function shareExpiredPage(reason, themeCss) {
       <div class="material-icons expired-icon">link_off</div>
       <div class="expired-title">分享已失效</div>
       <div class="expired-reason" id="reason-text"></div>
-      <button class="btn-primary" onclick="location.href='/'" style="padding:10px 24px;border:none;border-radius:8px;cursor:pointer;">返回首页</button>
     </div>
   </div>
   <script>
