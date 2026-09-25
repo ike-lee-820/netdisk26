@@ -5,7 +5,7 @@
 const GITHUB_USER = 'ikecode26';
 const GITHUB_API = 'https://api.github.com';
 const ASSETS_REPO = 'netdisk-assets';
-const CHUNK_SIZE = 50 * 1024 * 1024;
+const CHUNK_SIZE = 5 * 1024 * 1024;
 const GH_PROXY = 'https://v6.gh-proxy.com/';
 
 let d1Initialized = false;
@@ -1026,7 +1026,7 @@ const DEFAULT_DOMAIN = 'https://cloud.myocd.de5.net';
 const TASK_CREATE_CONCURRENCY = 64;   // 任务创建并发
 const FILE_UPLOAD_CONCURRENCY = 5;   // 文件上传并发（同时上传多少个文件）
 const CHUNK_UPLOAD_CONCURRENCY = 1;  // 单文件分片并发
-const CLIENT_CHUNK_SIZE = 50 * 1024 * 1024;   // 20MB 分片
+const CLIENT_CHUNK_SIZE = 5 * 1024 * 1024;   // 20MB 分片
 
 function showMsg(msg){ const s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(()=>s.classList.remove('show'),2500); }
 function escapeHtml(t){ return t.replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
@@ -1549,259 +1549,192 @@ async function uploadOne(file, dir, externalTaskId){
   const abortCtrl = new AbortController();
   abortControllers.set(taskId, abortCtrl);
 
-  const baseTask = { id: taskId, name: file.name, status: 'uploading', message: '初始化...', progress: 0, size: file.size, createdAt: Date.now(), updatedAt: Date.now() };
-  if(!localTasks.has(taskId)) addLocalTask(baseTask);
-  else { const t = localTasks.get(taskId); t.status = 'uploading'; t.message = '初始化...'; t.progress = 0; t.updatedAt = Date.now(); }
-  debouncedLoadTasks();
+  const CHUNK = CLIENT_CHUNK_SIZE;  // 5MB
+  const fileSize = file.size;
+  const total = Math.max(1, Math.ceil(fileSize / CHUNK));
+
+  // 初始化任务
+  let t = localTasks.get(taskId);
+  if (!t) {
+    t = { id: taskId, name: file.name, status: 'uploading', message: '初始化...', progress: 0, size: fileSize, uploadedBytes: 0, doneChunks: 0, totalChunks: total, speed: 0, createdAt: Date.now(), updatedAt: Date.now() };
+    localTasks.set(taskId, t);
+  } else {
+    Object.assign(t, { status: 'uploading', message: '初始化...', progress: 0, uploadedBytes: 0, doneChunks: 0, totalChunks: total, speed: 0 });
+  }
+  renderTaskList();
+
+  // 本地速度滑动窗口
+  const speedWindow = [];
+  const startTs = Date.now();
+  let lastRenderedAt = 0;
+
+  function updateUI(extraMessage) {
+    const now = Date.now();
+    // 每秒最多渲染 3 次（防抖）
+    if (now - lastRenderedAt < 300 && !extraMessage) return;
+    lastRenderedAt = now;
+
+    const uploaded = t.uploadedBytes || 0;
+    const prog = Math.min(95, Math.floor((uploaded / fileSize) * 95));
+    t.progress = prog;
+
+    // 速度计算：5 秒滑窗
+    let speed = 0;
+    speedWindow.push({ t: now, b: uploaded });
+    while (speedWindow.length > 0 && speedWindow[0].t < now - 5000) speedWindow.shift();
+    if (speedWindow.length >= 2) {
+      const first = speedWindow[0], last = speedWindow[speedWindow.length - 1];
+      const dt = (last.t - first.t) / 1000;
+      if (dt > 0.3) speed = (last.b - first.b) / dt;
+    }
+    if (speed <= 0) {
+      const el = Math.max(0.1, (now - startTs) / 1000);
+      speed = uploaded / el;
+    }
+    t.speed = Math.round(speed);
+
+    const pct = Math.floor((uploaded / fileSize) * 100);
+    const baseMsg = '分片 ' + (t.doneChunks || 0) + '/' + total
+      + ' · ' + formatSize(uploaded) + '/' + formatSize(fileSize)
+      + ' (' + pct + '%)'
+      + ' · ' + formatSpeed(speed);
+    t.message = extraMessage || baseMsg;
+    t.updatedAt = now;
+
+    renderTaskList();
+  }
+
+  // 启动本地定时渲染（防止某次分片卡住 UI 不刷新）
+  const localTimer = setInterval(() => updateUI(), 500);
 
   try {
-    // 1. 请求上传参数
+    // 请求上传参数
     const start = await api('/api/upload/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path, filename: file.name, size: file.size, taskId })
+      body: JSON.stringify({ path, filename: file.name, size: fileSize, taskId })
     });
     if (!start) throw new Error('初始化失败');
 
-    const chunkSize = start.chunkSize;
-    const total = start.chunks;
     const uploadId = start.uploadId;
     const token = start.token;
     const repo = start.repo;
     const githubUser = start.githubUser;
+    t.message = '开始上传...';
+    renderTaskList();
 
-    // 2. 并发上传分片
-    const chunkIndexes = [];
-    for (let i = 0; i < total; i++) chunkIndexes.push(i);
-
-    // 每个分片实时字节
-    const chunkBytes = new Array(total).fill(0);
-    const chunkDone = new Array(total).fill(false);
-    // 记录每个分片的 sha（用于验证）
-    const chunkSha = new Array(total).fill(null);
-
-    let uploadedBytes = 0;
-    let completedChunks = 0;
-    let lastBytes = 0, lastTime = Date.now(), smoothSpeed = 0;
-
-    // 500ms 汇总速度 + 进度
-    const progressTimer = setInterval(() => {
-      if (cancelledUploads.has(taskId)) return;
-      let inflight = 0;
-      for (let i = 0; i < total; i++) {
-        if (!chunkDone[i]) inflight += chunkBytes[i];
-      }
-      const totalDone = uploadedBytes + inflight * 0.5;
-      const now = Date.now();
-      const dt = (now - lastTime) / 1000;
-      if (dt > 0.3) {
-        const instant = (totalDone - lastBytes) / dt;
-        if (instant >= 0) smoothSpeed = smoothSpeed * 0.6 + instant * 0.4;
-        lastBytes = totalDone;
-        lastTime = now;
-      }
-      const pct = Math.min(99, Math.floor((totalDone / file.size) * 99));
-      const t = localTasks.get(taskId);
-      if (t) {
-        t.message = '上传 ' + formatSize(Math.floor(totalDone)) + '/' + formatSize(file.size)
-          + ' · ' + formatSpeed(smoothSpeed)
-          + ' · 分片 ' + completedChunks + '/' + total;
-        t.progress = pct;
-        t.updatedAt = Date.now();
-      }
-      debouncedLoadTasks();
-    }, 500);
-
-    // 3. 单分片上传函数（带 5 次重试）
-    async function uploadChunk(i) {
-  if (cancelledUploads.has(taskId) || abortCtrl.signal.aborted) throw new Error('已取消');
-  const begin = i * chunkSize;
-  const end = Math.min(begin + chunkSize, file.size);
-  const blob = file.slice(begin, end);
-
-  // 计算 base64
-  const base64 = await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      try {
-        const bytes = new Uint8Array(reader.result);
-        let binary = '';
-        const cs = 0x8000;
-        for (let k = 0; k < bytes.byteLength; k += cs) {
-          binary += String.fromCharCode.apply(null, bytes.subarray(k, k + cs));
-        }
-        resolve(btoa(binary));
-      } catch (e) { reject(e); }
-    };
-    reader.onerror = () => reject(new Error('FileReader error'));
-    reader.readAsArrayBuffer(blob);
-  });
-
-  // ★ 重试 5 次 + 每次 UI 提示
-  const MAX_RETRIES = 5;
-  let retries = 0;
-  let sha = null;
-  let lastErr = null;
-
-  while (retries < MAX_RETRIES) {
-    if (cancelledUploads.has(taskId) || abortCtrl.signal.aborted) throw new Error('已取消');
-
-    // UI 显示当前重试状态
-    if (retries > 0) {
-      const t = localTasks.get(taskId);
-      if (t) {
-        t.message = '分片 ' + (i + 1) + '/' + total + ' 重试 ' + retries + '/' + MAX_RETRIES + '...';
-        t.updatedAt = Date.now();
-      }
-      if (typeof renderTaskList === 'function') renderTaskList();
-      console.log('[chunk ' + (i + 1) + '/' + total + '] 重试 ' + retries + '/' + MAX_RETRIES);
-    }
-
-    try {
-      const resp = await fetch('https://api.github.com/repos/' + githubUser + '/' + repo + '/contents/chunk_' + i, {
-        method: 'PUT',
-        headers: {
-          'Authorization': 'token ' + token,
-          'Accept': 'application/vnd.github+json',
-          'Content-Type': 'application/json',
-          'User-Agent': 'netdisk-web'
-        },
-        body: JSON.stringify({ message: 'chunk ' + i, content: base64 })
-      });
-      if (resp.ok) {
-        const data = await resp.json();
-        sha = data.content.sha;
-        if (!sha) throw new Error('GitHub 返回 sha 为空');
-        console.log('[chunk ' + (i + 1) + '/' + total + '] 成功' + (retries > 0 ? ' (第 ' + (retries + 1) + ' 次尝试)' : ''));
-        break;
-      }
-      const status = resp.status;
-      const errText = await resp.text();
-      lastErr = 'HTTP ' + status + ': ' + errText.slice(0, 200);
-      console.warn('[chunk ' + (i + 1) + '] 失败 ' + lastErr);
-    } catch (e) {
-      lastErr = e.message || String(e);
-      console.warn('[chunk ' + (i + 1) + '] 异常 ' + lastErr);
-    }
-
-    retries++;
-    if (retries >= MAX_RETRIES) {
-      throw new Error('分片 ' + (i + 1) + '/' + total + ' 上传失败(已重试' + MAX_RETRIES + '次): ' + lastErr);
-    }
-
-    // ★ 指数退避：1s → 2s → 4s → 8s
-    const waitMs = Math.min(10000, 1000 * Math.pow(2, retries - 1));
-    const t = localTasks.get(taskId);
-    if (t) {
-      t.message = '分片 ' + (i + 1) + '/' + total + ' 失败，' + Math.round(waitMs/1000) + 's 后重试 (' + retries + '/' + MAX_RETRIES + ')...';
-      t.updatedAt = Date.now();
-    }
-    if (typeof renderTaskList === 'function') renderTaskList();
-    await new Promise(r => setTimeout(r, waitMs));
-  }
-
-  if (!sha) throw new Error('分片 ' + (i + 1) + ' 未获得 sha: ' + (lastErr || '未知错误'));
-
-  // 本地累加进度
-  chunkSha[i] = sha;
-  chunkDone[i] = true;
-  uploadedBytes += blob.size;
-  completedChunks++;
-
-  // 本地算速度（5 秒滑窗）
-  const now = Date.now();
-  if (!window.__speedWindow) window.__speedWindow = [];
-  window.__speedWindow.push({ t: now, b: uploadedBytes });
-  window.__speedWindow = window.__speedWindow.filter(p => p.t >= now - 5000);
-  let localSpeed = 0;
-  const sw = window.__speedWindow;
-  if (sw.length >= 2) {
-    const f = sw[0], l = sw[sw.length - 1];
-    const dt = (l.t - f.t) / 1000;
-    if (dt > 0.3) localSpeed = (l.b - f.b) / dt;
-  }
-  if (localSpeed <= 0) {
-    const t0 = window.__uploadStart || now;
-    const el = Math.max(0.1, (now - t0) / 1000);
-    localSpeed = uploadedBytes / el;
-  }
-
-  const pctDone = Math.floor((uploadedBytes / file.size) * 100);
-  const taskProg = Math.min(95, Math.floor((completedChunks / total) * 95));
-  const t = localTasks.get(taskId);
-  if (t) {
-    t.progress = taskProg;
-    t.uploadedBytes = uploadedBytes;
-    t.doneChunks = completedChunks;
-    t.totalChunks = total;
-    t.speed = Math.round(localSpeed);
-    t.message = '分片 ' + completedChunks + '/' + total
-      + ' · 上传 ' + formatSize(uploadedBytes) + '/' + formatSize(file.size)
-      + ' (' + pctDone + '%)'
-      + ' · ' + formatSpeed(localSpeed);
-    t.updatedAt = now;
-  }
-  if (typeof renderTaskList === 'function') renderTaskList();
-
-  // 通知服务端
-  api('/api/upload/chunk', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ uploadId, index: i, sha, total, taskId })
-  }).catch(() => {});
-}
-
-    // 4. 16 线程并发上传分片
-    await runWithConcurrency(chunkIndexes, CHUNK_UPLOAD_CONCURRENCY, async (i)=>{
-      if (cancelledUploads.has(taskId)) return;
-      await uploadChunk(i);
-    });
-
-    clearInterval(progressTimer);
-
-    if (cancelledUploads.has(taskId)) throw new Error('已取消');
-
-    // 5. 校验：全部分片都成功
-    const missing = [];
+    // 逐片上传（单线程）
     for (let i = 0; i < total; i++) {
-      if (!chunkDone[i] || !chunkSha[i]) missing.push(i + 1);
-    }
-    if (missing.length > 0) {
-      throw new Error('有 ' + missing.length + ' 个分片未上传成功: ' + missing.slice(0, 5).join(',') + (missing.length > 5 ? '...' : ''));
+      if (cancelledUploads.has(taskId) || abortCtrl.signal.aborted) throw new Error('已取消');
+
+      const begin = i * CHUNK;
+      const end = Math.min(begin + CHUNK, fileSize);
+      const actualSize = end - begin;   // ★ 分片实际大小
+      const blob = file.slice(begin, end);
+
+      // 转 base64
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          try {
+            const bytes = new Uint8Array(reader.result);
+            let binary = '';
+            const cs = 0x8000;
+            for (let k = 0; k < bytes.byteLength; k += cs) {
+              binary += String.fromCharCode.apply(null, bytes.subarray(k, k + cs));
+            }
+            resolve(btoa(binary));
+          } catch (e) { reject(e); }
+        };
+        reader.onerror = () => reject(new Error('FileReader error'));
+        reader.readAsArrayBuffer(blob);
+      });
+
+      // 重试上传
+      const MAX_RETRIES = 5;
+      let sha = null;
+      let lastErr = null;
+      for (let retry = 0; retry < MAX_RETRIES; retry++) {
+        if (cancelledUploads.has(taskId) || abortCtrl.signal.aborted) throw new Error('已取消');
+
+        if (retry > 0) {
+          updateUI('分片 ' + (i+1) + '/' + total + ' 重试 ' + retry + '/' + MAX_RETRIES + '...');
+        }
+
+        try {
+          const resp = await fetch('https://api.github.com/repos/' + githubUser + '/' + repo + '/contents/chunk_' + i, {
+            method: 'PUT',
+            headers: {
+              'Authorization': 'token ' + token,
+              'Accept': 'application/vnd.github+json',
+              'Content-Type': 'application/json',
+              'User-Agent': 'netdisk-web'
+            },
+            body: JSON.stringify({ message: 'chunk ' + i, content: base64 })
+          });
+          if (resp.ok) {
+            const data = await resp.json();
+            sha = data.content.sha;
+            if (!sha) throw new Error('返回 sha 为空');
+            console.log('[chunk ' + (i+1) + '/' + total + '] OK' + (retry > 0 ? ' (retry ' + retry + ')' : ''));
+            break;
+          }
+          const errText = await resp.text();
+          lastErr = 'HTTP ' + resp.status + ': ' + errText.slice(0, 150);
+          console.warn('[chunk ' + (i+1) + '] ' + lastErr);
+        } catch (e) {
+          lastErr = e.message || String(e);
+          console.warn('[chunk ' + (i+1) + '] exception: ' + lastErr);
+        }
+
+        if (retry < MAX_RETRIES - 1) {
+          const waitMs = Math.min(8000, 1000 * Math.pow(2, retry));
+          updateUI('分片 ' + (i+1) + '/' + total + ' 失败，' + Math.round(waitMs/1000) + 's 后重试...');
+          await new Promise(r => setTimeout(r, waitMs));
+        }
+      }
+      if (!sha) throw new Error('分片 ' + (i+1) + '/' + total + ' 失败: ' + lastErr);
+
+      // ★ 完成一个分片，用"实际字节大小"累加
+      t.uploadedBytes = (t.uploadedBytes || 0) + actualSize;
+      t.doneChunks = i + 1;
+      updateUI();
+
+      // 通知服务端（只报 index，服务端自己记录）
+      api('/api/upload/chunk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uploadId, index: i, sha, total, taskId })
+      }).catch(() => {});
     }
 
-    // 6. 通知服务端完成（服务端会二次验证 GitHub 上的分片）
-    const t = localTasks.get(taskId);
-    if(t){ t.message = '注册中...'; t.progress = 99; t.updatedAt = Date.now(); }
-    debouncedLoadTasks();
-
-    const finishResp = await api('/api/upload/finish', {
+    // 全部完成
+    clearInterval(localTimer);
+    updateUI('注册中...');
+    await api('/api/upload/finish', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({uploadId, path, filename: file.name, size: file.size, chunks: total, taskId, chunkSize: blob.size })
+      body: JSON.stringify({ uploadId, path, filename: file.name, size: fileSize, chunks: total, taskId })
     });
-    if (!finishResp || !finishResp.ok) {
-      throw new Error((finishResp && finishResp.error) || '注册失败');
-    }
 
-    // 7. 完成
-    const tt = localTasks.get(taskId);
-    if(tt){ tt.status = 'done'; tt.message = '完成 (' + completedChunks + '/' + total + ' 分片)'; tt.progress = 100; tt.updatedAt = Date.now(); }
-    debouncedLoadTasks();
-    setTimeout(() => removeLocalTask(taskId), 2000);
+    t.status = 'done';
+    t.progress = 100;
+    t.message = '完成 · ' + formatSize(fileSize) + ' · ' + total + ' 分片';
+    t.updatedAt = Date.now();
+    renderTaskList();
+    setTimeout(() => { removeLocalTask(taskId); renderTaskList(); }, 3000);
     showMsg('上传完成: ' + file.name);
   } catch (e) {
+    clearInterval(localTimer);
+    t.status = (e.message === '已取消' ? 'cancelled' : 'error');
+    t.message = e.message || '上传失败';
+    t.updatedAt = Date.now();
+    renderTaskList();
+    showMsg((e.message === '已取消' ? '已取消: ' : '上传失败: ') + file.name);
+    throw e;
+  } finally {
     abortControllers.delete(taskId);
     cancelledUploads.delete(taskId);
-    const tt = localTasks.get(taskId);
-    if (e.message === '已取消') {
-      if(tt){ tt.status = 'cancelled'; tt.message = '已取消'; tt.progress = 0; tt.updatedAt = Date.now(); }
-      debouncedLoadTasks(); showMsg('上传已取消: '+file.name);
-    } else {
-      if(tt){ tt.status = 'error'; tt.message = e.message || '上传失败'; tt.progress = 0; tt.updatedAt = Date.now(); }
-      debouncedLoadTasks(); showMsg('上传失败: '+file.name+' '+(e.message || ''));
-    }
-    throw e;
   }
 }
 
