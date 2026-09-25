@@ -415,6 +415,20 @@ function shareStatus(share) {
   return { ok: true };
 }
 
+// 检查分享状态，若失效则立即删除，返回 {ok, reason}
+async function shareStatusWithCleanup(env, share) {
+  if (!share) return { ok: false, reason: '分享不存在或已被删除' };
+  if (share.expiresAt && Date.now() > share.expiresAt) {
+    try { await deleteShare(env, share.id); } catch (e) {}
+    return { ok: false, reason: '分享已过期' };
+  }
+  if (share.maxViews && share.maxViews > 0 && (share.views || 0) >= share.maxViews) {
+    try { await deleteShare(env, share.id); } catch (e) {}
+    return { ok: false, reason: '分享访问次数已达上限' };
+  }
+  return { ok: true };
+}
+
 // ==================== 分享存储 ====================
 
 async function getShare(env, id) {
@@ -2243,6 +2257,9 @@ function sharePageV3(share, tree, themeCss) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ password: pw })
     }).then(function(r){
+      if (r.status === 410) {
+        return r.json().then(function(j){ document.body.innerHTML = '<div class="container" style="text-align:center;padding:80px 12px;"><div class="material-icons" style="font-size:72px;color:#bdbdbd;">link_off</div><h2 style="margin:8px 0;">分享已失效</h2><p style="color:var(--text-sec);">' + (j.error || '分享已失效') + '</p><button class="btn-primary" onclick="location.href=\'/\'" style="padding:10px 24px;border:none;border-radius:8px;cursor:pointer;margin-top:16px;">返回首页</button></div>'; });
+      }
       if (!r.ok) { document.getElementById('pwd-err').textContent = '提取码错误'; return null; }
       return r.json();
     }).then(function(data){
@@ -2414,6 +2431,35 @@ function sharePageV3(share, tree, themeCss) {
 
   return new Response(html, {
     headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store, no-cache, must-revalidate' }
+  });
+}
+
+function shareExpiredPage(reason, themeCss) {
+  const reasonJson = JSON.stringify(reason || '分享已失效');
+  const html = `<!DOCTYPE html><html><head>` + COMMON_HEAD + (themeCss || '') + `
+  <style>
+    .expired-box { max-width: 440px; margin: 80px auto; text-align: center; }
+    .expired-icon { font-size: 72px; color: #bdbdbd; margin-bottom: 12px; }
+    .expired-title { font-size: 20px; font-weight: 500; color: var(--text); margin: 8px 0; }
+    .expired-reason { font-size: 14px; color: var(--text-sec); margin-bottom: 24px; }
+  </style>
+  </head><body>
+  <div class="appbar"><h1>文件分享</h1></div>
+  <div class="container">
+    <div class="card expired-box">
+      <div class="material-icons expired-icon">link_off</div>
+      <div class="expired-title">分享已失效</div>
+      <div class="expired-reason" id="reason-text"></div>
+      <button class="btn-primary" onclick="location.href='/'" style="padding:10px 24px;border:none;border-radius:8px;cursor:pointer;">返回首页</button>
+    </div>
+  </div>
+  <script>
+    document.getElementById('reason-text').textContent = ${reasonJson};
+  </script>
+  </body></html>`;
+  return new Response(html, {
+    status: 410,
+    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }
   });
 }
 
@@ -2974,8 +3020,8 @@ async function handleRequest(request, env, ctx = null) {
   if (/^\/api\/share\/[^/]+$/.test(path) && request.method === 'GET') {
     const shareId = path.slice('/api/share/'.length);
     const share = await getShare(env, shareId);
-    const st = shareStatus(share);
-    if (!st.ok) return errorResponse(st.reason, st.code);
+    const st = await shareStatusWithCleanup(env, share);
+    if (!st.ok) return errorResponse(st.reason, 410);
     if (share.password) {
       return jsonResponse({ id: share.id, hasPassword: true });
     }
@@ -2994,8 +3040,8 @@ async function handleRequest(request, env, ctx = null) {
   if (path.startsWith('/api/share/') && path.endsWith('/verify') && request.method === 'POST') {
     const shareId = path.slice('/api/share/'.length).replace('/verify', '');
     const share = await getShare(env, shareId);
-    const st = shareStatus(share);
-    if (!st.ok) return errorResponse(st.reason, st.code);
+    const st = await shareStatusWithCleanup(env, share);
+    if (!st.ok) return errorResponse(st.reason, 410);
     const body = await request.json();
     if (String(body.password || '') !== (share.password || '')) {
       return errorResponse('提取码错误', 403);
@@ -3015,8 +3061,8 @@ async function handleRequest(request, env, ctx = null) {
   if (path.startsWith('/api/share/') && path.endsWith('/download') && request.method === 'GET') {
     const shareId = path.slice('/api/share/'.length).replace('/download', '');
     const share = await getShare(env, shareId);
-    const st = shareStatus(share);
-    if (!st.ok) return errorResponse(st.reason, st.code);
+    const st = await shareStatusWithCleanup(env, share);
+    if (!st.ok) return errorResponse(st.reason, 410);
     if (share.password) {
       const pw = url.searchParams.get('pw') || '';
       if (pw !== share.password) return errorResponse('提取码错误', 403);
@@ -3033,8 +3079,8 @@ async function handleRequest(request, env, ctx = null) {
   if (path.startsWith('/api/share/') && path.endsWith('/direct') && request.method === 'GET') {
     const shareId = path.slice('/api/share/'.length).replace('/direct', '');
     const share = await getShare(env, shareId);
-    const st = shareStatus(share);
-    if (!st.ok) return errorResponse(st.reason, st.code);
+    const st = await shareStatusWithCleanup(env, share);
+    if (!st.ok) return errorResponse(st.reason, 410);
     if (share.password) {
       const pw = url.searchParams.get('pw') || '';
       if (pw !== share.password) return errorResponse('提取码错误', 403);
@@ -3051,8 +3097,8 @@ async function handleRequest(request, env, ctx = null) {
   if (path.startsWith('/api/share/') && path.endsWith('/zip') && request.method === 'GET') {
     const shareId = path.slice('/api/share/'.length).replace('/zip', '');
     const share = await getShare(env, shareId);
-    const st = shareStatus(share);
-    if (!st.ok) return errorResponse(st.reason, st.code);
+    const st = await shareStatusWithCleanup(env, share);
+    if (!st.ok) return errorResponse(st.reason, 410);
     if (share.password) {
       const pw = url.searchParams.get('pw') || '';
       if (pw !== share.password) return errorResponse('提取码错误', 403);
@@ -3139,13 +3185,16 @@ async function handleRequest(request, env, ctx = null) {
 
   if (path.startsWith('/s/')) {
     const shareId = path.slice('/s/'.length).split('/')[0];
-    if (!shareId) return errorResponse('分享不存在', 404);
+    if (!shareId) return shareExpiredPage('分享不存在', generateThemeCss(await getSettings(env)));
     const share = await getShare(env, shareId);
-    if (!share) return errorResponse('分享不存在或已删除', 404);
-    const structure = await getStructure(env);
-    const tree = buildShareTree(structure, share.paths);
     const settings = await getSettings(env);
     const themeCss = generateThemeCss(settings);
+    const st = await shareStatusWithCleanup(env, share);
+    if (!st.ok) {
+      return shareExpiredPage(st.reason, themeCss);
+    }
+    const structure = await getStructure(env);
+    const tree = buildShareTree(structure, share.paths);
     return sharePageV3(share, tree, themeCss);
   }
   if (path === '/shares') {
