@@ -1498,7 +1498,16 @@ async function runWithConcurrency(items, concurrency, worker){
       while(true){
         const idx = cursor++;
         if(idx >= total) return;
-        try { await worker(items[idx], idx); } catch(e){ console.error('worker error', e); }
+        try {
+          await worker(items[idx], idx);
+        } catch(e){
+          console.error('worker error at idx ' + idx + ':', e);
+          // 记录到全局（如果上传代码里有 uploadError 变量）
+          if (typeof uploadError !== 'undefined') {
+            try { uploadError = e; } catch(_) {}
+          }
+          throw e;
+        }
       }
     })());
   }
@@ -1628,14 +1637,26 @@ async function uploadOne(file, dir, externalTaskId){
     reader.readAsArrayBuffer(blob);
   });
 
-  // 重试 5 次，指数退避
-  let retries = 0;
+  // ★ 重试 5 次 + 每次 UI 提示
   const MAX_RETRIES = 5;
+  let retries = 0;
   let sha = null;
   let lastErr = null;
 
   while (retries < MAX_RETRIES) {
     if (cancelledUploads.has(taskId) || abortCtrl.signal.aborted) throw new Error('已取消');
+
+    // UI 显示当前重试状态
+    if (retries > 0) {
+      const t = localTasks.get(taskId);
+      if (t) {
+        t.message = '分片 ' + (i + 1) + '/' + total + ' 重试 ' + retries + '/' + MAX_RETRIES + '...';
+        t.updatedAt = Date.now();
+      }
+      if (typeof renderTaskList === 'function') renderTaskList();
+      console.log('[chunk ' + (i + 1) + '/' + total + '] 重试 ' + retries + '/' + MAX_RETRIES);
+    }
+
     try {
       const resp = await fetch('https://api.github.com/repos/' + githubUser + '/' + repo + '/contents/chunk_' + i, {
         method: 'PUT',
@@ -1651,37 +1672,43 @@ async function uploadOne(file, dir, externalTaskId){
         const data = await resp.json();
         sha = data.content.sha;
         if (!sha) throw new Error('GitHub 返回 sha 为空');
+        console.log('[chunk ' + (i + 1) + '/' + total + '] 成功' + (retries > 0 ? ' (第 ' + (retries + 1) + ' 次尝试)' : ''));
         break;
       }
       const status = resp.status;
       const errText = await resp.text();
-      lastErr = 'GitHub ' + status + ': ' + errText.slice(0, 200);
-      if (status === 403 || status === 429) {
-        const waitMs = Math.min(60000, 30000 * (retries + 1));
-        console.log('[chunk] rate limited, wait ' + waitMs + 'ms');
-        await new Promise(r => setTimeout(r, waitMs));
-      }
-      throw new Error(lastErr);
+      lastErr = 'HTTP ' + status + ': ' + errText.slice(0, 200);
+      console.warn('[chunk ' + (i + 1) + '] 失败 ' + lastErr);
     } catch (e) {
-      retries++;
       lastErr = e.message || String(e);
-      if (retries >= MAX_RETRIES) {
-        throw new Error('分片 ' + (i + 1) + '/' + total + ' 上传失败(已重试' + MAX_RETRIES + '次): ' + lastErr);
-      }
-      const waitMs = Math.min(15000, 1000 * Math.pow(2, retries - 1)) + Math.floor(Math.random() * 500);
-      console.log('[chunk] retry ' + retries + '/' + MAX_RETRIES + ' after ' + waitMs + 'ms');
-      await new Promise(r => setTimeout(r, waitMs));
+      console.warn('[chunk ' + (i + 1) + '] 异常 ' + lastErr);
     }
+
+    retries++;
+    if (retries >= MAX_RETRIES) {
+      throw new Error('分片 ' + (i + 1) + '/' + total + ' 上传失败(已重试' + MAX_RETRIES + '次): ' + lastErr);
+    }
+
+    // ★ 指数退避：1s → 2s → 4s → 8s
+    const waitMs = Math.min(10000, 1000 * Math.pow(2, retries - 1));
+    const t = localTasks.get(taskId);
+    if (t) {
+      t.message = '分片 ' + (i + 1) + '/' + total + ' 失败，' + Math.round(waitMs/1000) + 's 后重试 (' + retries + '/' + MAX_RETRIES + ')...';
+      t.updatedAt = Date.now();
+    }
+    if (typeof renderTaskList === 'function') renderTaskList();
+    await new Promise(r => setTimeout(r, waitMs));
   }
+
   if (!sha) throw new Error('分片 ' + (i + 1) + ' 未获得 sha: ' + (lastErr || '未知错误'));
 
-  // ★ 本地累加进度（单线程，单调递增）
+  // 本地累加进度
   chunkSha[i] = sha;
   chunkDone[i] = true;
   uploadedBytes += blob.size;
   completedChunks++;
 
-  // ★ 本地算速度（滑动窗口，最近 5 秒）
+  // 本地算速度（5 秒滑窗）
   const now = Date.now();
   if (!window.__speedWindow) window.__speedWindow = [];
   window.__speedWindow.push({ t: now, b: uploadedBytes });
@@ -1699,7 +1726,7 @@ async function uploadOne(file, dir, externalTaskId){
     localSpeed = uploadedBytes / el;
   }
 
-  // ★ 本地更新任务显示（速度本地算，进度用已完成分片数）
+  const pctDone = Math.floor((uploadedBytes / file.size) * 100);
   const taskProg = Math.min(95, Math.floor((completedChunks / total) * 95));
   const t = localTasks.get(taskId);
   if (t) {
@@ -1708,14 +1735,15 @@ async function uploadOne(file, dir, externalTaskId){
     t.doneChunks = completedChunks;
     t.totalChunks = total;
     t.speed = Math.round(localSpeed);
-    t.message = '上传 ' + formatSize(uploadedBytes) + '/' + formatSize(file.size)
-      + ' · ' + formatSpeed(localSpeed)
-      + ' · 分片 ' + completedChunks + '/' + total;
+    t.message = '分片 ' + completedChunks + '/' + total
+      + ' · 上传 ' + formatSize(uploadedBytes) + '/' + formatSize(file.size)
+      + ' (' + pctDone + '%)'
+      + ' · ' + formatSpeed(localSpeed);
     t.updatedAt = now;
   }
   if (typeof renderTaskList === 'function') renderTaskList();
 
-  // 通知服务端（只报分片号，服务端算进度）
+  // 通知服务端
   api('/api/upload/chunk', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1796,24 +1824,23 @@ function renderTaskList(){
   if (!box) return;
   if (tasks.length === 0) { box.innerHTML = '<div class="empty">暂无任务</div>'; return; }
   box.innerHTML = tasks.slice(0, 200).map(t => {
-    const statusColor = t.status === 'done' ? 'var(--success)' : (t.status === 'error' ? 'var(--danger)' : (t.status === 'cancelled' ? 'var(--text-sec)' : 'var(--primary)'));
-    let extra = '';
-    if (t.uploadedBytes != null && t.size) {
-      extra = ' [' + (t.uploadedBytes / 1024 / 1024).toFixed(1) + '/' + (t.size / 1024 / 1024).toFixed(1) + ' MB]';
+    const statusColor = t.status === 'done' ? 'var(--success)'
+      : (t.status === 'error' ? 'var(--danger)'
+      : (t.status === 'cancelled' ? 'var(--text-sec)' : 'var(--primary)'));
+
+    // 双行信息
+    let line1 = escapeHtml(t.message || '');
+    let line2 = '';
+    if (t.status === 'uploading' && t.totalChunks) {
+      // 分片进度
+      line2 = '分片 ' + (t.doneChunks || 0) + '/' + t.totalChunks
+        + ' · 上传进度 ' + (t.progress || 0) + '%';
     }
-    // 服务端提供的速度
-    let speedStr = '';
-    if (t.speed && t.speed > 0) {
-      if (t.speed >= 1024 * 1024) speedStr = (t.speed / 1024 / 1024).toFixed(1) + ' MB/s';
-      else if (t.speed >= 1024) speedStr = (t.speed / 1024).toFixed(1) + ' KB/s';
-      else speedStr = t.speed.toFixed(0) + ' B/s';
-    }
-    if (speedStr && t.status === 'uploading') {
-      extra += ' · ' + speedStr;
-    }
+
     return \`<div class="task-item" data-task-id="\${escapeHtml(t.id)}">
-      <div class="task-title">\${escapeHtml(t.name)} <span style="color:\${statusColor};font-size:12px;">\${t.status}</span>\${extra}</div>
-      <div class="task-msg">\${escapeHtml(t.message || '')}</div>
+      <div class="task-title">\${escapeHtml(t.name)} <span style="color:\${statusColor};font-size:12px;">\${t.status}</span></div>
+      <div class="task-msg">\${line1}</div>
+      \${line2 ? '<div class="task-msg" style="color:var(--primary);font-size:11px;">' + line2 + '</div>' : ''}
       <div class="task-progress"><div style="width:\${t.progress || 0}%"></div></div>
       <div class="task-actions">
         \${t.status === 'uploading' || t.status === 'processing' ? \`<button onclick="cancelTask('\${t.id}', this)">取消</button>\` : ''}
@@ -1830,22 +1857,17 @@ async function loadTasks(){
     serverTasksCache = await api('/api/tasks') || [];
   } catch (e) { console.error('获取任务失败', e); }
 
-  // 服务端只提供分片数，速度/字节由本地计算
+  // 服务端 uploading 时完全不动本地，只在结束时同步最终状态
   for (const st of serverTasksCache) {
     const local = localTasks.get(st.id);
     if (local) {
-      // 服务端最终状态优先
       if (st.status === 'done' || st.status === 'error' || st.status === 'cancelled') {
         local.status = st.status;
         if (st.message) local.message = st.message;
         if (st.progress != null) local.progress = st.progress;
         local.updatedAt = st.updatedAt || Date.now();
       }
-      // 服务端 uploading 时：不覆盖本地的实时进度/速度/字节
-      // 但记录服务端已确认的分片数
-      else if (st.doneChunks != null && st.doneChunks > (local.doneChunks || 0)) {
-        local.doneChunks = st.doneChunks;
-      }
+      // uploading 时什么都不做，保留本地实时数据
     }
   }
   renderTaskList();
@@ -1923,7 +1945,7 @@ loadList();
 
 // ★ 全局实时刷新：每 500ms 刷新任务列表 UI，每 2s 拉服务端
 setInterval(() => { if (typeof renderTaskList === 'function') renderTaskList(); }, 300);
-setInterval(() => { loadTasks(); }, 800);
+setInterval(() => { loadTasks(); }, 3000);   // 只同步最终状态，间隔拉长
 </script>
 `;
 
@@ -2835,7 +2857,7 @@ async function handleRequest(request, env, ctx = null) {
         const prog = Math.min(95, Math.floor((doneCount / total) * 95));
 
         await updateTask(env, taskId, {
-          message: '分片 ' + doneCount + '/' + total + ' 完成',
+          message: '已上传 ' + doneCount + '/' + total + ' 分片',
           progress: prog,
           doneChunks: doneCount,
           totalChunks: total,
