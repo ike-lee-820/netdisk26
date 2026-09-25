@@ -5,7 +5,7 @@
 const GITHUB_USER = 'ikecode26';
 const GITHUB_API = 'https://api.github.com';
 const ASSETS_REPO = 'netdisk-assets';
-const CHUNK_SIZE = 2 * 1024 * 1024;
+const CHUNK_SIZE = 10 * 1024 * 1024;
 const GH_PROXY = 'https://v6.gh-proxy.com/';
 
 let d1Initialized = false;
@@ -1026,7 +1026,7 @@ const DEFAULT_DOMAIN = 'https://cloud.myocd.de5.net';
 const TASK_CREATE_CONCURRENCY = 64;   // 任务创建并发
 const FILE_UPLOAD_CONCURRENCY = 5;   // 文件上传并发（同时上传多少个文件）
 const CHUNK_UPLOAD_CONCURRENCY = 32;  // 单文件分片并发
-const CLIENT_CHUNK_SIZE = 2 * 1024 * 1024;   // 20MB 分片
+const CLIENT_CHUNK_SIZE = 10 * 1024 * 1024;   // 20MB 分片
 
 function showMsg(msg){ const s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(()=>s.classList.remove('show'),2500); }
 function escapeHtml(t){ return t.replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
@@ -1667,11 +1667,15 @@ async function uploadOne(file, dir, externalTaskId){
       uploadedBytes += blob.size;
       completedChunks++;
 
-      // 通知服务端（不阻塞后续分片）
+      // 通知服务端（携带已上传字节数，用于服务端精确记录）
+      chunkSha[i] = sha;
       api('/api/upload/chunk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ uploadId, index: i, sha, total, taskId })
+        body: JSON.stringify({
+          uploadId, index: i, sha, total, taskId,
+          uploadedBytes: uploadedBytes + blob.size
+        })
       }).catch(() => {});
     }
 
@@ -1762,8 +1766,13 @@ async function loadTasks(){
   if (tasks.length === 0) { box.innerHTML = '<div class="empty">暂无任务</div>'; return; }
   box.innerHTML = tasks.slice(0, 200).map(t => {
     const statusColor = t.status === 'done' ? 'var(--success)' : (t.status === 'error' ? 'var(--danger)' : (t.status === 'cancelled' ? 'var(--text-sec)' : 'var(--primary)'));
+    // 优先显示服务端记录的精确进度
+    let extra = '';
+    if (t.uploadedBytes != null && t.size) {
+      extra = ' [' + (t.uploadedBytes / 1024 / 1024).toFixed(1) + '/' + (t.size / 1024 / 1024).toFixed(1) + ' MB]';
+    }
     return \`<div class="task-item" data-task-id="\${escapeHtml(t.id)}">
-      <div class="task-title">\${escapeHtml(t.name)} <span style="color:\${statusColor};font-size:12px;">\${t.status}</span></div>
+      <div class="task-title">\${escapeHtml(t.name)} <span style="color:\${statusColor};font-size:12px;">\${t.status}</span>\${extra}</div>
       <div class="task-msg">\${escapeHtml(t.message || '')}</div>
       <div class="task-progress"><div style="width:\${t.progress || 0}%"></div></div>
       <div class="task-actions">
@@ -1810,7 +1819,7 @@ async function clearDoneTasks(){
   } catch (e) { showMsg('清除失败: ' + e.message); loadTasks(); }
 }
 
-document.getElementById('btn-tasks').onclick=()=>{ document.getElementById('task-drawer').classList.add('show'); loadTasks(); if(taskTimer)clearInterval(taskTimer); taskTimer=setInterval(loadTasks, 2500); };
+document.getElementById('btn-tasks').onclick=()=>{ document.getElementById('task-drawer').classList.add('show'); loadTasks(); if(taskTimer)clearInterval(taskTimer); taskTimer=setInterval(loadTasks, 1500); };
 document.getElementById('close-tasks').onclick=()=>{ document.getElementById('task-drawer').classList.remove('show'); if(taskTimer)clearInterval(taskTimer); };
 document.getElementById('btn-refresh-tasks').onclick=()=>{ loadTasks(); };
 document.getElementById('btn-clear-done').onclick=clearDoneTasks;
@@ -2745,13 +2754,34 @@ async function handleRequest(request, env, ctx = null) {
         const task = JSON.parse(row.value);
         const total = body.total || 1;
         const size = task.size || 0;
-        // 简单累加（服务端只是备份进度，前端自己算精确值）
-        const prog = Math.min(90, Math.floor(((index + 1) / total) * 90));
+        // 记录已完成分片集合，避免重复累加
+        if (!task.chunksDone) task.chunksDone = {};
+        const wasDone = task.chunksDone[index];
+        task.chunksDone[index] = 1;
+        // 计算已完成分片数
+        const doneCount = Object.keys(task.chunksDone).length;
+        // 精确字节：已完成分片总字节（最后一片可能不足 CHUNK_SIZE）
+        const uploadedBytes = body.uploadedBytes ? parseInt(body.uploadedBytes, 10) : 0;
+        const doneBytes = uploadedBytes > 0 ? Math.min(size, uploadedBytes) : Math.min(size, doneCount * 10 * 1024 * 1024);
+        const prog = size > 0 ? Math.min(95, Math.floor((doneBytes / size) * 95)) : Math.floor((doneCount / total) * 95);
+        const now = Date.now();
+        const elapsed = Math.max(0.1, (now - (task.startedAt || task.createdAt || now)) / 1000);
+        const speed = doneBytes / elapsed;
+        // 消息里包含字节和速度
+        const msg = '上传 ' + formatSize(doneBytes) + '/' + formatSize(size)
+          + ' · ' + formatSpeed(speed)
+          + ' · 分片 ' + doneCount + '/' + total;
         await updateTask(env, taskId, {
-          message: '分片 ' + (index + 1) + '/' + total + ' 完成',
-          progress: prog
+          message: msg,
+          progress: prog,
+          uploadedBytes: doneBytes,
+          doneChunks: doneCount,
+          totalChunks: total,
+          speed: Math.round(speed)
         });
-      } catch (e) {}
+      } catch (e) {
+        console.error('chunk task update error', e);
+      }
     }
     return jsonResponse({ ok: true, index, sha });
   }
