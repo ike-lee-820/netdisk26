@@ -5,7 +5,7 @@
 const GITHUB_USER = 'ikecode26';
 const GITHUB_API = 'https://api.github.com';
 const ASSETS_REPO = 'netdisk-assets';
-const CHUNK_SIZE = 5 * 1024 * 1024;
+const CHUNK_SIZE = 50 * 1024 * 1024;
 const GH_PROXY = 'https://v6.gh-proxy.com/';
 
 let d1Initialized = false;
@@ -1025,8 +1025,8 @@ const DEFAULT_DOMAIN = 'https://cloud.myocd.de5.net';
 
 const TASK_CREATE_CONCURRENCY = 64;   // 任务创建并发
 const FILE_UPLOAD_CONCURRENCY = 5;   // 文件上传并发（同时上传多少个文件）
-const CHUNK_UPLOAD_CONCURRENCY = 32;  // 单文件分片并发
-const CLIENT_CHUNK_SIZE = 5 * 1024 * 1024;   // 20MB 分片
+const CHUNK_UPLOAD_CONCURRENCY = 1;  // 单文件分片并发
+const CLIENT_CHUNK_SIZE = 50 * 1024 * 1024;   // 20MB 分片
 
 function showMsg(msg){ const s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(()=>s.classList.remove('show'),2500); }
 function escapeHtml(t){ return t.replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
@@ -1605,77 +1605,123 @@ async function uploadOne(file, dir, externalTaskId){
 
     // 3. 单分片上传函数（带 5 次重试）
     async function uploadChunk(i) {
-      if (cancelledUploads.has(taskId) || abortCtrl.signal.aborted) throw new Error('已取消');
-      const begin = i * chunkSize;
-      const end = Math.min(begin + chunkSize, file.size);
-      const blob = file.slice(begin, end);
-      // 计算 base64（20MB 分片，base64 后约 27MB）
-      const base64 = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          try {
-            const bytes = new Uint8Array(reader.result);
-            let binary = '';
-            const cs = 0x8000;
-            for (let k = 0; k < bytes.byteLength; k += cs) {
-              binary += String.fromCharCode.apply(null, bytes.subarray(k, k + cs));
-            }
-            resolve(btoa(binary));
-          } catch (e) { reject(e); }
-        };
-        reader.onerror = () => reject(new Error('FileReader error'));
-        reader.readAsArrayBuffer(blob);
-      });
+  if (cancelledUploads.has(taskId) || abortCtrl.signal.aborted) throw new Error('已取消');
+  const begin = i * chunkSize;
+  const end = Math.min(begin + chunkSize, file.size);
+  const blob = file.slice(begin, end);
 
-      let retries = 0;
-      let sha = null;
-      let lastErr = null;
-      while (retries < 5) {
-        if (cancelledUploads.has(taskId)) throw new Error('已取消');
-        try {
-          const resp = await fetch('https://api.github.com/repos/' + githubUser + '/' + repo + '/contents/chunk_' + i, {
-            method: 'PUT',
-            headers: {
-              'Authorization': 'token ' + token,
-              'Accept': 'application/vnd.github+json',
-              'Content-Type': 'application/json',
-              'User-Agent': 'netdisk-web'
-            },
-            body: JSON.stringify({ message: 'chunk ' + i, content: base64 })
-          });
-          if (resp.ok) {
-            const data = await resp.json();
-            sha = data.content.sha;
-            // 验证 sha 存在
-            if (!sha) throw new Error('GitHub 返回 sha 为空');
-            break;
-          }
-          const errText = await resp.text();
-          lastErr = 'GitHub ' + resp.status + ': ' + errText.slice(0, 200);
-          throw new Error(lastErr);
-        } catch (e) {
-          retries++;
-          lastErr = e.message || String(e);
-          if (retries >= 5) throw new Error('分片 ' + (i + 1) + '/' + total + ' 上传失败(已重试5次): ' + lastErr);
-          const waitMs = Math.min(15000, 1000 * Math.pow(2, retries - 1)) + Math.floor(Math.random() * 500);
-        console.log('[chunk] retry ' + retries + ' after ' + waitMs + 'ms');
-        await new Promise(r => setTimeout(r, waitMs));
+  // 计算 base64
+  const base64 = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      try {
+        const bytes = new Uint8Array(reader.result);
+        let binary = '';
+        const cs = 0x8000;
+        for (let k = 0; k < bytes.byteLength; k += cs) {
+          binary += String.fromCharCode.apply(null, bytes.subarray(k, k + cs));
         }
+        resolve(btoa(binary));
+      } catch (e) { reject(e); }
+    };
+    reader.onerror = () => reject(new Error('FileReader error'));
+    reader.readAsArrayBuffer(blob);
+  });
+
+  // 重试 5 次，指数退避
+  let retries = 0;
+  const MAX_RETRIES = 5;
+  let sha = null;
+  let lastErr = null;
+
+  while (retries < MAX_RETRIES) {
+    if (cancelledUploads.has(taskId) || abortCtrl.signal.aborted) throw new Error('已取消');
+    try {
+      const resp = await fetch('https://api.github.com/repos/' + githubUser + '/' + repo + '/contents/chunk_' + i, {
+        method: 'PUT',
+        headers: {
+          'Authorization': 'token ' + token,
+          'Accept': 'application/vnd.github+json',
+          'Content-Type': 'application/json',
+          'User-Agent': 'netdisk-web'
+        },
+        body: JSON.stringify({ message: 'chunk ' + i, content: base64 })
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        sha = data.content.sha;
+        if (!sha) throw new Error('GitHub 返回 sha 为空');
+        break;
       }
-
-      // 记录 sha 并累加字节
-      chunkSha[i] = sha;
-      chunkDone[i] = true;
-      uploadedBytes += blob.size;
-      completedChunks++;
-
-      // 通知服务端
-      api('/api/upload/chunk', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({uploadId, index: i, sha, total, taskId, chunkSize: blob.size })
-      }).catch(() => {});
+      const status = resp.status;
+      const errText = await resp.text();
+      lastErr = 'GitHub ' + status + ': ' + errText.slice(0, 200);
+      if (status === 403 || status === 429) {
+        const waitMs = Math.min(60000, 30000 * (retries + 1));
+        console.log('[chunk] rate limited, wait ' + waitMs + 'ms');
+        await new Promise(r => setTimeout(r, waitMs));
+      }
+      throw new Error(lastErr);
+    } catch (e) {
+      retries++;
+      lastErr = e.message || String(e);
+      if (retries >= MAX_RETRIES) {
+        throw new Error('分片 ' + (i + 1) + '/' + total + ' 上传失败(已重试' + MAX_RETRIES + '次): ' + lastErr);
+      }
+      const waitMs = Math.min(15000, 1000 * Math.pow(2, retries - 1)) + Math.floor(Math.random() * 500);
+      console.log('[chunk] retry ' + retries + '/' + MAX_RETRIES + ' after ' + waitMs + 'ms');
+      await new Promise(r => setTimeout(r, waitMs));
     }
+  }
+  if (!sha) throw new Error('分片 ' + (i + 1) + ' 未获得 sha: ' + (lastErr || '未知错误'));
+
+  // ★ 本地累加进度（单线程，单调递增）
+  chunkSha[i] = sha;
+  chunkDone[i] = true;
+  uploadedBytes += blob.size;
+  completedChunks++;
+
+  // ★ 本地算速度（滑动窗口，最近 5 秒）
+  const now = Date.now();
+  if (!window.__speedWindow) window.__speedWindow = [];
+  window.__speedWindow.push({ t: now, b: uploadedBytes });
+  window.__speedWindow = window.__speedWindow.filter(p => p.t >= now - 5000);
+  let localSpeed = 0;
+  const sw = window.__speedWindow;
+  if (sw.length >= 2) {
+    const f = sw[0], l = sw[sw.length - 1];
+    const dt = (l.t - f.t) / 1000;
+    if (dt > 0.3) localSpeed = (l.b - f.b) / dt;
+  }
+  if (localSpeed <= 0) {
+    const t0 = window.__uploadStart || now;
+    const el = Math.max(0.1, (now - t0) / 1000);
+    localSpeed = uploadedBytes / el;
+  }
+
+  // ★ 本地更新任务显示（速度本地算，进度用已完成分片数）
+  const taskProg = Math.min(95, Math.floor((completedChunks / total) * 95));
+  const t = localTasks.get(taskId);
+  if (t) {
+    t.progress = taskProg;
+    t.uploadedBytes = uploadedBytes;
+    t.doneChunks = completedChunks;
+    t.totalChunks = total;
+    t.speed = Math.round(localSpeed);
+    t.message = '上传 ' + formatSize(uploadedBytes) + '/' + formatSize(file.size)
+      + ' · ' + formatSpeed(localSpeed)
+      + ' · 分片 ' + completedChunks + '/' + total;
+    t.updatedAt = now;
+  }
+  if (typeof renderTaskList === 'function') renderTaskList();
+
+  // 通知服务端（只报分片号，服务端算进度）
+  api('/api/upload/chunk', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ uploadId, index: i, sha, total, taskId })
+  }).catch(() => {});
+}
 
     // 4. 16 线程并发上传分片
     await runWithConcurrency(chunkIndexes, CHUNK_UPLOAD_CONCURRENCY, async (i)=>{
@@ -1784,30 +1830,22 @@ async function loadTasks(){
     serverTasksCache = await api('/api/tasks') || [];
   } catch (e) { console.error('获取任务失败', e); }
 
-  // 服务端状态同步到本地：单调递增保护
+  // 服务端只提供分片数，速度/字节由本地计算
   for (const st of serverTasksCache) {
     const local = localTasks.get(st.id);
     if (local) {
-      if (st.status) local.status = st.status;
-      if (st.message) local.message = st.message;
-      // 进度只增不减
-      if (st.progress != null) {
-        const prev = local.progress || 0;
-        local.progress = Math.max(prev, st.progress);
+      // 服务端最终状态优先
+      if (st.status === 'done' || st.status === 'error' || st.status === 'cancelled') {
+        local.status = st.status;
+        if (st.message) local.message = st.message;
+        if (st.progress != null) local.progress = st.progress;
+        local.updatedAt = st.updatedAt || Date.now();
       }
-      // 字节只增不减
-      if (st.uploadedBytes != null) {
-        const prev = local.uploadedBytes || 0;
-        local.uploadedBytes = Math.max(prev, st.uploadedBytes);
+      // 服务端 uploading 时：不覆盖本地的实时进度/速度/字节
+      // 但记录服务端已确认的分片数
+      else if (st.doneChunks != null && st.doneChunks > (local.doneChunks || 0)) {
+        local.doneChunks = st.doneChunks;
       }
-      // 分片数只增不减
-      if (st.doneChunks != null) {
-        const prev = local.doneChunks || 0;
-        local.doneChunks = Math.max(prev, st.doneChunks);
-      }
-      if (st.totalChunks != null) local.totalChunks = st.totalChunks;
-      if (st.speed != null) local.speed = st.speed;
-      if (st.updatedAt) local.updatedAt = st.updatedAt;
     }
   }
   renderTaskList();
@@ -2780,7 +2818,6 @@ async function handleRequest(request, env, ctx = null) {
     if (forbid) return forbid;
     const body = await request.json();
     const uploadId = body.uploadId, index = body.index, sha = body.sha, taskId = body.taskId;
-    const chunkSize = parseInt(body.chunkSize, 10) || 0;
     if (!uploadId || index == null || !sha) return errorResponse('缺少参数');
     await ensureD1(env);
     const row = await getD1(env).prepare('SELECT value FROM kv_store WHERE key = ?').bind('task_' + taskId).first();
@@ -2788,78 +2825,21 @@ async function handleRequest(request, env, ctx = null) {
       try {
         const task = JSON.parse(row.value);
         const total = body.total || 1;
-        const size = task.size || 0;
 
-        // ★ 用 index → chunkSize 的映射，防止乱序/重复累加
+        // 记录已完成的分片（Set 去重）
         if (!task.chunkMap) task.chunkMap = {};
-        const isFirst = !task.chunkMap[index];
-        if (isFirst) {
-          task.chunkMap[index] = chunkSize > 0 ? chunkSize : Math.min(5 * 1024 * 1024, size);
-        }
-        // 计算累计字节（只增不减）
-        let doneBytes = 0;
-        for (const k in task.chunkMap) doneBytes += task.chunkMap[k];
-        doneBytes = Math.min(size, doneBytes);
+        task.chunkMap[index] = 1;
         const doneCount = Object.keys(task.chunkMap).length;
 
-        // 只在第一次记录该分片时才更新速度窗口（避免重复点）
-        const now = Date.now();
-        if (!task.speedWindow) task.speedWindow = [];
-        if (isFirst) {
-          task.speedWindow.push({ t: now, b: doneBytes });
-        }
-        // 保留最近 3 秒窗口
-        const cutoff = now - 3000;
-        task.speedWindow = task.speedWindow.filter(p => p.t >= cutoff);
-        // 保证单调递增（防止乱序写入导致字节回退）
-        task.speedWindow.sort((a, b) => a.t - b.t);
-        // 过滤掉回退点
-        const cleaned = [];
-        let maxB = 0;
-        for (const p of task.speedWindow) {
-          if (p.b >= maxB) { cleaned.push(p); maxB = p.b; }
-        }
-        task.speedWindow = cleaned;
-
-        let speed = 0;
-        if (task.speedWindow.length >= 2) {
-          const f = task.speedWindow[0];
-          const l = task.speedWindow[task.speedWindow.length - 1];
-          const dt = (l.t - f.t) / 1000;
-          if (dt > 0.5) speed = (l.b - f.b) / dt;
-        }
-        // 窗口太小：用平均速度保底
-        if (speed <= 0) {
-          const el = Math.max(0.1, (now - (task.startedAt || task.createdAt || now)) / 1000);
-          speed = doneBytes / el;
-        }
-        // 平滑速度：新老加权（3:7）
-        const prevSpeed = task.speed || 0;
-        let smoothSpeed = speed;
-        if (prevSpeed > 0 && speed > 0) {
-          smoothSpeed = prevSpeed * 0.3 + speed * 0.7;
-        } else {
-          smoothSpeed = Math.max(prevSpeed, speed);
-        }
-
-        // 进度只增不减
-        const rawProg = size > 0 ? Math.min(95, Math.floor((doneBytes / size) * 95)) : Math.floor((doneCount / total) * 95);
-        const prevProg = task.progress || 0;
-        const prog = Math.max(prevProg, rawProg);
-
-        const msg = '上传 ' + formatSize(doneBytes) + '/' + formatSize(size)
-          + ' · ' + formatSpeed(smoothSpeed)
-          + ' · 分片 ' + doneCount + '/' + total;
+        // ★ 进度 = 已完成分片 / 总片数（单线程不会乱序）
+        const prog = Math.min(95, Math.floor((doneCount / total) * 95));
 
         await updateTask(env, taskId, {
-          message: msg,
+          message: '分片 ' + doneCount + '/' + total + ' 完成',
           progress: prog,
-          uploadedBytes: doneBytes,
           doneChunks: doneCount,
           totalChunks: total,
-          speed: Math.round(smoothSpeed),
-          chunkMap: task.chunkMap,
-          speedWindow: task.speedWindow
+          chunkMap: task.chunkMap
         });
       } catch (e) {
         console.error('chunk task update error', e);
