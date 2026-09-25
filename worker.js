@@ -5,7 +5,7 @@
 const GITHUB_USER = 'ikecode26';
 const GITHUB_API = 'https://api.github.com';
 const ASSETS_REPO = 'netdisk-assets';
-const CHUNK_SIZE = 10 * 1024 * 1024;
+const CHUNK_SIZE = 5 * 1024 * 1024;
 const GH_PROXY = 'https://v6.gh-proxy.com/';
 
 let d1Initialized = false;
@@ -1026,7 +1026,7 @@ const DEFAULT_DOMAIN = 'https://cloud.myocd.de5.net';
 const TASK_CREATE_CONCURRENCY = 64;   // 任务创建并发
 const FILE_UPLOAD_CONCURRENCY = 5;   // 文件上传并发（同时上传多少个文件）
 const CHUNK_UPLOAD_CONCURRENCY = 32;  // 单文件分片并发
-const CLIENT_CHUNK_SIZE = 10 * 1024 * 1024;   // 20MB 分片
+const CLIENT_CHUNK_SIZE = 5 * 1024 * 1024;   // 20MB 分片
 
 function showMsg(msg){ const s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(()=>s.classList.remove('show'),2500); }
 function escapeHtml(t){ return t.replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
@@ -1743,33 +1743,29 @@ function debounce(fn, ms){
   };
 }
 
-async function loadTasks(){
-  let serverTasks = [];
-  try { serverTasks = await api('/api/tasks') || []; } catch (e) { console.error('获取任务失败', e); }
-  for (const t of serverTasks) {
-    const local = localTasks.get(t.id);
-    if (local) {
-      if (t.status === 'done' || t.status === 'error' || t.status === 'cancelled') {
-        local.status = t.status;
-        if (t.message) local.message = t.message;
-        if (t.progress != null) local.progress = t.progress;
-        local.updatedAt = t.updatedAt || Date.now();
-      }
-    }
-  }
+function renderTaskList(){
   const map = new Map();
   for (const t of localTasks.values()) map.set(t.id, t);
-  for (const t of serverTasks) { if (!map.has(t.id)) map.set(t.id, t); }
+  for (const t of serverTasksCache) { if (!map.has(t.id)) map.set(t.id, t); }
   const tasks = [...map.values()].sort((a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt));
   const box = document.getElementById('task-list');
   if (!box) return;
   if (tasks.length === 0) { box.innerHTML = '<div class="empty">暂无任务</div>'; return; }
   box.innerHTML = tasks.slice(0, 200).map(t => {
     const statusColor = t.status === 'done' ? 'var(--success)' : (t.status === 'error' ? 'var(--danger)' : (t.status === 'cancelled' ? 'var(--text-sec)' : 'var(--primary)'));
-    // 优先显示服务端记录的精确进度
     let extra = '';
     if (t.uploadedBytes != null && t.size) {
       extra = ' [' + (t.uploadedBytes / 1024 / 1024).toFixed(1) + '/' + (t.size / 1024 / 1024).toFixed(1) + ' MB]';
+    }
+    // 服务端提供的速度
+    let speedStr = '';
+    if (t.speed && t.speed > 0) {
+      if (t.speed >= 1024 * 1024) speedStr = (t.speed / 1024 / 1024).toFixed(1) + ' MB/s';
+      else if (t.speed >= 1024) speedStr = (t.speed / 1024).toFixed(1) + ' KB/s';
+      else speedStr = t.speed.toFixed(0) + ' B/s';
+    }
+    if (speedStr && t.status === 'uploading') {
+      extra += ' · ' + speedStr;
     }
     return \`<div class="task-item" data-task-id="\${escapeHtml(t.id)}">
       <div class="task-title">\${escapeHtml(t.name)} <span style="color:\${statusColor};font-size:12px;">\${t.status}</span>\${extra}</div>
@@ -1781,6 +1777,31 @@ async function loadTasks(){
       </div>
     </div>\`;
   }).join('');
+}
+
+let serverTasksCache = [];
+
+async function loadTasks(){
+  try {
+    serverTasksCache = await api('/api/tasks') || [];
+  } catch (e) { console.error('获取任务失败', e); }
+
+  // ★ 完全用服务端状态覆盖本地（进度、速度、消息都以服务端为准）
+  for (const st of serverTasksCache) {
+    const local = localTasks.get(st.id);
+    if (local) {
+      // 服务端所有字段直接覆盖本地
+      if (st.status) local.status = st.status;
+      if (st.message) local.message = st.message;
+      if (st.progress != null) local.progress = st.progress;
+      if (st.uploadedBytes != null) local.uploadedBytes = st.uploadedBytes;
+      if (st.doneChunks != null) local.doneChunks = st.doneChunks;
+      if (st.totalChunks != null) local.totalChunks = st.totalChunks;
+      if (st.speed != null) local.speed = st.speed;
+      if (st.updatedAt) local.updatedAt = st.updatedAt;
+    }
+  }
+  renderTaskList();
 }
 const debouncedLoadTasks = debounce(loadTasks, 400);
 
@@ -1819,7 +1840,7 @@ async function clearDoneTasks(){
   } catch (e) { showMsg('清除失败: ' + e.message); loadTasks(); }
 }
 
-document.getElementById('btn-tasks').onclick=()=>{ document.getElementById('task-drawer').classList.add('show'); loadTasks(); if(taskTimer)clearInterval(taskTimer); taskTimer=setInterval(loadTasks, 1500); };
+document.getElementById('btn-tasks').onclick=()=>{ document.getElementById('task-drawer').classList.add('show'); loadTasks(); };
 document.getElementById('close-tasks').onclick=()=>{ document.getElementById('task-drawer').classList.remove('show'); if(taskTimer)clearInterval(taskTimer); };
 document.getElementById('btn-refresh-tasks').onclick=()=>{ loadTasks(); };
 document.getElementById('btn-clear-done').onclick=clearDoneTasks;
@@ -1852,6 +1873,10 @@ function closeModal(){ document.getElementById('modal').classList.remove('show')
 
 bindShareModalEvents();
 loadList();
+
+// ★ 全局实时刷新：每 500ms 刷新任务列表 UI，每 2s 拉服务端
+setInterval(() => { if (typeof renderTaskList === 'function') renderTaskList(); }, 300);
+setInterval(() => { loadTasks(); }, 800);
 </script>
 `;
 
@@ -2737,7 +2762,7 @@ async function handleRequest(request, env, ctx = null) {
     const taskId = body.taskId || ssid();
     const chunks = Math.max(1, Math.ceil(size / CHUNK_SIZE));
     await githubCreateRepo(uploadId, env);
-    await addTask(env, { id: taskId, name: filename, status: 'uploading', message: '等待上传...', progress: 0, size, createdAt: Date.now(), updatedAt: Date.now() });
+    await addTask(env, { id: taskId, name: filename, status: 'uploading', message: '等待上传...', progress: 0, size, speedWindow: [], chunksDone: {}, createdAt: Date.now(), updatedAt: Date.now() });
     return jsonResponse({ uploadId, taskId, chunks, chunkSize: CHUNK_SIZE, githubUser: GITHUB_USER, repo: uploadId, token: env.GITHUB_TOKEN });
   }
 
@@ -2754,23 +2779,41 @@ async function handleRequest(request, env, ctx = null) {
         const task = JSON.parse(row.value);
         const total = body.total || 1;
         const size = task.size || 0;
-        // 记录已完成分片集合，避免重复累加
+
+        // 记录已完成分片集合
         if (!task.chunksDone) task.chunksDone = {};
-        const wasDone = task.chunksDone[index];
         task.chunksDone[index] = 1;
-        // 计算已完成分片数
         const doneCount = Object.keys(task.chunksDone).length;
-        // 精确字节：已完成分片总字节（最后一片可能不足 CHUNK_SIZE）
-        const uploadedBytes = body.uploadedBytes ? parseInt(body.uploadedBytes, 10) : 0;
-        const doneBytes = uploadedBytes > 0 ? Math.min(size, uploadedBytes) : Math.min(size, doneCount * 10 * 1024 * 1024);
-        const prog = size > 0 ? Math.min(95, Math.floor((doneBytes / size) * 95)) : Math.floor((doneCount / total) * 95);
+
+        // 已上传字节（客户端上报为准）
+        const uploadedBytes = body.uploadedBytes ? parseInt(body.uploadedBytes, 10) : Math.min(size, doneCount * 5 * 1024 * 1024);
+        const doneBytes = Math.min(size, uploadedBytes);
+
+        // ★ 瞬时速度：滑动窗口（最近 5 秒）
         const now = Date.now();
-        const elapsed = Math.max(0.1, (now - (task.startedAt || task.createdAt || now)) / 1000);
-        const speed = doneBytes / elapsed;
-        // 消息里包含字节和速度
+        if (!task.speedWindow) task.speedWindow = [];
+        task.speedWindow.push({ t: now, b: doneBytes });
+        // 只保留最近 5 秒
+        const cutoff = now - 5000;
+        task.speedWindow = task.speedWindow.filter(p => p.t >= cutoff);
+        let speed = 0;
+        if (task.speedWindow.length >= 2) {
+          const first = task.speedWindow[0];
+          const last = task.speedWindow[task.speedWindow.length - 1];
+          const dt = (last.t - first.t) / 1000;
+          if (dt > 0.3) speed = (last.b - first.b) / dt;
+        }
+        // 保底：用平均速度
+        if (speed <= 0) {
+          const elapsed = Math.max(0.1, (now - (task.startedAt || task.createdAt || now)) / 1000);
+          speed = doneBytes / elapsed;
+        }
+
+        const prog = size > 0 ? Math.min(95, Math.floor((doneBytes / size) * 95)) : Math.floor((doneCount / total) * 95);
         const msg = '上传 ' + formatSize(doneBytes) + '/' + formatSize(size)
           + ' · ' + formatSpeed(speed)
           + ' · 分片 ' + doneCount + '/' + total;
+
         await updateTask(env, taskId, {
           message: msg,
           progress: prog,
