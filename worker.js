@@ -1959,12 +1959,17 @@ function generateThemeCss(settings = {}) {
 }
 
 
-function sharePageV3(share) {
+function sharePageV3(share, tree, themeCss) {
   const shareIdJson = JSON.stringify(share.id);
   const hasPassword = Boolean(share.password);
-  const noteInitial = hasPassword ? '' : JSON.stringify(share.note || '');
   const createdAt = share.createdAt || Date.now();
-  return new Response(`<!DOCTYPE html><html><head>` + COMMON_HEAD + `
+  const treeJson = JSON.stringify(tree).replace(/</g, '\\u003c');
+  const initialTree = hasPassword ? 'null' : treeJson;
+  const initialNote = hasPassword ? "''" : JSON.stringify(share.note || '');
+  const pwFlag = hasPassword ? 'true' : 'false';
+
+  const html = `<!DOCTYPE html><html><head>` +
+    COMMON_HEAD + themeCss + `
   <style>
     .pwd-box { max-width: 380px; margin: 60px auto; }
     .file-row { padding:10px 12px;background:#fff;border:1px solid #e0e0e0;border-radius:6px;margin-bottom:6px;display:flex;align-items:center;gap:8px; }
@@ -1986,7 +1991,6 @@ function sharePageV3(share) {
       <button class="btn-primary" onclick="verifyPwd()" style="width:100%;padding:10px;border:none;border-radius:8px;cursor:pointer;">验证</button>
       <p id="pwd-err" style="color:var(--danger);font-size:14px;margin-top:8px;"></p>
     </div>
-
     <div id="share-content" style="display:${hasPassword ? 'none' : 'block'};">
       <div class="card">
         <h3 style="margin-top:0;color:var(--primary);font-size:16px;">分享内容</h3>
@@ -2019,76 +2023,82 @@ function sharePageV3(share) {
   </div>
   <div class="snackbar" id="snackbar"></div>
   <script>
-  const SHARE_ID = ${shareIdJson};
-  let SHARE_DATA = ${hasPassword ? 'null' : `{note:${noteInitial}, tree:null, createdAt:${createdAt}}`};
-  let PASSWORD = ${hasPassword ? "''" : "''"};
-  const CREATED_AT = ${createdAt};
+  var SHARE_ID = ${shareIdJson};
+  var HAS_PASSWORD = ${pwFlag};
+  var CREATED_AT = ${createdAt};
+  var SHARE_DATA = { note: ${initialNote}, tree: ${initialTree}, createdAt: CREATED_AT };
+  var PASSWORD = '';
 
   function escapeHtml(t){ return String(t).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
-  function formatSize(b){ if(!b)return '0 B'; const k=1024, s=['B','KB','MB','GB']; const i=Math.floor(Math.log(b)/Math.log(k)); return (b/Math.pow(k,i)).toFixed(2)+' '+s[i]; }
-  function showMsg(msg){ const s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(()=>s.classList.remove('show'),2500); }
+  function formatSize(b){ if(!b)return '0 B'; var k=1024, s=['B','KB','MB','GB']; var i=Math.floor(Math.log(b)/Math.log(k)); return (b/Math.pow(k,i)).toFixed(2)+' '+s[i]; }
+  function showMsg(msg){ var s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(function(){s.classList.remove('show');},2500); }
 
   function getIcon(name){
-    const ext=name.split('.').pop().toLowerCase();
-    if(['mp4','webm','mkv','a3v8'].includes(ext)) return 'movie';
-    if(['mp3','wav','ogg','flac','m4a'].includes(ext)) return 'audiotrack';
-    if(['jpg','jpeg','png','gif','webp'].includes(ext)) return 'image';
-    if(['zip','rar','7z','tar','gz'].includes(ext)) return 'folder_zip';
-    if(['txt','md','json','js','css','html'].includes(ext)) return 'description';
+    var ext=name.split('.').pop().toLowerCase();
+    if(['mp4','webm','mkv','a3v8'].indexOf(ext)>=0) return 'movie';
+    if(['mp3','wav','ogg','flac','m4a'].indexOf(ext)>=0) return 'audiotrack';
+    if(['jpg','jpeg','png','gif','webp'].indexOf(ext)>=0) return 'image';
+    if(['zip','rar','7z','tar','gz'].indexOf(ext)>=0) return 'folder_zip';
+    if(['txt','md','json','js','css','html'].indexOf(ext)>=0) return 'description';
     return 'insert_drive_file';
   }
   function getMime(name){
-    const ext=name.split('.').pop().toLowerCase();
-    const map={mp4:'video/mp4',webm:'video/webm',mkv:'video/x-matroska',a3v8:'video/mp4',mp3:'audio/mpeg',wav:'audio/wav',ogg:'audio/ogg',flac:'audio/flac',m4a:'audio/mp4',txt:'text/plain',md:'text/markdown',json:'application/json',js:'application/javascript',css:'text/css',html:'text/html',xml:'application/xml',zip:'application/zip',rar:'application/vnd.rar','7z':'application/x-7z-compressed',tar:'application/x-tar',gz:'application/gzip',pdf:'application/pdf',jpg:'image/jpeg',jpeg:'image/jpeg',png:'image/png',gif:'image/gif',webp:'image/webp'};
+    var ext=name.split('.').pop().toLowerCase();
+    var map={mp4:'video/mp4',webm:'video/webm',mkv:'video/x-matroska',a3v8:'video/mp4',mp3:'audio/mpeg',wav:'audio/wav',ogg:'audio/ogg',flac:'audio/flac',m4a:'audio/mp4',txt:'text/plain',md:'text/markdown',json:'application/json',js:'application/javascript',css:'text/css',html:'text/html',xml:'application/xml',zip:'application/zip',rar:'application/vnd.rar','7z':'application/x-7z-compressed',tar:'application/x-tar',gz:'application/gzip',pdf:'application/pdf',jpg:'image/jpeg',jpeg:'image/jpeg',png:'image/png',gif:'image/gif',webp:'image/webp'};
     return map[ext]||'application/octet-stream';
   }
 
-  async function verifyPwd(){
-    const pw = document.getElementById('pwd-input').value;
-    try {
-      const r = await fetch('/api/share/' + SHARE_ID + '/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: pw })
-      });
-      if (!r.ok) { document.getElementById('pwd-err').textContent = '提取码错误'; return; }
-      const data = await r.json();
+  function verifyPwd(){
+    var pw = document.getElementById('pwd-input').value;
+    fetch('/api/share/' + SHARE_ID + '/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pw })
+    }).then(function(r){
+      if (!r.ok) { document.getElementById('pwd-err').textContent = '提取码错误'; return null; }
+      return r.json();
+    }).then(function(data){
+      if (!data) return;
       PASSWORD = pw;
       SHARE_DATA = data;
       document.getElementById('pwd-gate').style.display = 'none';
       document.getElementById('share-content').style.display = 'block';
       renderAll();
-    } catch(e) { document.getElementById('pwd-err').textContent = '网络错误'; }
+    }).catch(function(){
+      document.getElementById('pwd-err').textContent = '网络错误';
+    });
   }
 
   function downloadUrl(relPath){ return '/api/share/' + SHARE_ID + '/download?p=' + encodeURIComponent(relPath) + (PASSWORD ? '&pw=' + encodeURIComponent(PASSWORD) : ''); }
   function directUrl(relPath){ return '/api/share/' + SHARE_ID + '/direct?p=' + encodeURIComponent(relPath) + (PASSWORD ? '&pw=' + encodeURIComponent(PASSWORD) : ''); }
 
   function renderTree(node, basePath, level){
-    let html = '';
-    const entries = Object.entries(node.children || {}).sort((a,b) => {
-      const ta = a[1].type === 'folder' ? 0 : 1;
-      const tb = b[1].type === 'folder' ? 0 : 1;
+    var html = '';
+    var entries = Object.entries(node.children || {}).sort(function(a,b){
+      var ta = a[1].type === 'folder' ? 0 : 1;
+      var tb = b[1].type === 'folder' ? 0 : 1;
       if (ta !== tb) return ta - tb;
       return a[0].localeCompare(b[0], 'zh-CN');
     });
-    for (const [name, child] of entries) {
-      const rel = basePath ? basePath + '/' + name : name;
-      const indent = level * 20;
+    for (var i = 0; i < entries.length; i++) {
+      var name = entries[i][0];
+      var child = entries[i][1];
+      var rel = basePath ? basePath + '/' + name : name;
+      var indent = level * 20;
       if (child.type === 'folder') {
         html += '<div class="folder-row" style="margin-left:' + indent + 'px;">';
         html += '<span class="material-icons">folder</span>';
         html += '<span>' + escapeHtml(name) + '</span></div>';
         html += renderTree(child, rel, level + 1);
       } else {
-        const icon = getIcon(name);
-        const meta = formatSize(child.size);
+        var icon = getIcon(name);
+        var meta = formatSize(child.size);
         html += '<div class="file-row" style="margin-left:' + indent + 'px;">';
         html += '<span class="material-icons" style="color:var(--text-sec);">' + icon + '</span>';
-        html += '<span style="flex:1;word-break:break-all;font-size:14px;cursor:pointer;" onclick="showPreview(' + JSON.stringify(rel) + ',' + JSON.stringify(name) + ')">' + escapeHtml(name) + '</span>';
+        html += '<span style="flex:1;word-break:break-all;font-size:14px;cursor:pointer;" data-rel="' + escapeHtml(rel) + '" data-name="' + escapeHtml(name) + '" class="share-preview-link">' + escapeHtml(name) + '</span>';
         html += '<span style="font-size:12px;color:var(--text-sec);white-space:nowrap;">' + meta + '</span>';
         html += '<div class="file-actions-row">';
-        html += '<button title="预览" onclick="showPreview(' + JSON.stringify(rel) + ',' + JSON.stringify(name) + ')"><span class="material-icons">visibility</span></button>';
+        html += '<button class="share-preview-btn" data-rel="' + escapeHtml(rel) + '" data-name="' + escapeHtml(name) + '" title="预览"><span class="material-icons">visibility</span></button>';
         html += '<a title="下载" href="' + downloadUrl(rel) + '"><span class="material-icons">download</span></a>';
         html += '</div></div>';
       }
@@ -2099,8 +2109,20 @@ function sharePageV3(share) {
   function renderAll(){
     document.getElementById('note-text').textContent = (SHARE_DATA && SHARE_DATA.note) || '（无备注）';
     document.getElementById('note-meta').textContent = '分享于 ' + new Date(CREATED_AT).toLocaleString();
-    const listEl = document.getElementById('share-file-list');
-    listEl.innerHTML = renderTree(SHARE_DATA.tree || {children:{}}, '', 0) || '<div class="empty">分享内容为空</div>';
+    var listEl = document.getElementById('share-file-list');
+    if (!SHARE_DATA.tree) {
+      listEl.innerHTML = '<div class="empty">暂无数据</div>';
+      return;
+    }
+    listEl.innerHTML = renderTree(SHARE_DATA.tree, '', 0) || '<div class="empty">分享内容为空</div>';
+    var btns = listEl.querySelectorAll('.share-preview-btn');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].onclick = (function(rel, name){ return function(){ showPreview(rel, name); }; })(btns[i].getAttribute('data-rel'), btns[i].getAttribute('data-name'));
+    }
+    var links = listEl.querySelectorAll('.share-preview-link');
+    for (var j = 0; j < links.length; j++) {
+      links[j].onclick = (function(rel, name){ return function(){ showPreview(rel, name); }; })(links[j].getAttribute('data-rel'), links[j].getAttribute('data-name'));
+    }
   }
 
   function backToList(){
@@ -2108,43 +2130,42 @@ function sharePageV3(share) {
     document.getElementById('list-area').style.display = 'block';
   }
 
-  async function showPreview(relPath, name){
+  function showPreview(relPath, name){
     document.getElementById('list-area').style.display = 'none';
     document.getElementById('preview-area').style.display = 'block';
     document.getElementById('preview-title').textContent = name;
-    document.getElementById('preview-download-btn').onclick = () => { location.href = downloadUrl(relPath); };
-    const content = document.getElementById('preview-content');
+    document.getElementById('preview-download-btn').onclick = function(){ location.href = downloadUrl(relPath); };
+    var content = document.getElementById('preview-content');
     content.innerHTML = '<div class="empty">加载中...</div>';
-    const ext = name.split('.').pop().toLowerCase();
-    const mime = getMime(name);
-    const d = directUrl(relPath);
-    try {
-      if (mime.startsWith('video/')) {
-        content.innerHTML = '<video controls playsinline preload="metadata" style="width:100%;max-height:70vh;background:#000;border-radius:8px;"><source src="' + d + '" type="' + mime + '"></video>';
-      } else if (mime.startsWith('audio/')) {
-        content.innerHTML = '<audio controls src="' + d + '" style="width:100%;"></audio>';
-      } else if (['txt','md','json','js','css','html','xml'].includes(ext)) {
-        const r = await fetch(d);
-        const text = await r.text();
+    var ext = name.split('.').pop().toLowerCase();
+    var mime = getMime(name);
+    var d = directUrl(relPath);
+    if (mime.indexOf('video/') === 0) {
+      content.innerHTML = '<video controls playsinline preload="metadata" style="width:100%;max-height:70vh;background:#000;border-radius:8px;"><source src="' + d + '" type="' + mime + '"></video>';
+    } else if (mime.indexOf('audio/') === 0) {
+      content.innerHTML = '<audio controls src="' + d + '" style="width:100%;"></audio>';
+    } else if (['txt','md','json','js','css','html','xml'].indexOf(ext) >= 0) {
+      fetch(d).then(function(r){ return r.text(); }).then(function(text){
         content.innerHTML = '<textarea readonly style="width:100%;min-height:400px;font-family:monospace;padding:12px;border:1px solid #e0e0e0;border-radius:8px;background:#fff;font-size:13px;">' + escapeHtml(text) + '</textarea>';
-      } else if (mime.startsWith('image/')) {
-        content.innerHTML = '<img src="' + d + '" style="max-width:100%;max-height:70vh;display:block;margin:0 auto;border-radius:8px;">';
-      } else {
-        content.innerHTML = '<div class="empty">无法预览此文件类型<br><button class="btn-primary" onclick="location.href=\'' + downloadUrl(relPath) + '\'" style="padding:10px 20px;border-radius:8px;margin-top:12px;border:none;cursor:pointer;">下载文件</button></div>';
-      }
-    } catch(e) {
-      content.innerHTML = '<div class="empty">加载失败: ' + escapeHtml(e.message) + '</div>';
+      }).catch(function(e){
+        content.innerHTML = '<div class="empty">加载失败: ' + escapeHtml(e.message) + '</div>';
+      });
+    } else if (mime.indexOf('image/') === 0) {
+      content.innerHTML = '<img src="' + d + '" style="max-width:100%;max-height:70vh;display:block;margin:0 auto;border-radius:8px;">';
+    } else {
+      content.innerHTML = '<div class="empty">无法预览此文件类型<br><a class="btn-primary" href="' + downloadUrl(relPath) + '" style="display:inline-block;padding:10px 20px;border-radius:8px;text-decoration:none;margin-top:12px;">下载文件</a></div>';
     }
   }
 
-  async function downloadAll(){
+  function downloadAll(){
     if (!SHARE_DATA || !SHARE_DATA.tree) { showMsg('数据未加载'); return; }
-    const files = [];
+    var files = [];
     (function walk(node, base){
-      for (const [name, child] of Object.entries(node.children || {})) {
-        const p = base ? base + '/' + name : name;
+      for (var k in (node.children || {})) {
+        var child = node.children[k];
+        var p = base ? base + '/' + k : k;
         if (child.type === 'folder') walk(child, p);
-        else if (child.type === 'file') files.push({ path: p, name, size: child.size });
+        else if (child.type === 'file') files.push({ path: p, name: k, size: child.size });
       }
     })(SHARE_DATA.tree, '');
 
@@ -2152,49 +2173,53 @@ function sharePageV3(share) {
     if (files.length === 1) { location.href = downloadUrl(files[0].path); return; }
 
     showMsg('正在打包 ' + files.length + ' 个文件...');
-    // 加载 JSZip
-    if (!window.JSZip) {
-      await new Promise((resolve, reject) => {
-        const s = document.createElement('script');
-        s.src = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
-        s.onload = resolve; s.onerror = reject;
-        document.head.appendChild(s);
+    var loadZip = window.JSZip ? Promise.resolve() : new Promise(function(resolve, reject){
+      var s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
+      s.onload = resolve; s.onerror = reject;
+      document.head.appendChild(s);
+    });
+    loadZip.then(function(){
+      var zip = new JSZip();
+      var folder = zip.folder('share_' + SHARE_ID);
+      var chain = Promise.resolve();
+      files.forEach(function(f){
+        chain = chain.then(function(){
+          return fetch(directUrl(f.path)).then(function(r){
+            if (!r.ok) return null;
+            return r.blob().then(function(b){ folder.file(f.path, b); });
+          });
+        });
       });
-    }
-    const zip = new JSZip();
-    const folder = zip.folder('share_' + SHARE_ID);
-    for (let i = 0; i < files.length; i++) {
-      const f = files[i];
-      const r = await fetch(directUrl(f.path));
-      if (!r.ok) { showMsg('下载失败: ' + f.name); continue; }
-      const blob = await r.blob();
-      folder.file(f.path, blob);
-    }
-    const content = await zip.generateAsync({ type: 'blob', streamFiles: true });
-    const url = URL.createObjectURL(content);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'share_' + SHARE_ID + '.zip';
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
-    showMsg('打包完成');
-  }
-
-  // 初始化
-  if (!${hasPassword}) {
-    fetch('/api/share/' + SHARE_ID).then(r => r.json()).then(data => {
-      SHARE_DATA = data;
-      renderAll();
+      return chain.then(function(){
+        return zip.generateAsync({ type: 'blob', streamFiles: true });
+      }).then(function(content){
+        var url = URL.createObjectURL(content);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'share_' + SHARE_ID + '.zip';
+        a.click();
+        setTimeout(function(){ URL.revokeObjectURL(url); }, 5000);
+        showMsg('打包完成');
+      });
+    }).catch(function(e){
+      showMsg('打包失败: ' + e.message);
     });
   }
+
+  if (!HAS_PASSWORD) {
+    renderAll();
+  }
   </script>
-  </body></html>`, {
+  </body></html>`;
+
+  return new Response(html, {
     headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store, no-cache, must-revalidate' }
   });
 }
 
-function shareManagePage() {
-  return new Response(`<!DOCTYPE html><html><head>` + COMMON_HEAD + `
+function shareManagePage(themeCss) {
+  const html = `<!DOCTYPE html><html><head>` + COMMON_HEAD + themeCss + `
   <style>
     .share-card { padding:12px;border:1px solid var(--divider);border-radius:8px;margin-bottom:10px;background:#fff; }
     .share-card .row { display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap; }
@@ -2212,70 +2237,88 @@ function shareManagePage() {
   </div>
   <div class="snackbar" id="snackbar"></div>
   <script>
+  var DEFAULT_DOMAIN = 'https://cloud.myocd.de5.net';
   function escapeHtml(t){ return String(t).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
-  function showMsg(msg){ const s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(()=>s.classList.remove('show'),2500); }
-  const DEFAULT_DOMAIN = 'https://cloud.myocd.de5.net';
+  function showMsg(msg){ var s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(function(){s.classList.remove('show');},2500); }
 
-  async function loadShares(){
-    const el = document.getElementById('share-list');
+  function loadShares(){
+    var el = document.getElementById('share-list');
     el.innerHTML = '<div class="empty">加载中...</div>';
-    try {
-      const r = await fetch('/api/shares/list');
+    fetch('/api/shares/list').then(function(r){
       if (!r.ok) throw new Error('HTTP ' + r.status);
-      const shares = await r.json();
+      return r.json();
+    }).then(function(shares){
       if (shares.length === 0) { el.innerHTML = '<div class="empty">暂无分享</div>'; return; }
-      el.innerHTML = shares.map(s => {
-        const url = DEFAULT_DOMAIN + '/s/' + s.id;
+      el.innerHTML = shares.map(function(s){
+        var url = DEFAULT_DOMAIN + '/s/' + s.id;
         return '<div class="share-card" data-id="' + escapeHtml(s.id) + '">' +
           '<div class="row"><span class="note">' + escapeHtml(s.note || '（无备注）') + '</span>' +
-          (s.hasPassword ? '<span style="color:var(--warning);font-size:12px;">🔒 已加密</span>' : '') + '</div>' +
+          (s.hasPassword ? '<span style="color:#f9a825;font-size:12px;">🔒 已加密</span>' : '') + '</div>' +
           '<div class="meta">' + new Date(s.createdAt).toLocaleString() + ' · ' + s.fileCount + ' 个文件</div>' +
           '<div class="meta" style="word-break:break-all;margin-top:4px;">' + escapeHtml(url) + '</div>' +
           '<div class="actions">' +
-          '<button onclick="copyUrl(\'' + s.id + '\')">复制链接</button>' +
-          '<button onclick="editNote(\'' + s.id + '\', ' + JSON.stringify(s.note || '') + ')">改备注</button>' +
-          '<button onclick="editPwd(\'' + s.id + '\', ' + JSON.stringify(s.password || '') + ')">改提取码</button>' +
-          '<button class="danger" onclick="delShare(\'' + s.id + '\')">删除</button>' +
+          '<button data-act="copy" data-id="' + escapeHtml(s.id) + '">复制链接</button>' +
+          '<button data-act="note" data-id="' + escapeHtml(s.id) + '">改备注</button>' +
+          '<button data-act="pwd" data-id="' + escapeHtml(s.id) + '">改提取码</button>' +
+          '<button class="danger" data-act="del" data-id="' + escapeHtml(s.id) + '">删除</button>' +
           '</div></div>';
       }).join('');
-    } catch(e) {
+      el.querySelectorAll('button[data-act]').forEach(function(btn){
+        btn.onclick = function(){
+          var id = btn.getAttribute('data-id');
+          var act = btn.getAttribute('data-act');
+          var s = shares.find(function(x){ return x.id === id; });
+          if (!s) return;
+          if (act === 'copy') copyUrl(id);
+          else if (act === 'note') editNote(id, s.note || '');
+          else if (act === 'pwd') editPwd(id, s.password || '');
+          else if (act === 'del') delShare(id);
+        };
+      });
+    }).catch(function(e){
       el.innerHTML = '<div class="empty">加载失败: ' + escapeHtml(e.message) + '</div>';
-    }
+    });
   }
 
   function copyUrl(id){
-    const url = DEFAULT_DOMAIN + '/s/' + id;
-    navigator.clipboard.writeText(url).then(() => showMsg('已复制')).catch(() => {
+    var url = DEFAULT_DOMAIN + '/s/' + id;
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(url).then(function(){ showMsg('已复制'); }, function(){ prompt('复制失败，请手动复制：', url); });
+    } else {
       prompt('复制失败，请手动复制：', url);
-    });
+    }
   }
-  async function editNote(id, oldNote){
-    const note = prompt('修改备注：', oldNote);
+  function editNote(id, oldNote){
+    var note = prompt('修改备注：', oldNote);
     if (note === null) return;
-    const r = await fetch('/api/shares/' + id, {
+    fetch('/api/shares/' + id, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ note })
+      body: JSON.stringify({ note: note })
+    }).then(function(r){
+      if (r.ok) { showMsg('已更新'); loadShares(); } else showMsg('更新失败');
     });
-    if (r.ok) { showMsg('已更新'); loadShares(); } else showMsg('更新失败');
   }
-  async function editPwd(id, oldPwd){
-    const pwd = prompt('修改提取码（留空则移除）：', oldPwd);
+  function editPwd(id, oldPwd){
+    var pwd = prompt('修改提取码（留空则移除）：', oldPwd);
     if (pwd === null) return;
-    const r = await fetch('/api/shares/' + id, {
+    fetch('/api/shares/' + id, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ password: pwd })
+    }).then(function(r){
+      if (r.ok) { showMsg('已更新'); loadShares(); } else showMsg('更新失败');
     });
-    if (r.ok) { showMsg('已更新'); loadShares(); } else showMsg('更新失败');
   }
-  async function delShare(id){
+  function delShare(id){
     if (!confirm('确定删除此分享？')) return;
-    const r = await fetch('/api/shares/' + id, { method: 'DELETE' });
-    if (r.ok) { showMsg('已删除'); loadShares(); } else showMsg('删除失败');
+    fetch('/api/shares/' + id, { method: 'DELETE' }).then(function(r){
+      if (r.ok) { showMsg('已删除'); loadShares(); } else showMsg('删除失败');
+    });
   }
 
   loadShares();
   </script>
-  </body></html>`, {
+  </body></html>`;
+  return new Response(html, {
     headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }
   });
 }
@@ -2861,11 +2904,17 @@ async function handleRequest(request, env, ctx = null) {
     if (!shareId) return errorResponse('分享不存在', 404);
     const share = await getShare(env, shareId);
     if (!share) return errorResponse('分享不存在或已删除', 404);
-    return sharePageV3(share);
+    const structure = await getStructure(env);
+    const tree = buildShareTree(structure, share.paths);
+    const settings = await getSettings(env);
+    const themeCss = generateThemeCss(settings);
+    return sharePageV3(share, tree, themeCss);
   }
   if (path === '/shares') {
     if (!checkPassword(request, env)) return loginPage();
-    return shareManagePage();
+    const settings = await getSettings(env);
+    const themeCss = generateThemeCss(settings);
+    return shareManagePage(themeCss);
   }
 
   return errorResponse('Not Found', 404);
