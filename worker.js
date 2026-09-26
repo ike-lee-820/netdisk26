@@ -2206,9 +2206,9 @@ async function renderPreview(){
       const style = isVideo ? 'width:100%;max-height:80vh;background:#000;' : 'width:100%;max-width:600px;margin:0 auto;';
       const mime = isVideo ? VIDEO_MIMES[ext] : AUDIO_MIMES[ext];
 
-      preview.innerHTML = `<div style="display:flex;justify-content:center;"><${mediaType} id="plyr-player" controls style="${style}">
-        <source src="${url}" type="${mime}">
-      </${mediaType}></div>`;
+      preview.innerHTML = '<div style="display:flex;justify-content:center;"><' + mediaType + ' id="plyr-player" controls style="' + style + '">'
+        + '<source src="' + url + '" type="' + mime + '">'
+        + '</' + mediaType + '></div>';
 
       const player = new Plyr('#plyr-player', {
         controls: ['play', 'progress', 'settings'],
@@ -2222,7 +2222,7 @@ async function renderPreview(){
       console.error('Plyr 加载失败', e);
       const fallbackType = VIDEO_MIMES[ext] ? 'video' : 'audio';
       const fallbackMime = VIDEO_MIMES[ext] ? VIDEO_MIMES[ext] : AUDIO_MIMES[ext];
-      preview.innerHTML = `<${fallbackType} controls src="${url}" style="width:100%;max-height:80vh;background:#000;"><source src="${url}" type="${fallbackMime}"></${fallbackType}>`;
+      preview.innerHTML = '<' + fallbackType + ' controls src="' + url + '" style="width:100%;max-height:80vh;background:#000;"><source src="' + url + '" type="' + fallbackMime + '"></' + fallbackType + '>';
       return;
     }
   }
