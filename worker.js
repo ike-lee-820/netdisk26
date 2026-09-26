@@ -2659,7 +2659,7 @@ function generateThemeCss(settings = {}) {
   css += '</style>';
   return link + css;
 }
-) {
+function generateThemeCss(settings = {}) {
   const primary = settings.primary || '#1976d2';
   const bg = (settings.bg || '').replace(/["'`<>]/g, '');
   const cardOpacity = settings.cardOpacity != null ? settings.cardOpacity : 1;
