@@ -1654,6 +1654,18 @@ async function uploadOne(file, dir, externalTaskId){
   // 启动本地定时渲染（防止某次分片卡住 UI 不刷新）
   const localTimer = setInterval(() => updateUI(), 500);
 
+  // ★ 初始化哈希器（xxh3-128，失败自动回退 SHA-256）
+  window.__fileHasher = null;
+  window.__hashAlgo = null;
+  try {
+    if (window.hashwasm && window.hashwasm.createXXHash128) {
+      window.__fileHasher = await window.hashwasm.createXXHash128();
+      window.__fileHasher.init();
+      window.__hashAlgo = 'xxh3-128';
+      console.log('[hash] xxh3-128 initialized for', file.name);
+    }
+  } catch(e) { console.warn('[hash] xxh3 init failed', e); }
+
   try {
     // 请求上传参数
     const start = await api('/api/upload/start', {
@@ -1678,6 +1690,14 @@ async function uploadOne(file, dir, externalTaskId){
       const end = Math.min(begin + CHUNK, fileSize);
       const actualSize = end - begin;   // ★ 分片实际大小
       const blob = file.slice(begin, end);
+
+      // ★ 顺序喂给哈希器（必须按顺序！）
+      if (window.__fileHasher) {
+        try {
+          const _hashBuf = await blob.arrayBuffer();
+          window.__fileHasher.update(new Uint8Array(_hashBuf));
+        } catch(e) { console.warn('hash update failed', e); }
+      }
 
       // 转 base64
       const base64 = await new Promise((resolve, reject) => {
@@ -1758,10 +1778,22 @@ async function uploadOne(file, dir, externalTaskId){
     // 全部完成
     clearInterval(localTimer);
     updateUI('注册中...');
+
+    // ★ 计算最终哈希
+    let fileHash = null;
+    let hashAlgo = null;
+    if (window.__fileHasher) {
+      try {
+        fileHash = window.__fileHasher.digest();
+        hashAlgo = window.__hashAlgo;
+        console.log('[hash]', hashAlgo, '=', fileHash);
+      } catch(e) { console.warn('[hash] digest failed', e); }
+    }
+
     await api('/api/upload/finish', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ uploadId, path, filename: file.name, size: fileSize, chunks: total, taskId })
+      body: JSON.stringify({ uploadId, path, filename: file.name, size: fileSize, chunks: total, taskId, fileHash, hashAlgo })
     });
 
     t.status = 'done';
@@ -1981,6 +2013,16 @@ function closeModal(){ document.getElementById('modal').classList.remove('show')
 bindShareModalEvents();
 loadList();
 
+// 加载 xxh3 哈希库（异步，不阻塞）
+(function(){
+  var s = document.createElement('script');
+  s.src = 'https://cdn.jsdelivr.net/npm/hash-wasm@4.11.0/dist/xxhash.umd.min.js';
+  s.async = true;
+  s.onload = function(){ console.log('[hash] xxh3 loaded'); };
+  s.onerror = function(){ console.warn('[hash] xxh3 加载失败，将使用 SHA-256'); };
+  document.head.appendChild(s);
+})();
+
 // ★ 全局实时刷新：每 500ms 刷新任务列表 UI，每 2s 拉服务端
 setInterval(() => { if (typeof scheduleRenderTaskList === 'function') scheduleRenderTaskList(); }, 500);
 setInterval(() => { loadTasks(); }, 3000);   // 只同步最终状态，间隔拉长
@@ -2118,9 +2160,109 @@ async function load(){
     document.getElementById('file-meta').textContent = formatSize(fileNode.size) + ' · ' + new Date(fileNode.createdAt).toLocaleString();
     document.getElementById('title').textContent = fileNode.name;
     await renderPreview();
+    renderHashInfo();
     loadSiblings();
   } catch(e) {
     preview.innerHTML = '<div class="empty">加载失败: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+
+function renderHashInfo(){
+  if (!fileNode || !fileNode.fileHash) return;
+  var preview = document.getElementById('preview');
+  var algo = fileNode.hashAlgo || 'unknown';
+  var hash = fileNode.fileHash;
+  var html = '<div class="card" style="margin-top:12px;">' +
+    '<h3 style="margin-top:0;font-size:14px;color:var(--text-sec);">文件校验</h3>' +
+    '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">' +
+    '<code style="flex:1;background:#f5f5f5;padding:8px;border-radius:6px;font-size:12px;word-break:break-all;user-select:all;">' + escapeHtml(hash) + '</code>' +
+    '<button class="btn-secondary" onclick="copyHash()" style="padding:6px 12px;border:none;border-radius:6px;cursor:pointer;font-size:12px;">复制</button>' +
+    '<button class="btn-primary" id="verify-btn" onclick="verifyHash()" style="padding:6px 12px;border:none;border-radius:6px;cursor:pointer;font-size:12px;">验证</button>' +
+    '</div>' +
+    '<p style="font-size:12px;color:var(--text-sec);margin:8px 0 0 0;">算法：' + escapeHtml(algo) + '</p>' +
+    '<p id="verify-result" style="font-size:13px;margin:8px 0 0 0;"></p>' +
+    '</div>';
+  preview.insertAdjacentHTML('afterend', html);
+}
+
+function copyHash(){
+  if (!fileNode || !fileNode.fileHash) return;
+  copyText(fileNode.fileHash).then(function(){ showMsg('哈希已复制'); });
+}
+
+async function verifyHash(){
+  if (!fileNode || !fileNode.fileHash) return;
+  var btn = document.getElementById('verify-btn');
+  var result = document.getElementById('verify-result');
+  btn.disabled = true;
+  btn.textContent = '计算中...';
+  result.textContent = '正在下载并计算哈希...';
+  result.style.color = 'var(--text-sec)';
+
+  try {
+    var algo = fileNode.hashAlgo || '';
+    var hasher = null;
+    var shaChunks = [];
+
+    if (algo.indexOf('xxh3') >= 0) {
+      await loadScript('https://cdn.jsdelivr.net/npm/hash-wasm@4.11.0/dist/xxhash.umd.min.js');
+      if (window.hashwasm && window.hashwasm.createXXHash128) {
+        hasher = await window.hashwasm.createXXHash128();
+        hasher.init();
+      }
+    }
+
+    var url = '/direct/' + fileNode.ssid + '/' + encodeURIComponent(fileNode.name);
+    var resp = await fetch(url);
+    var reader = resp.body.getReader();
+    var total = 0;
+    var lastTick = Date.now();
+
+    while (true) {
+      var chunk = await reader.read();
+      if (chunk.done) break;
+      total += chunk.value.byteLength;
+      if (hasher) {
+        hasher.update(chunk.value);
+      } else {
+        shaChunks.push(chunk.value);
+      }
+      if (Date.now() - lastTick > 300) {
+        result.textContent = '已下载 ' + formatSize(total) + '...';
+        lastTick = Date.now();
+      }
+    }
+
+    var computed = null;
+    if (hasher) {
+      computed = hasher.digest();
+    } else {
+      var combined = new Uint8Array(total);
+      var off = 0;
+      for (var i = 0; i < shaChunks.length; i++) { combined.set(shaChunks[i], off); off += shaChunks[i].byteLength; }
+      var hashBuf = await crypto.subtle.digest('SHA-256', combined);
+      computed = Array.from(new Uint8Array(hashBuf)).map(function(b){ return b.toString(16).padStart(2, '0'); }).join('');
+    }
+
+    if (computed === fileNode.fileHash) {
+      result.textContent = '✓ 校验通过，文件完整';
+      result.style.color = 'var(--success)';
+      showMsg('✓ 校验通过');
+    } else {
+      result.textContent = '✗ 校验失败！
+计算值: ' + computed + '
+存储值: ' + fileNode.fileHash;
+      result.style.color = 'var(--danger)';
+      result.style.whiteSpace = 'pre-wrap';
+      showMsg('✗ 校验失败');
+    }
+  } catch(e) {
+    result.textContent = '验证失败: ' + e.message;
+    result.style.color = 'var(--danger)';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '验证';
   }
 }
 
@@ -3284,7 +3426,7 @@ const structure = await getStructure(env);
 const structure = await getStructure(env);
     const oldNode = getNode(structure, filePath);
     if (oldNode && oldNode.type === 'file') { try { await deleteFileStorage(oldNode, env); } catch (e) {} }
-    setNode(structure, filePath, { type: 'file', name: filename, ssid: uploadId, storage: 'github', size, chunks, createdAt: Date.now() });
+    setNode(structure, filePath, { type: 'file', name: filename, ssid: uploadId, storage: 'github', size, chunks, createdAt: Date.now(), fileHash: body.fileHash || null, hashAlgo: body.hashAlgo || null });
     await saveStructure(env, structure);
     });
     await updateTask(env, taskId, { status: 'done', message: '完成', progress: 100 });
