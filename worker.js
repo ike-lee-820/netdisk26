@@ -2141,9 +2141,9 @@ async function renderPreview(){
     preview.innerHTML = '<div class="empty">正在加载 PDF...</div>';
     try {
       // PDF.js v6 必须使用 ES Module 导入
-      await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js');
+      await loadScript('https://cdn.bootcdn.net/ajax/libs/pdf.js/6.2.108');
       var pdfjsLib = window.pdfjsLib;
-      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.bootcdn.net/ajax/libs/pdf.js/6.2.108';
       // v6 的 getDocument 只接受 { url } 对象，且会自动处理 blob 转换
       var pdf = await pdfjsLib.getDocument({ url: url }).promise;
       var total = pdf.numPages;
@@ -2178,28 +2178,53 @@ async function renderPreview(){
   }
 
   if (ext === 'docx' || ext === 'xlsx' || ext === 'pptx') {
-    preview.innerHTML = '<div class="empty">正在加载 ' + ext.toUpperCase() + ' 预览...</div>';
+    preview.innerHTML = '<div class="empty">正在加载 Office 预览...</div>';
     try {
-      if (!window.Vue) {
-        await loadScript('https://cdn.jsdelivr.net/npm/vue@3.4.21/dist/vue.global.prod.js');
+      // 根据类型动态导入对应的 ESM 模块
+      var moduleUrl, cssUrl, componentName;
+      if (ext === 'docx') {
+        moduleUrl = 'https://cdn.jsdelivr.net/npm/@vue-office/docx@1.6.3/lib/v3/index.js';
+        cssUrl = 'https://cdn.jsdelivr.net/npm/@vue-office/docx@1.6.3/lib/index.css';
+        componentName = 'VueOfficeDocx';
+      } else if (ext === 'xlsx') {
+        moduleUrl = 'https://cdn.jsdelivr.net/npm/@vue-office/excel@1.6.3/lib/v3/index.js';
+        cssUrl = 'https://cdn.jsdelivr.net/npm/@vue-office/excel@1.6.3/lib/index.css';
+        componentName = 'VueOfficeExcel';
+      } else {
+        moduleUrl = 'https://cdn.jsdelivr.net/npm/@vue-office/pptx@1.6.3/lib/v3/index.js';
+        cssUrl = 'https://cdn.jsdelivr.net/npm/@vue-office/pptx@1.6.3/lib/index.css';
+        componentName = 'VueOfficePptx';
       }
-      var officeMap = {
-        docx: { js: 'https://cdn.jsdelivr.net/npm/@vue-office/docx@2.0.0/lib/index.umd.js', css: 'https://cdn.jsdelivr.net/npm/@vue-office/docx@2.0.0/lib/index.css', comp: 'VueOfficeDocx' },
-        xlsx: { js: 'https://cdn.jsdelivr.net/npm/@vue-office/excel@2.0.0/lib/index.umd.js', css: 'https://cdn.jsdelivr.net/npm/@vue-office/excel@2.0.0/lib/index.css', comp: 'VueOfficeExcel' },
-        pptx: { js: 'https://cdn.jsdelivr.net/npm/@vue-office/pptx@2.0.0/lib/index.umd.js', css: 'https://cdn.jsdelivr.net/npm/@vue-office/pptx@2.0.0/lib/index.css', comp: 'VueOfficePptx' }
-      };
-      var cfg = officeMap[ext];
-      try { await loadCSS(cfg.css); } catch(_){}
-      await loadScript(cfg.js);
-      var Comp = window[cfg.comp];
-      if (!Comp) throw new Error('组件未注册: ' + cfg.comp);
+
+      // 加载样式
+      if (cssUrl) {
+        try { await loadCSS(cssUrl); } catch(_){}
+      }
+
+      // 动态导入组件模块
+      var mod = await import(moduleUrl);
+      var Component = mod[componentName] || mod.default;
+      if (!Component) throw new Error('组件未导出: ' + componentName);
+
+      // 获取文件二进制数据
       var resp = await fetch(url);
-      if (!resp.ok) throw new Error('下载失败: ' + resp.status);
+      if (!resp.ok) throw new Error('下载文件失败: ' + resp.status);
       var buf = await resp.arrayBuffer();
+
+      // 渲染
       preview.innerHTML = '<div id="office-preview" style="overflow:auto;max-height:75vh;background:#fff;border-radius:8px;min-height:500px;"></div>';
-      var createApp = window.Vue.createApp;
-      var h = window.Vue.h;
-      createApp({ render: function(){ return h(Comp, { src: buf, options: {}, style: 'min-height:500px;' }); } }).mount('#office-preview');
+
+      // 如果 Vue 已加载，用它挂载；否则直接用组件渲染
+      if (window.Vue && window.Vue.createApp) {
+        window.Vue.createApp({
+          render: function() {
+            return window.Vue.h(Component, { src: buf, style: 'min-height:500px;' });
+          }
+        }).mount('#office-preview');
+      } else {
+        // 降级：显示下载按钮
+        preview.innerHTML = downloadBox('Office 预览组件加载失败，请下载查看', downloadUrl);
+      }
       return;
     } catch(e) {
       console.error('Office 预览失败', e);
@@ -2207,6 +2232,7 @@ async function renderPreview(){
       return;
     }
   }
+
 
   if (VIDEO_MIMES[ext] || AUDIO_MIMES[ext]) {
     preview.innerHTML = '<div class="empty">正在加载播放器...</div>';
