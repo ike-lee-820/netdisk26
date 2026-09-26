@@ -1800,7 +1800,7 @@ function renderTaskList(){
   const map = new Map();
   for (const t of localTasks.values()) map.set(t.id, t);
   for (const t of serverTasksCache) { if (!map.has(t.id)) map.set(t.id, t); }
-  const tasks = [...map.values()].sort((a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt));
+  const tasks = [...map.values()].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   const box = document.getElementById('task-list');
   if (!box) return;
   if (tasks.length === 0) { box.innerHTML = '<div class="empty">暂无任务</div>'; return; }
