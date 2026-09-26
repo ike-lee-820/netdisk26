@@ -2177,60 +2177,17 @@ async function renderPreview(){
     }
   }
 
-  if (ext === 'docx' || ext === 'xlsx' || ext === 'pptx') {
-    preview.innerHTML = '<div class="empty">正在加载 Office 预览...</div>';
-    try {
-      // 根据类型动态导入对应的 ESM 模块
-      var moduleUrl, cssUrl, componentName;
-      if (ext === 'docx') {
-        moduleUrl = 'https://cdn.jsdelivr.net/npm/@vue-office/docx@1.6.3/lib/v3/index.js';
-        cssUrl = 'https://cdn.jsdelivr.net/npm/@vue-office/docx@1.6.3/lib/index.css';
-        componentName = 'VueOfficeDocx';
-      } else if (ext === 'xlsx') {
-        moduleUrl = 'https://cdn.jsdelivr.net/npm/@vue-office/excel@1.6.3/lib/v3/index.js';
-        cssUrl = 'https://cdn.jsdelivr.net/npm/@vue-office/excel@1.6.3/lib/index.css';
-        componentName = 'VueOfficeExcel';
-      } else {
-        moduleUrl = 'https://cdn.jsdelivr.net/npm/@vue-office/pptx@1.6.3/lib/v3/index.js';
-        cssUrl = 'https://cdn.jsdelivr.net/npm/@vue-office/pptx@1.6.3/lib/index.css';
-        componentName = 'VueOfficePptx';
-      }
-
-      // 加载样式
-      if (cssUrl) {
-        try { await loadCSS(cssUrl); } catch(_){}
-      }
-
-      // 动态导入组件模块
-      var mod = await import(moduleUrl);
-      var Component = mod[componentName] || mod.default;
-      if (!Component) throw new Error('组件未导出: ' + componentName);
-
-      // 获取文件二进制数据
-      var resp = await fetch(url);
-      if (!resp.ok) throw new Error('下载文件失败: ' + resp.status);
-      var buf = await resp.arrayBuffer();
-
-      // 渲染
-      preview.innerHTML = '<div id="office-preview" style="overflow:auto;max-height:75vh;background:#fff;border-radius:8px;min-height:500px;"></div>';
-
-      // 如果 Vue 已加载，用它挂载；否则直接用组件渲染
-      if (window.Vue && window.Vue.createApp) {
-        window.Vue.createApp({
-          render: function() {
-            return window.Vue.h(Component, { src: buf, style: 'min-height:500px;' });
-          }
-        }).mount('#office-preview');
-      } else {
-        // 降级：显示下载按钮
-        preview.innerHTML = downloadBox('Office 预览组件加载失败，请下载查看', downloadUrl);
-      }
-      return;
-    } catch(e) {
-      console.error('Office 预览失败', e);
-      preview.innerHTML = downloadBox('Office 预览失败: ' + escapeHtml(e.message), downloadUrl);
-      return;
-    }
+  if (ext === 'docx' || ext === 'xlsx' || ext === 'pptx' || ext === 'doc' || ext === 'xls' || ext === 'ppt') {
+    // ★ 使用微软 Office Online Viewer
+    var absoluteUrl = location.origin + url;
+    var officeUrl = 'https://view.officeapps.live.com/op/embed.aspx?src=' + encodeURIComponent(absoluteUrl);
+    preview.innerHTML = '<div style="width:100%;height:75vh;border:1px solid var(--divider);border-radius:8px;overflow:hidden;background:#fff;">'
+      + '<iframe src="' + officeUrl + '" style="width:100%;height:100%;border:none;" allowfullscreen></iframe>'
+      + '</div>'
+      + '<p style="font-size:12px;color:var(--text-sec);margin-top:8px;text-align:center;">'
+      + '由微软 Office Online 提供 · 加载较慢请耐心等待 · <a href="' + downloadUrl + '">下载原文件</a>'
+      + '</p>';
+    return;
   }
 
 
