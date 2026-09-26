@@ -2798,31 +2798,123 @@ function sharePageV3(share, tree, themeCss) {
   }
 
   function showPreview(relPath, name){
-    document.getElementById('list-area').style.display = 'none';
-    document.getElementById('preview-area').style.display = 'block';
-    document.getElementById('preview-title').textContent = name;
-    document.getElementById('preview-download-btn').onclick = function(){ location.href = downloadUrl(relPath); };
-    var content = document.getElementById('preview-content');
-    content.innerHTML = '<div class="empty">加载中...</div>';
-    var ext = name.split('.').pop().toLowerCase();
-    var mime = getMime(name);
-    var d = directUrl(relPath);
-    if (mime.indexOf('video/') === 0) {
-      content.innerHTML = '<video controls playsinline preload="metadata" style="width:100%;max-height:70vh;background:#000;border-radius:8px;"><source src="' + d + '" type="' + mime + '"></video>';
-    } else if (mime.indexOf('audio/') === 0) {
-      content.innerHTML = '<audio controls src="' + d + '" style="width:100%;"></audio>';
-    } else if (['txt','md','json','js','css','html','xml'].indexOf(ext) >= 0) {
-      fetch(d).then(function(r){ return r.text(); }).then(function(text){
-        content.innerHTML = '<textarea readonly style="width:100%;min-height:400px;font-family:monospace;padding:12px;border:1px solid #e0e0e0;border-radius:8px;background:#fff;font-size:13px;">' + escapeHtml(text) + '</textarea>';
-      }).catch(function(e){
-        content.innerHTML = '<div class="empty">加载失败: ' + escapeHtml(e.message) + '</div>';
-      });
-    } else if (mime.indexOf('image/') === 0) {
-      content.innerHTML = '<img src="' + d + '" style="max-width:100%;max-height:70vh;display:block;margin:0 auto;border-radius:8px;">';
-    } else {
-      content.innerHTML = '<div class="empty">无法预览此文件类型<br><a class="btn-primary" href="' + downloadUrl(relPath) + '" style="display:inline-block;padding:10px 20px;border-radius:8px;text-decoration:none;margin-top:12px;">下载文件</a></div>';
-    }
+  document.getElementById('list-area').style.display = 'none';
+  document.getElementById('preview-area').style.display = 'block';
+  document.getElementById('preview-title').textContent = name;
+  document.getElementById('preview-download-btn').onclick = function(){ location.href = downloadUrl(relPath); };
+  var content = document.getElementById('preview-content');
+  content.innerHTML = '<div class="empty">加载中...</div>';
+  var ext = name.split('.').pop().toLowerCase();
+  var mime = getMime(name);
+  var d = directUrl(relPath);
+  var dl = downloadUrl(relPath);
+
+  // PDF
+  if (ext === 'pdf') {
+    import('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/6.3.289/pdf.mjs').then(function(pdfjsLib){
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/6.3.289/pdf.worker.mjs';
+      return pdfjsLib.getDocument({ url: d }).promise;
+    }).then(function(pdf){
+      var total = pdf.numPages;
+      content.innerHTML = '<div style="text-align:center;margin-bottom:10px;">'
+        + '<button class="btn-secondary" id="pdf-prev" style="padding:6px 14px;border:none;border-radius:6px;cursor:pointer;margin-right:6px;">上一页</button>'
+        + '<span id="pdf-info" style="font-size:14px;color:var(--text-sec);margin:0 8px;">1 / ' + total + '</span>'
+        + '<button class="btn-secondary" id="pdf-next" style="padding:6px 14px;border:none;border-radius:6px;cursor:pointer;margin-left:6px;">下一页</button>'
+        + '</div><div id="pdf-container" style="text-align:center;overflow:auto;max-height:75vh;"></div>';
+      var container = document.getElementById('pdf-container');
+      var info = document.getElementById('pdf-info');
+      var cur = 1;
+      var renderPage = function(n){
+        pdf.getPage(n).then(function(page){
+          var vp = page.getViewport({ scale: 1.5 });
+          var canvas = document.createElement('canvas');
+          canvas.width = vp.width; canvas.height = vp.height;
+          canvas.style.maxWidth = '100%'; canvas.style.height = 'auto';
+          container.innerHTML = ''; container.appendChild(canvas);
+          page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise.then(function(){
+            info.textContent = n + ' / ' + total;
+          });
+        });
+      };
+      document.getElementById('pdf-prev').onclick = function(){ if (cur > 1) { cur--; renderPage(cur); } };
+      document.getElementById('pdf-next').onclick = function(){ if (cur < total) { cur++; renderPage(cur); } };
+      renderPage(1);
+    }).catch(function(e){
+      content.innerHTML = '<div class="empty">PDF 加载失败: ' + e.message + '<br><a href="' + dl + '">下载文件</a></div>';
+    });
+    return;
   }
+
+  // 视频/音频 (Plyr)
+  var videoMimes = {mp4:'video/mp4', webm:'video/webm', mkv:'video/x-matroska', a3v8:'video/mp4', mov:'video/quicktime'};
+  var audioMimes = {mp3:'audio/mpeg', wav:'audio/wav', ogg:'audio/ogg', flac:'audio/flac', m4a:'audio/mp4'};
+  if (videoMimes[ext] || audioMimes[ext]) {
+    Promise.all([
+      new Promise(function(res, rej){ var l = document.createElement('link'); l.rel = 'stylesheet'; l.href = 'https://cdn.bootcdn.net/ajax/libs/plyr/3.8.4/plyr.css'; l.onload = res; l.onerror = rej; document.head.appendChild(l); }),
+      new Promise(function(res, rej){ var s = document.createElement('script'); s.src = 'https://cdn.bootcdn.net/ajax/libs/plyr/3.8.4/plyr.js'; s.onload = res; s.onerror = rej; document.head.appendChild(s); })
+    ]).then(function(){
+      var isVideo = !!videoMimes[ext];
+      var mt = isVideo ? 'video' : 'audio';
+      var mm = isVideo ? videoMimes[ext] : audioMimes[ext];
+      content.innerHTML = '<div style="max-width:' + (isVideo ? '900' : '600') + 'px;margin:0 auto;">'
+        + '<' + mt + ' id="plyr-player" controls playsinline style="width:100%;' + (isVideo ? 'max-height:80vh;background:#000;' : '') + '">'
+        + '<source src="' + d + '" type="' + mm + '"></' + mt + '></div>';
+      new Plyr('#plyr-player', {
+        controls: ['play', 'progress', 'settings'],
+        settings: ['speed'],
+        speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] }
+      });
+    }).catch(function(){
+      var isVideo = !!videoMimes[ext];
+      var mt = isVideo ? 'video' : 'audio';
+      var mm = isVideo ? videoMimes[ext] : audioMimes[ext];
+      content.innerHTML = '<' + mt + ' controls src="' + d + '" style="width:100%;max-height:80vh;"></' + mt + '>';
+    });
+    return;
+  }
+
+  // 图片 (Viewer.js)
+  var imageExts = ['jpg','jpeg','png','gif','webp','svg','bmp','ico'];
+  if (imageExts.indexOf(ext) >= 0) {
+    content.innerHTML = '<div style="text-align:center;"><img id="preview-img" src="' + d + '" style="max-width:100%;max-height:70vh;border-radius:8px;cursor:zoom-in;display:block;margin:0 auto;" alt="' + escapeHtml(name) + '"></div>';
+    Promise.all([
+      new Promise(function(res, rej){ var l = document.createElement('link'); l.rel = 'stylesheet'; l.href = 'https://cdn.bootcdn.net/ajax/libs/viewerjs/1.11.7/viewer.min.css'; l.onload = res; l.onerror = rej; document.head.appendChild(l); }),
+      new Promise(function(res, rej){ var s = document.createElement('script'); s.src = 'https://cdn.bootcdn.net/ajax/libs/viewerjs/1.11.7/viewer.min.js'; s.onload = res; s.onerror = rej; document.head.appendChild(s); })
+    ]).then(function(){
+      if (window.Viewer) {
+        new Viewer(document.getElementById('preview-img'), {
+          navbar: false, title: false,
+          toolbar: { zoomIn: 1, zoomOut: 1, oneToOne: 1, reset: 1, rotateLeft: 1, rotateRight: 1, flipHorizontal: 1, flipVertical: 1 }
+        });
+      }
+    });
+    return;
+  }
+
+  // 文本/代码
+  var textExts = ['txt','md','json','js','css','html','xml','log','yml','yaml','ini','conf','sh','py','java','c','cpp','go','rs','sql','ts','tsx','jsx','vue'];
+  if (textExts.indexOf(ext) >= 0) {
+    fetch(d).then(function(r){ return r.text(); }).then(function(text){
+      content.innerHTML = '<textarea readonly spellcheck="false" style="width:100%;min-height:520px;font-family:Consolas,Monaco,monospace;font-size:13px;line-height:1.6;padding:16px;border:1px solid var(--divider);border-radius:8px;background:#fff;resize:vertical;box-sizing:border-box;"></textarea>';
+      content.querySelector('textarea').value = text;
+    }).catch(function(e){
+      content.innerHTML = '<div class="empty">加载失败: ' + e.message + '<br><a href="' + dl + '">下载文件</a></div>';
+    });
+    return;
+  }
+
+  // Office（微软在线预览）
+  if (ext === 'docx' || ext === 'xlsx' || ext === 'pptx' || ext === 'doc' || ext === 'xls' || ext === 'ppt') {
+    var absoluteUrl = location.origin + d;
+    var officeUrl = 'https://view.officeapps.live.com/op/embed.aspx?src=' + encodeURIComponent(absoluteUrl);
+    content.innerHTML = '<iframe src="' + officeUrl + '" style="width:100%;height:75vh;border:1px solid var(--divider);border-radius:8px;background:#fff;"></iframe>'
+      + '<p style="font-size:12px;color:var(--text-sec);margin-top:8px;text-align:center;">由微软 Office Online 提供 · <a href="' + dl + '">下载原文件</a></p>';
+    return;
+  }
+
+  // 其他
+  content.innerHTML = '<div class="empty">无法预览<br><button class="btn-primary" onclick="location.href=\'' + dl + '\'" style="padding:10px 20px;border-radius:8px;margin-top:12px;border:none;cursor:pointer;">下载文件</button></div>';
+}
 
   function downloadAll(){
     if (!SHARE_DATA || !SHARE_DATA.tree) { showMsg('数据未加载'); return; }
