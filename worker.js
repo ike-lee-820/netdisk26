@@ -1659,10 +1659,13 @@ async function uploadOne(file, dir, externalTaskId){
   window.__hashAlgo = null;
   try {
     if (window.hashwasm && window.hashwasm.createXXHash128) {
-      window.__fileHasher = await window.hashwasm.createXXHash128();
+      // ★ createXXHash128 需要 seedLow 和 seedHigh 两个参数
+      window.__fileHasher = await window.hashwasm.createXXHash128(0, 0);
       window.__fileHasher.init();
       window.__hashAlgo = 'xxh3-128';
       console.log('[hash] xxh3-128 initialized for', file.name);
+    } else {
+      console.warn('[hash] hashwasm 未加载或 createXXHash128 不可用');
     }
   } catch(e) { console.warn('[hash] xxh3 init failed', e); }
 
@@ -1784,7 +1787,7 @@ async function uploadOne(file, dir, externalTaskId){
     let hashAlgo = null;
     if (window.__fileHasher) {
       try {
-        fileHash = window.__fileHasher.digest();
+        fileHash = window.__fileHasher.digest('hex');
         hashAlgo = window.__hashAlgo;
         console.log('[hash]', hashAlgo, '=', fileHash);
       } catch(e) { console.warn('[hash] digest failed', e); }
@@ -2016,7 +2019,7 @@ loadList();
 // 加载 xxh3 哈希库（异步，不阻塞）
 (function(){
   var s = document.createElement('script');
-  s.src = 'https://cdn.jsdelivr.net/npm/hash-wasm@4.11.0/dist/xxhash.umd.min.js';
+  s.src = 'https://cdn.jsdelivr.net/npm/hash-wasm@4';
   s.async = true;
   s.onload = function(){ console.log('[hash] xxh3 loaded'); };
   s.onerror = function(){ console.warn('[hash] xxh3 加载失败，将使用 SHA-256'); };
@@ -2206,7 +2209,7 @@ async function verifyHash(){
     var shaChunks = [];
 
     if (algo.indexOf('xxh3') >= 0) {
-      await loadScript('https://cdn.jsdelivr.net/npm/hash-wasm@4.11.0/dist/xxhash.umd.min.js');
+      await loadScript('https://cdn.jsdelivr.net/npm/hash-wasm@4');
       if (window.hashwasm && window.hashwasm.createXXHash128) {
         hasher = await window.hashwasm.createXXHash128();
         hasher.init();
