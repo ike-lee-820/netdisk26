@@ -5,7 +5,7 @@
 const GITHUB_USER = 'ikecode26';
 const GITHUB_API = 'https://api.github.com';
 const ASSETS_REPO = 'netdisk-assets';
-const CHUNK_SIZE = 5 * 1024 * 1024;
+const CHUNK_SIZE = 50 * 1024 * 1024;
 const GH_PROXY = 'https://v6.gh-proxy.com/';
 
 let d1Initialized = false;
@@ -119,14 +119,6 @@ async function d1Set(env, key, value) {
 async function d1Delete(env, key) {
   await ensureD1(env);
   await getD1(env).prepare('DELETE FROM kv_store WHERE key = ?').bind(key).run();
-}
-
-// 文件结构写操作互斥锁（防并发覆盖）
-let structureLock = Promise.resolve();
-function withStructureLock(fn) {
-  const result = structureLock.then(fn, fn);
-  structureLock = result.then(() => {}, () => {});
-  return result;
 }
 
 async function getStructure(env) {
@@ -608,8 +600,6 @@ async function deleteFileStoragesConcurrently(nodes, env, concurrency = 32) {
   await Promise.all(runners);
 }
 
-
-
 async function buildDownloadResponse(node, filename, env, inline = false) {
   const disp = inline ? 'inline' : 'attachment';
   const headers = {
@@ -822,7 +812,6 @@ const COMMON_HEAD = `
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
-<link rel="stylesheet" href="https://cdn.plyr.io/3.8.4/plyr.css" />
 <style>
 :root { --primary:#1976d2; --surface:#fff; --bg:#f5f5f5; --divider:#e0e0e0; --text:#212121; --text-sec:#757575; --danger:#d32f2f; --success:#388e3c; }
 * { box-sizing:border-box; }
@@ -864,7 +853,7 @@ body { margin:0; font-family:system-ui,sans-serif; background:var(--bg); color:v
 .drawer.show { right:0; }
 .drawer-head { height:48px; background:var(--primary); color:#fff; display:flex; align-items:center; padding:0 12px; font-weight:500; font-size:15px; }
 .drawer-body { flex:1; overflow-y:auto; padding:8px; }
-.task-item { transition: opacity .15s ease; padding:8px 10px; border-bottom:1px solid var(--divider); }
+.task-item { padding:8px 10px; border-bottom:1px solid var(--divider); }
 .task-title { font-size:13px; font-weight:500; }
 .task-msg { font-size:11px; color:var(--text-sec); margin-top:1px; }
 .task-progress { height:3px; background:var(--divider); border-radius:1.5px; margin-top:5px; overflow:hidden; }
@@ -1037,7 +1026,7 @@ const DEFAULT_DOMAIN = 'https://cloud.myocd.de5.net';
 const TASK_CREATE_CONCURRENCY = 64;   // 任务创建并发
 const FILE_UPLOAD_CONCURRENCY = 5;   // 文件上传并发（同时上传多少个文件）
 const CHUNK_UPLOAD_CONCURRENCY = 1;  // 单文件分片并发
-const CLIENT_CHUNK_SIZE = 5 * 1024 * 1024;   // 20MB 分片
+const CLIENT_CHUNK_SIZE = 50 * 1024 * 1024;   // 20MB 分片
 
 function showMsg(msg){ const s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(()=>s.classList.remove('show'),2500); }
 function escapeHtml(t){ return t.replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
@@ -1081,20 +1070,6 @@ function getIcon(name){
   return 'insert_drive_file';
 }
 
-
-function setupMarquee(){
-  requestAnimationFrame(function(){
-    document.querySelectorAll('.file-name-wrap').forEach(function(wrap){
-      var name = wrap.querySelector('.file-name');
-      if (name && name.scrollWidth > wrap.clientWidth + 5) {
-        name.classList.add('marquee');
-      } else if (name) {
-        name.classList.remove('marquee');
-      }
-    });
-  });
-}
-
 async function loadList(){
   const data=await api('/api/structure?path='+encodeURIComponent(currentPath));
   if(!data) return;
@@ -1131,7 +1106,6 @@ async function loadList(){
     </div>\`;
   }).join('');
   updateSelectionUI();
-  setupMarquee();
 }
 
 document.getElementById('file-list').addEventListener('click', e=>{
@@ -1524,16 +1498,7 @@ async function runWithConcurrency(items, concurrency, worker){
       while(true){
         const idx = cursor++;
         if(idx >= total) return;
-        try {
-          await worker(items[idx], idx);
-        } catch(e){
-          console.error('worker error at idx ' + idx + ':', e);
-          // 记录到全局（如果上传代码里有 uploadError 变量）
-          if (typeof uploadError !== 'undefined') {
-            try { uploadError = e; } catch(_) {}
-          }
-          throw e;
-        }
+        try { await worker(items[idx], idx); } catch(e){ console.error('worker error', e); }
       }
     })());
   }
@@ -1575,202 +1540,240 @@ async function uploadOne(file, dir, externalTaskId){
   const abortCtrl = new AbortController();
   abortControllers.set(taskId, abortCtrl);
 
-  const CHUNK = CLIENT_CHUNK_SIZE;  // 5MB
-  const fileSize = file.size;
-  const total = Math.max(1, Math.ceil(fileSize / CHUNK));
-
-  // 初始化任务
-  let t = localTasks.get(taskId);
-  if (!t) {
-    t = { id: taskId, name: file.name, status: 'uploading', message: '初始化...', progress: 0, size: fileSize, uploadedBytes: 0, doneChunks: 0, totalChunks: total, speed: 0, createdAt: Date.now(), updatedAt: Date.now() };
-    localTasks.set(taskId, t);
-  } else {
-    Object.assign(t, { status: 'uploading', message: '初始化...', progress: 0, uploadedBytes: 0, doneChunks: 0, totalChunks: total, speed: 0 });
-  }
-  renderTaskList();
-
-  // 本地速度滑动窗口
-  const speedWindow = [];
-  const startTs = Date.now();
-  let lastRenderedAt = 0;
-
-  function updateUI(extraMessage) {
-    const now = Date.now();
-    // 每秒最多渲染 3 次（防抖）
-    if (now - lastRenderedAt < 300 && !extraMessage) return;
-    lastRenderedAt = now;
-
-    const uploaded = t.uploadedBytes || 0;
-    const prog = Math.min(95, Math.floor((uploaded / fileSize) * 95));
-    t.progress = prog;
-
-    // 速度计算：5 秒滑窗
-    let speed = 0;
-    speedWindow.push({ t: now, b: uploaded });
-    while (speedWindow.length > 0 && speedWindow[0].t < now - 5000) speedWindow.shift();
-    if (speedWindow.length >= 2) {
-      const first = speedWindow[0], last = speedWindow[speedWindow.length - 1];
-      const dt = (last.t - first.t) / 1000;
-      if (dt > 0.3) speed = (last.b - first.b) / dt;
-    }
-    if (speed <= 0) {
-      const el = Math.max(0.1, (now - startTs) / 1000);
-      speed = uploaded / el;
-    }
-    t.speed = Math.round(speed);
-
-    const pct = Math.floor((uploaded / fileSize) * 100);
-    const baseMsg = '分片 ' + (t.doneChunks || 0) + '/' + total
-      + ' · ' + formatSize(uploaded) + '/' + formatSize(fileSize)
-      + ' (' + pct + '%)'
-      + ' · ' + formatSpeed(speed);
-    t.message = extraMessage || baseMsg;
-    t.updatedAt = now;
-
-    renderTaskList();
-  }
-
-  // 启动本地定时渲染（防止某次分片卡住 UI 不刷新）
-  const localTimer = setInterval(() => updateUI(), 500);
+  const baseTask = { id: taskId, name: file.name, status: 'uploading', message: '初始化...', progress: 0, size: file.size, createdAt: Date.now(), updatedAt: Date.now() };
+  if(!localTasks.has(taskId)) addLocalTask(baseTask);
+  else { const t = localTasks.get(taskId); t.status = 'uploading'; t.message = '初始化...'; t.progress = 0; t.updatedAt = Date.now(); }
+  debouncedLoadTasks();
 
   try {
-    // 请求上传参数
+    // 1. 请求上传参数
     const start = await api('/api/upload/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path, filename: file.name, size: fileSize, taskId })
+      body: JSON.stringify({ path, filename: file.name, size: file.size, taskId })
     });
     if (!start) throw new Error('初始化失败');
 
+    const chunkSize = start.chunkSize;
+    const total = start.chunks;
     const uploadId = start.uploadId;
     const token = start.token;
     const repo = start.repo;
     const githubUser = start.githubUser;
-    t.message = '开始上传...';
-    renderTaskList();
 
-    // 逐片上传（单线程）
-    for (let i = 0; i < total; i++) {
-      if (cancelledUploads.has(taskId) || abortCtrl.signal.aborted) throw new Error('已取消');
+    // 2. 并发上传分片
+    const chunkIndexes = [];
+    for (let i = 0; i < total; i++) chunkIndexes.push(i);
 
-      const begin = i * CHUNK;
-      const end = Math.min(begin + CHUNK, fileSize);
-      const actualSize = end - begin;   // ★ 分片实际大小
-      const blob = file.slice(begin, end);
+    // 每个分片实时字节
+    const chunkBytes = new Array(total).fill(0);
+    const chunkDone = new Array(total).fill(false);
+    // 记录每个分片的 sha（用于验证）
+    const chunkSha = new Array(total).fill(null);
 
-      // ★ 顺序喂给哈希器（必须按顺序！）
-      if (window.__fileHasher) {
-        try {
-          const _hashBuf = await blob.arrayBuffer();
-          window.__fileHasher.update(new Uint8Array(_hashBuf));
-        } catch(e) { console.warn('hash update failed', e); }
+    let uploadedBytes = 0;
+    let completedChunks = 0;
+    let lastBytes = 0, lastTime = Date.now(), smoothSpeed = 0;
+
+    // 500ms 汇总速度 + 进度
+    const progressTimer = setInterval(() => {
+      if (cancelledUploads.has(taskId)) return;
+      let inflight = 0;
+      for (let i = 0; i < total; i++) {
+        if (!chunkDone[i]) inflight += chunkBytes[i];
       }
+      const totalDone = uploadedBytes + inflight * 0.5;
+      const now = Date.now();
+      const dt = (now - lastTime) / 1000;
+      if (dt > 0.3) {
+        const instant = (totalDone - lastBytes) / dt;
+        if (instant >= 0) smoothSpeed = smoothSpeed * 0.6 + instant * 0.4;
+        lastBytes = totalDone;
+        lastTime = now;
+      }
+      const pct = Math.min(99, Math.floor((totalDone / file.size) * 99));
+      const t = localTasks.get(taskId);
+      if (t) {
+        t.message = '上传 ' + formatSize(Math.floor(totalDone)) + '/' + formatSize(file.size)
+          + ' · ' + formatSpeed(smoothSpeed)
+          + ' · 分片 ' + completedChunks + '/' + total;
+        t.progress = pct;
+        t.updatedAt = Date.now();
+      }
+      debouncedLoadTasks();
+    }, 500);
 
-      // 转 base64
-      const base64 = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          try {
-            const bytes = new Uint8Array(reader.result);
-            let binary = '';
-            const cs = 0x8000;
-            for (let k = 0; k < bytes.byteLength; k += cs) {
-              binary += String.fromCharCode.apply(null, bytes.subarray(k, k + cs));
-            }
-            resolve(btoa(binary));
-          } catch (e) { reject(e); }
-        };
-        reader.onerror = () => reject(new Error('FileReader error'));
-        reader.readAsArrayBuffer(blob);
+    // 3. 单分片上传函数（带 5 次重试）
+    async function uploadChunk(i) {
+  if (cancelledUploads.has(taskId) || abortCtrl.signal.aborted) throw new Error('已取消');
+  const begin = i * chunkSize;
+  const end = Math.min(begin + chunkSize, file.size);
+  const blob = file.slice(begin, end);
+
+  // 计算 base64
+  const base64 = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      try {
+        const bytes = new Uint8Array(reader.result);
+        let binary = '';
+        const cs = 0x8000;
+        for (let k = 0; k < bytes.byteLength; k += cs) {
+          binary += String.fromCharCode.apply(null, bytes.subarray(k, k + cs));
+        }
+        resolve(btoa(binary));
+      } catch (e) { reject(e); }
+    };
+    reader.onerror = () => reject(new Error('FileReader error'));
+    reader.readAsArrayBuffer(blob);
+  });
+
+  // 重试 5 次，指数退避
+  let retries = 0;
+  const MAX_RETRIES = 5;
+  let sha = null;
+  let lastErr = null;
+
+  while (retries < MAX_RETRIES) {
+    if (cancelledUploads.has(taskId) || abortCtrl.signal.aborted) throw new Error('已取消');
+    try {
+      const resp = await fetch('https://api.github.com/repos/' + githubUser + '/' + repo + '/contents/chunk_' + i, {
+        method: 'PUT',
+        headers: {
+          'Authorization': 'token ' + token,
+          'Accept': 'application/vnd.github+json',
+          'Content-Type': 'application/json',
+          'User-Agent': 'netdisk-web'
+        },
+        body: JSON.stringify({ message: 'chunk ' + i, content: base64 })
       });
-
-      // 重试上传
-      const MAX_RETRIES = 5;
-      let sha = null;
-      let lastErr = null;
-      for (let retry = 0; retry < MAX_RETRIES; retry++) {
-        if (cancelledUploads.has(taskId) || abortCtrl.signal.aborted) throw new Error('已取消');
-
-        if (retry > 0) {
-          updateUI('分片 ' + (i+1) + '/' + total + ' 重试 ' + retry + '/' + MAX_RETRIES + '...');
-        }
-
-        try {
-          const resp = await fetch('https://api.github.com/repos/' + githubUser + '/' + repo + '/contents/chunk_' + i, {
-            method: 'PUT',
-            headers: {
-              'Authorization': 'token ' + token,
-              'Accept': 'application/vnd.github+json',
-              'Content-Type': 'application/json',
-              'User-Agent': 'netdisk-web'
-            },
-            body: JSON.stringify({ message: 'chunk ' + i, content: base64 })
-          });
-          if (resp.ok) {
-            const data = await resp.json();
-            sha = data.content.sha;
-            if (!sha) throw new Error('返回 sha 为空');
-            console.log('[chunk ' + (i+1) + '/' + total + '] OK' + (retry > 0 ? ' (retry ' + retry + ')' : ''));
-            break;
-          }
-          const errText = await resp.text();
-          lastErr = 'HTTP ' + resp.status + ': ' + errText.slice(0, 150);
-          console.warn('[chunk ' + (i+1) + '] ' + lastErr);
-        } catch (e) {
-          lastErr = e.message || String(e);
-          console.warn('[chunk ' + (i+1) + '] exception: ' + lastErr);
-        }
-
-        if (retry < MAX_RETRIES - 1) {
-          const waitMs = Math.min(8000, 1000 * Math.pow(2, retry));
-          updateUI('分片 ' + (i+1) + '/' + total + ' 失败，' + Math.round(waitMs/1000) + 's 后重试...');
-          await new Promise(r => setTimeout(r, waitMs));
-        }
+      if (resp.ok) {
+        const data = await resp.json();
+        sha = data.content.sha;
+        if (!sha) throw new Error('GitHub 返回 sha 为空');
+        break;
       }
-      if (!sha) throw new Error('分片 ' + (i+1) + '/' + total + ' 失败: ' + lastErr);
-
-      // ★ 完成一个分片，用"实际字节大小"累加
-      t.uploadedBytes = (t.uploadedBytes || 0) + actualSize;
-      t.doneChunks = i + 1;
-      updateUI();
-
-      // 通知服务端（只报 index，服务端自己记录）
-      api('/api/upload/chunk', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ uploadId, index: i, sha, total, taskId })
-      }).catch(() => {});
+      const status = resp.status;
+      const errText = await resp.text();
+      lastErr = 'GitHub ' + status + ': ' + errText.slice(0, 200);
+      if (status === 403 || status === 429) {
+        const waitMs = Math.min(60000, 30000 * (retries + 1));
+        console.log('[chunk] rate limited, wait ' + waitMs + 'ms');
+        await new Promise(r => setTimeout(r, waitMs));
+      }
+      throw new Error(lastErr);
+    } catch (e) {
+      retries++;
+      lastErr = e.message || String(e);
+      if (retries >= MAX_RETRIES) {
+        throw new Error('分片 ' + (i + 1) + '/' + total + ' 上传失败(已重试' + MAX_RETRIES + '次): ' + lastErr);
+      }
+      const waitMs = Math.min(15000, 1000 * Math.pow(2, retries - 1)) + Math.floor(Math.random() * 500);
+      console.log('[chunk] retry ' + retries + '/' + MAX_RETRIES + ' after ' + waitMs + 'ms');
+      await new Promise(r => setTimeout(r, waitMs));
     }
+  }
+  if (!sha) throw new Error('分片 ' + (i + 1) + ' 未获得 sha: ' + (lastErr || '未知错误'));
 
-    // 全部完成
-    clearInterval(localTimer);
-    updateUI('注册中...');
-    }
+  // ★ 本地累加进度（单线程，单调递增）
+  chunkSha[i] = sha;
+  chunkDone[i] = true;
+  uploadedBytes += blob.size;
+  completedChunks++;
 
-    await api('/api/upload/finish', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ uploadId, path, filename: file.name, size: fileSize, chunks: total, taskId })
+  // ★ 本地算速度（滑动窗口，最近 5 秒）
+  const now = Date.now();
+  if (!window.__speedWindow) window.__speedWindow = [];
+  window.__speedWindow.push({ t: now, b: uploadedBytes });
+  window.__speedWindow = window.__speedWindow.filter(p => p.t >= now - 5000);
+  let localSpeed = 0;
+  const sw = window.__speedWindow;
+  if (sw.length >= 2) {
+    const f = sw[0], l = sw[sw.length - 1];
+    const dt = (l.t - f.t) / 1000;
+    if (dt > 0.3) localSpeed = (l.b - f.b) / dt;
+  }
+  if (localSpeed <= 0) {
+    const t0 = window.__uploadStart || now;
+    const el = Math.max(0.1, (now - t0) / 1000);
+    localSpeed = uploadedBytes / el;
+  }
+
+  // ★ 本地更新任务显示（速度本地算，进度用已完成分片数）
+  const taskProg = Math.min(95, Math.floor((completedChunks / total) * 95));
+  const t = localTasks.get(taskId);
+  if (t) {
+    t.progress = taskProg;
+    t.uploadedBytes = uploadedBytes;
+    t.doneChunks = completedChunks;
+    t.totalChunks = total;
+    t.speed = Math.round(localSpeed);
+    t.message = '上传 ' + formatSize(uploadedBytes) + '/' + formatSize(file.size)
+      + ' · ' + formatSpeed(localSpeed)
+      + ' · 分片 ' + completedChunks + '/' + total;
+    t.updatedAt = now;
+  }
+  if (typeof renderTaskList === 'function') renderTaskList();
+
+  // 通知服务端（只报分片号，服务端算进度）
+  api('/api/upload/chunk', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ uploadId, index: i, sha, total, taskId })
+  }).catch(() => {});
+}
+
+    // 4. 16 线程并发上传分片
+    await runWithConcurrency(chunkIndexes, CHUNK_UPLOAD_CONCURRENCY, async (i)=>{
+      if (cancelledUploads.has(taskId)) return;
+      await uploadChunk(i);
     });
 
-    t.status = 'done';
-    t.progress = 100;
-    t.message = '完成 · ' + formatSize(fileSize) + ' · ' + total + ' 分片';
-    t.updatedAt = Date.now();
-    renderTaskList();
-    setTimeout(() => { removeLocalTask(taskId); renderTaskList(); }, 3000);
+    clearInterval(progressTimer);
+
+    if (cancelledUploads.has(taskId)) throw new Error('已取消');
+
+    // 5. 校验：全部分片都成功
+    const missing = [];
+    for (let i = 0; i < total; i++) {
+      if (!chunkDone[i] || !chunkSha[i]) missing.push(i + 1);
+    }
+    if (missing.length > 0) {
+      throw new Error('有 ' + missing.length + ' 个分片未上传成功: ' + missing.slice(0, 5).join(',') + (missing.length > 5 ? '...' : ''));
+    }
+
+    // 6. 通知服务端完成（服务端会二次验证 GitHub 上的分片）
+    const t = localTasks.get(taskId);
+    if(t){ t.message = '注册中...'; t.progress = 99; t.updatedAt = Date.now(); }
+    debouncedLoadTasks();
+
+    const finishResp = await api('/api/upload/finish', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({uploadId, path, filename: file.name, size: file.size, chunks: total, taskId, chunkSize: blob.size })
+    });
+    if (!finishResp || !finishResp.ok) {
+      throw new Error((finishResp && finishResp.error) || '注册失败');
+    }
+
+    // 7. 完成
+    const tt = localTasks.get(taskId);
+    if(tt){ tt.status = 'done'; tt.message = '完成 (' + completedChunks + '/' + total + ' 分片)'; tt.progress = 100; tt.updatedAt = Date.now(); }
+    debouncedLoadTasks();
+    setTimeout(() => removeLocalTask(taskId), 2000);
     showMsg('上传完成: ' + file.name);
   } catch (e) {
-    clearInterval(localTimer);
-    t.status = (e.message === '已取消' ? 'cancelled' : 'error');
-    t.message = e.message || '上传失败';
-    t.updatedAt = Date.now();
-    renderTaskList();
-    showMsg((e.message === '已取消' ? '已取消: ' : '上传失败: ') + file.name);
-    throw e;
-  } finally {
     abortControllers.delete(taskId);
     cancelledUploads.delete(taskId);
+    const tt = localTasks.get(taskId);
+    if (e.message === '已取消') {
+      if(tt){ tt.status = 'cancelled'; tt.message = '已取消'; tt.progress = 0; tt.updatedAt = Date.now(); }
+      debouncedLoadTasks(); showMsg('上传已取消: '+file.name);
+    } else {
+      if(tt){ tt.status = 'error'; tt.message = e.message || '上传失败'; tt.progress = 0; tt.updatedAt = Date.now(); }
+      debouncedLoadTasks(); showMsg('上传失败: '+file.name+' '+(e.message || ''));
+    }
+    throw e;
   }
 }
 
@@ -1784,42 +1787,33 @@ function debounce(fn, ms){
   };
 }
 
-var renderTaskListScheduled = false;
-function scheduleRenderTaskList(){
-  if (renderTaskListScheduled) return;
-  renderTaskListScheduled = true;
-  requestAnimationFrame(function(){
-    renderTaskListScheduled = false;
-    renderTaskList();
-  });
-}
-
 function renderTaskList(){
   const map = new Map();
   for (const t of localTasks.values()) map.set(t.id, t);
   for (const t of serverTasksCache) { if (!map.has(t.id)) map.set(t.id, t); }
-  const tasks = [...map.values()].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  const tasks = [...map.values()].sort((a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt));
   const box = document.getElementById('task-list');
   if (!box) return;
   if (tasks.length === 0) { box.innerHTML = '<div class="empty">暂无任务</div>'; return; }
   box.innerHTML = tasks.slice(0, 200).map(t => {
-    const statusColor = t.status === 'done' ? 'var(--success)'
-      : (t.status === 'error' ? 'var(--danger)'
-      : (t.status === 'cancelled' ? 'var(--text-sec)' : 'var(--primary)'));
-
-    // 双行信息
-    let line1 = escapeHtml(t.message || '');
-    let line2 = '';
-    if (t.status === 'uploading' && t.totalChunks) {
-      // 分片进度
-      line2 = '分片 ' + (t.doneChunks || 0) + '/' + t.totalChunks
-        + ' · 上传进度 ' + (t.progress || 0) + '%';
+    const statusColor = t.status === 'done' ? 'var(--success)' : (t.status === 'error' ? 'var(--danger)' : (t.status === 'cancelled' ? 'var(--text-sec)' : 'var(--primary)'));
+    let extra = '';
+    if (t.uploadedBytes != null && t.size) {
+      extra = ' [' + (t.uploadedBytes / 1024 / 1024).toFixed(1) + '/' + (t.size / 1024 / 1024).toFixed(1) + ' MB]';
     }
-
+    // 服务端提供的速度
+    let speedStr = '';
+    if (t.speed && t.speed > 0) {
+      if (t.speed >= 1024 * 1024) speedStr = (t.speed / 1024 / 1024).toFixed(1) + ' MB/s';
+      else if (t.speed >= 1024) speedStr = (t.speed / 1024).toFixed(1) + ' KB/s';
+      else speedStr = t.speed.toFixed(0) + ' B/s';
+    }
+    if (speedStr && t.status === 'uploading') {
+      extra += ' · ' + speedStr;
+    }
     return \`<div class="task-item" data-task-id="\${escapeHtml(t.id)}">
-      <div class="task-title">\${escapeHtml(t.name)} <span style="color:\${statusColor};font-size:12px;">\${t.status}</span></div>
-      <div class="task-msg">\${line1}</div>
-      \${line2 ? '<div class="task-msg" style="color:var(--primary);font-size:11px;">' + line2 + '</div>' : ''}
+      <div class="task-title">\${escapeHtml(t.name)} <span style="color:\${statusColor};font-size:12px;">\${t.status}</span>\${extra}</div>
+      <div class="task-msg">\${escapeHtml(t.message || '')}</div>
       <div class="task-progress"><div style="width:\${t.progress || 0}%"></div></div>
       <div class="task-actions">
         \${t.status === 'uploading' || t.status === 'processing' ? \`<button onclick="cancelTask('\${t.id}', this)">取消</button>\` : ''}
@@ -1836,17 +1830,22 @@ async function loadTasks(){
     serverTasksCache = await api('/api/tasks') || [];
   } catch (e) { console.error('获取任务失败', e); }
 
-  // 服务端 uploading 时完全不动本地，只在结束时同步最终状态
+  // 服务端只提供分片数，速度/字节由本地计算
   for (const st of serverTasksCache) {
     const local = localTasks.get(st.id);
     if (local) {
+      // 服务端最终状态优先
       if (st.status === 'done' || st.status === 'error' || st.status === 'cancelled') {
         local.status = st.status;
         if (st.message) local.message = st.message;
         if (st.progress != null) local.progress = st.progress;
         local.updatedAt = st.updatedAt || Date.now();
       }
-      // uploading 时什么都不做，保留本地实时数据
+      // 服务端 uploading 时：不覆盖本地的实时进度/速度/字节
+      // 但记录服务端已确认的分片数
+      else if (st.doneChunks != null && st.doneChunks > (local.doneChunks || 0)) {
+        local.doneChunks = st.doneChunks;
+      }
     }
   }
   renderTaskList();
@@ -1854,87 +1853,39 @@ async function loadTasks(){
 const debouncedLoadTasks = debounce(loadTasks, 400);
 
 async function cancelTask(id, el){
-  // ★ 立即响应 UI
   cancelledUploads.add(id);
   const ctrl = abortControllers.get(id);
   if (ctrl) { try { ctrl.abort(); } catch(e){} }
   const t = localTasks.get(id);
-  if (t) { t.status = 'cancelled'; t.message = '已取消'; t.updatedAt = Date.now(); }
+  if (t) { t.status = 'cancelled'; t.message = '已取消'; }
   removeLocalTask(id);
-  if (el) {
-    const item = el.closest('.task-item');
-    if (item) item.style.opacity = '0.3';
-  }
-  // 立即重新渲染
-  renderTaskList();
-  showMsg('已取消');
-
-  // ★ 异步通知服务器，不阻塞 UI
-  api('/api/tasks/' + id + '?cancel=1', { method: 'DELETE' })
-    .then(() => { serverTasksCache = (serverTasksCache || []).filter(x => x.id !== id); })
-    .catch(() => {})
-    .finally(() => { setTimeout(() => loadTasks(), 500); });
+  if (el) { const item = el.closest('.task-item'); if (item) item.remove(); }
+  else { loadTasks(); }
+  try { await api('/api/tasks/' + id + '?cancel=1', { method: 'DELETE' }); }
+  catch (e) { showMsg('取消失败: ' + e.message); }
 }
-
 async function deleteTask(id, el){
-  // ★ 立即响应
   cancelledUploads.add(id);
   const ctrl = abortControllers.get(id);
   if (ctrl) { try { ctrl.abort(); } catch(e){} }
   removeLocalTask(id);
-  serverTasksCache = (serverTasksCache || []).filter(x => x.id !== id);
-
-  if (el) {
-    const item = el.closest('.task-item');
-    if (item) {
-      item.style.transition = 'opacity .15s';
-      item.style.opacity = '0';
-      setTimeout(() => item.remove(), 150);
-    }
-  }
-  renderTaskList();
-
-  // ★ 异步通知服务器
-  api('/api/tasks/' + id, { method: 'DELETE' }).catch(() => {});
+  if (el) { const item = el.closest('.task-item'); if (item) item.remove(); }
+  try { await api('/api/tasks/' + id, { method: 'DELETE' }); }
+  catch (e) { showMsg('删除失败: ' + e.message); loadTasks(); }
 }
-
 async function clearDoneTasks(){
-  // ★ 立即从本地移除
-  const localIds = [];
-  for (const [id, t] of localTasks.entries()) {
-    if (t.status === 'done' || t.status === 'error' || t.status === 'cancelled') {
-      localIds.push(id);
-      localTasks.delete(id);
-    }
+  const serverTasks = await api('/api/tasks') || [];
+  const ids = [];
+  for (const t of serverTasks) {
+    if (t.status === 'done' || t.status === 'error' || t.status === 'cancelled') { ids.push(t.id); removeLocalTask(t.id); }
   }
-  const serverIds = [];
-  if (serverTasksCache) {
-    for (const t of serverTasksCache) {
-      if (t.status === 'done' || t.status === 'error' || t.status === 'cancelled') {
-        serverIds.push(t.id);
-      }
-    }
-  }
-  const ids = [...new Set([...localIds, ...serverIds])];
-  if (ids.length === 0) { showMsg('没有可清除的任务'); return; }
-
-  // 立即清空服务器缓存中的已完成
-  if (serverTasksCache) {
-    serverTasksCache = serverTasksCache.filter(t =>
-      t.status !== 'done' && t.status !== 'error' && t.status !== 'cancelled'
-    );
-  }
-  renderTaskList();
-  showMsg('已清除 ' + ids.length + ' 个任务');
-
-  // ★ 异步通知服务器
-  api('/api/tasks/batch', {
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ids })
-  }).catch(() => {});
+  document.querySelectorAll('.task-item').forEach(el => el.remove());
+  if (!ids.length) { showMsg('没有可清除的任务'); return; }
+  try {
+    await api('/api/tasks/batch', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) });
+    showMsg('已清除 ' + ids.length + ' 个任务');
+  } catch (e) { showMsg('清除失败: ' + e.message); loadTasks(); }
 }
-
 
 document.getElementById('btn-tasks').onclick=()=>{ document.getElementById('task-drawer').classList.add('show'); loadTasks(); };
 document.getElementById('close-tasks').onclick=()=>{ document.getElementById('task-drawer').classList.remove('show'); if(taskTimer)clearInterval(taskTimer); };
@@ -1970,11 +1921,9 @@ function closeModal(){ document.getElementById('modal').classList.remove('show')
 bindShareModalEvents();
 loadList();
 
-
-
 // ★ 全局实时刷新：每 500ms 刷新任务列表 UI，每 2s 拉服务端
-setInterval(() => { if (typeof scheduleRenderTaskList === 'function') scheduleRenderTaskList(); }, 500);
-setInterval(() => { loadTasks(); }, 3000);   // 只同步最终状态，间隔拉长
+setInterval(() => { if (typeof renderTaskList === 'function') renderTaskList(); }, 300);
+setInterval(() => { loadTasks(); }, 800);
 </script>
 `;
 
@@ -2032,6 +1981,7 @@ function fileBody(node, filePath) {
 const FILE_SCRIPT = `
 <script>
 var params = new URLSearchParams(location.search);
+var DEFAULT_DOMAIN = 'https://cloud.myocd.de5.net';
 var path = params.get('path') || '';
 var fileNode = null;
 
@@ -2114,12 +2064,23 @@ var VIDEO_MIMES = {mp4:'video/mp4', webm:'video/webm', mkv:'video/x-matroska', a
 var AUDIO_MIMES = {mp3:'audio/mpeg', wav:'audio/wav', ogg:'audio/ogg', flac:'audio/flac', m4a:'audio/mp4'};
 var IMAGE_EXTS = ['jpg','jpeg','png','gif','webp','svg','bmp','ico'];
 
+function getMime(name){
+  var ext = getExt(name);
+  var m = {
+    mp4:'video/mp4', webm:'video/webm', mkv:'video/x-matroska', a3v8:'video/mp4', mov:'video/quicktime',
+    mp3:'audio/mpeg', wav:'audio/wav', ogg:'audio/ogg', flac:'audio/flac', m4a:'audio/mp4',
+    pdf:'application/pdf',
+    jpg:'image/jpeg', jpeg:'image/jpeg', png:'image/png', gif:'image/gif', webp:'image/webp', svg:'image/svg+xml'
+  };
+  return m[ext] || 'application/octet-stream';
+}
+
 async function load(){
   var preview = document.getElementById('preview');
   try {
     fileNode = await api('/api/file?path=' + encodeURIComponent(path));
     if (!fileNode) {
-      preview.innerHTML = '<div class="empty">文件不存在</div>';
+      preview.innerHTML = '<div class="empty">文件不存在或无权访问</div>';
       return;
     }
     document.getElementById('file-name').textContent = fileNode.name;
@@ -2134,19 +2095,19 @@ async function load(){
 
 function setupTitleMarquee(){
   setTimeout(function(){
-    var titleEl = document.getElementById('title');
-    if (!titleEl) return;
-    var container = titleEl.parentNode;
-    if (!container) return;
-    if (titleEl.scrollWidth > container.clientWidth + 10) {
-      titleEl.style.display = 'inline-block';
-      titleEl.style.whiteSpace = 'nowrap';
-      titleEl.style.animation = 'marqueeTitle 10s linear infinite';
+    var t = document.getElementById('title');
+    if (!t) return;
+    var c = t.parentNode;
+    if (!c) return;
+    if (t.scrollWidth > c.clientWidth + 10) {
+      t.style.display = 'inline-block';
+      t.style.whiteSpace = 'nowrap';
+      t.style.animation = 'marqueeTitle 10s linear infinite';
       if (!document.getElementById('marquee-title-style')) {
-        var style = document.createElement('style');
-        style.id = 'marquee-title-style';
-        style.textContent = '@keyframes marqueeTitle { 0% { transform: translateX(0); } 45% { transform: translateX(calc(-1 * (100% - 100vw + 48px))); } 55% { transform: translateX(calc(-1 * (100% - 100vw + 48px))); } 100% { transform: translateX(0); } }';
-        document.head.appendChild(style);
+        var st = document.createElement('style');
+        st.id = 'marquee-title-style';
+        st.textContent = '@keyframes marqueeTitle { 0% { transform: translateX(0); } 45% { transform: translateX(calc(-1 * (100% - 100vw + 48px))); } 55% { transform: translateX(calc(-1 * (100% - 100vw + 48px))); } 100% { transform: translateX(0); } }';
+        document.head.appendChild(st);
       }
     }
   }, 150);
@@ -2163,25 +2124,22 @@ function downloadBox(msg, downloadUrl){
 async function renderPreview(){
   var preview = document.getElementById('preview');
   var ext = getExt(fileNode.name);
+  var mime = getMime(fileNode.name);
   var url = '/direct/' + fileNode.ssid + '/' + encodeURIComponent(fileNode.name);
   var downloadUrl = '/download/' + fileNode.ssid + '/' + encodeURIComponent(fileNode.name);
 
-  // ============ PDF ============
   if (ext === 'pdf') {
     preview.innerHTML = '<div class="empty">正在加载 PDF...</div>';
     try {
-      var pdfjsLib = await import('https://cdn.bootcdn.net/ajax/libs/pdf.js/6.3.289/pdf.min.mjs');
-      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.bootcdn.net/ajax/libs/pdf.js/6.3.289/pdf.worker.min.mjs';
+      var pdfjsLib = await import('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/6.3.289/pdf.min.mjs');
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/6.3.289/pdf.worker.min.mjs';
       var pdf = await pdfjsLib.getDocument({ url: url }).promise;
       var total = pdf.numPages;
-
       preview.innerHTML = '<div style="text-align:center;margin-bottom:10px;">'
         + '<button class="btn-secondary" id="pdf-prev" style="padding:6px 14px;border:none;border-radius:6px;cursor:pointer;margin-right:6px;">上一页</button>'
         + '<span id="pdf-info" style="font-size:14px;color:var(--text-sec);margin:0 8px;">1 / ' + total + '</span>'
         + '<button class="btn-secondary" id="pdf-next" style="padding:6px 14px;border:none;border-radius:6px;cursor:pointer;margin-left:6px;">下一页</button>'
-        + '</div>'
-        + '<div id="pdf-container" style="text-align:center;overflow:auto;max-height:75vh;"></div>';
-
+        + '</div><div id="pdf-container" style="text-align:center;overflow:auto;max-height:75vh;"></div>';
       var container = document.getElementById('pdf-container');
       var info = document.getElementById('pdf-info');
       var cur = 1;
@@ -2189,13 +2147,10 @@ async function renderPreview(){
         var page = await pdf.getPage(n);
         var vp = page.getViewport({ scale: 1.5 });
         var canvas = document.createElement('canvas');
-        canvas.width = vp.width;
-        canvas.height = vp.height;
-        canvas.style.maxWidth = '100%';
-        canvas.style.height = 'auto';
+        canvas.width = vp.width; canvas.height = vp.height;
+        canvas.style.maxWidth = '100%'; canvas.style.height = 'auto';
         canvas.style.boxShadow = '0 2px 12px rgba(0,0,0,.15)';
-        container.innerHTML = '';
-        container.appendChild(canvas);
+        container.innerHTML = ''; container.appendChild(canvas);
         await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
         info.textContent = n + ' / ' + total;
       };
@@ -2210,50 +2165,29 @@ async function renderPreview(){
     }
   }
 
-  // ============ Office (vue-office) ============
   if (ext === 'docx' || ext === 'xlsx' || ext === 'pptx') {
     preview.innerHTML = '<div class="empty">正在加载 ' + ext.toUpperCase() + ' 预览...</div>';
     try {
       if (!window.Vue) {
-        await loadScript('https://cdn.bootcdn.net/ajax/libs/vue/3.4.21/vue.global.prod.js');
+        await loadScript('https://cdn.jsdelivr.net/npm/vue@3.4.21/dist/vue.global.prod.js');
       }
       var officeMap = {
-        docx: {
-          js: 'https://unpkg.com/@vue-office/docx@2.0.0/lib/index.umd.js',
-          css: 'https://cdn.jsdelivr.net/npm/@vue-office/docx@1.6.2/lib/index.css',
-          comp: 'VueOfficeDocx'
-        },
-        xlsx: {
-          js: 'https://unpkg.com/@vue-office/excel@2.0.0/lib/index.umd.js',
-          css: 'https://cdn.jsdelivr.net/npm/@vue-office/excel@1.6.2/lib/index.css',
-          comp: 'VueOfficeExcel'
-        },
-        pptx: {
-          js: 'https://unpkg.com/@vue-office/pptx@2.0.0/lib/index.umd.js',
-          css: 'https://cdn.jsdelivr.net/npm/@vue-office/pptx@1.6.2/lib/index.css',
-          comp: 'VueOfficePptx'
-        }
+        docx: { js: 'https://cdn.jsdelivr.net/npm/@vue-office/docx@1.6.2/dist/index.umd.js', css: 'https://cdn.jsdelivr.net/npm/@vue-office/docx@1.6.2/lib/index.css', comp: 'VueOfficeDocx' },
+        xlsx: { js: 'https://cdn.jsdelivr.net/npm/@vue-office/excel@1.6.2/dist/index.umd.js', css: 'https://cdn.jsdelivr.net/npm/@vue-office/excel@1.6.2/lib/index.css', comp: 'VueOfficeExcel' },
+        pptx: { js: 'https://cdn.jsdelivr.net/npm/@vue-office/pptx@1.6.2/dist/index.umd.js', css: 'https://cdn.jsdelivr.net/npm/@vue-office/pptx@1.6.2/lib/index.css', comp: 'VueOfficePptx' }
       };
       var cfg = officeMap[ext];
       try { await loadCSS(cfg.css); } catch(_){}
       await loadScript(cfg.js);
-
       var Comp = window[cfg.comp];
       if (!Comp) throw new Error('组件未注册: ' + cfg.comp);
-
       var resp = await fetch(url);
-      if (!resp.ok) throw new Error('下载文件失败: ' + resp.status);
+      if (!resp.ok) throw new Error('下载失败: ' + resp.status);
       var buf = await resp.arrayBuffer();
-
       preview.innerHTML = '<div id="office-preview" style="overflow:auto;max-height:75vh;background:#fff;border-radius:8px;min-height:500px;"></div>';
-
       var createApp = window.Vue.createApp;
       var h = window.Vue.h;
-      createApp({
-        render: function(){
-          return h(Comp, { src: buf, options: {}, style: 'min-height:500px;' });
-        }
-      }).mount('#office-preview');
+      createApp({ render: function(){ return h(Comp, { src: buf, options: {}, style: 'min-height:500px;' }); } }).mount('#office-preview');
       return;
     } catch(e) {
       console.error('Office 预览失败', e);
@@ -2262,86 +2196,59 @@ async function renderPreview(){
     }
   }
 
-  // ============ 视频 / 音频 (Plyr) ============
   if (VIDEO_MIMES[ext] || AUDIO_MIMES[ext]) {
     preview.innerHTML = '<div class="empty">正在加载播放器...</div>';
     try {
       await loadCSS('https://cdn.bootcdn.net/ajax/libs/plyr/3.8.4/plyr.css');
       await loadScript('https://cdn.bootcdn.net/ajax/libs/plyr/3.8.4/plyr.js');
-
       var isVideo = !!VIDEO_MIMES[ext];
       var mediaType = isVideo ? 'video' : 'audio';
-      var mime = isVideo ? VIDEO_MIMES[ext] : AUDIO_MIMES[ext];
-      var wrapperStyle = isVideo
-        ? 'width:100%;max-width:900px;margin:0 auto;'
-        : 'width:100%;max-width:600px;margin:40px auto;';
-      var mediaStyle = isVideo
-        ? 'width:100%;max-height:80vh;background:#000;'
-        : 'width:100%;';
-
-      preview.innerHTML = '<div style="' + wrapperStyle + '">'
+      var mm = isVideo ? VIDEO_MIMES[ext] : AUDIO_MIMES[ext];
+      var wrapStyle = isVideo ? 'width:100%;max-width:900px;margin:0 auto;' : 'width:100%;max-width:600px;margin:40px auto;';
+      var mediaStyle = isVideo ? 'width:100%;max-height:80vh;background:#000;' : 'width:100%;';
+      preview.innerHTML = '<div style="' + wrapStyle + '">'
         + '<' + mediaType + ' id="plyr-player" controls playsinline style="' + mediaStyle + '">'
-        + '<source src="' + url + '" type="' + mime + '">'
-        + '</' + mediaType + '>'
-        + '</div>';
-
+        + '<source src="' + url + '" type="' + mm + '">'
+        + '</' + mediaType + '></div>';
       new Plyr('#plyr-player', {
         controls: ['play', 'progress', 'settings'],
         settings: ['speed'],
-        speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] },
-        keyboard: { focused: true, global: false }
+        speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] }
       });
       return;
     } catch(e) {
       console.error('Plyr 加载失败', e);
       var isV = !!VIDEO_MIMES[ext];
       var mt = isV ? 'video' : 'audio';
-      var mm = isV ? VIDEO_MIMES[ext] : AUDIO_MIMES[ext];
+      var mm2 = isV ? VIDEO_MIMES[ext] : AUDIO_MIMES[ext];
       preview.innerHTML = '<' + mt + ' controls src="' + url + '" style="width:100%;max-height:80vh;"></' + mt + '>';
       return;
     }
   }
 
-  // ============ 图片 (Viewer.js) ============
   if (IMAGE_EXTS.indexOf(ext) >= 0) {
     preview.innerHTML = '<div class="empty">正在加载图片...</div>';
     try {
       await loadCSS('https://cdn.bootcdn.net/ajax/libs/viewerjs/1.11.7/viewer.min.css');
       await loadScript('https://cdn.bootcdn.net/ajax/libs/viewerjs/1.11.7/viewer.min.js');
-
       preview.innerHTML = '<div style="text-align:center;overflow:auto;max-height:75vh;">'
         + '<img id="preview-img" src="' + url + '" style="max-width:100%;max-height:70vh;cursor:zoom-in;border-radius:8px;display:block;margin:0 auto;" alt="' + escapeHtml(fileNode.name) + '">'
         + '</div>'
         + '<p style="font-size:12px;color:var(--text-sec);margin-top:8px;text-align:center;">点击图片可放大查看 · <a href="' + downloadUrl + '">下载原文件</a></p>';
-
       if (window.Viewer) {
         new Viewer(document.getElementById('preview-img'), {
-          navbar: false,
-          title: false,
-          toolbar: {
-            zoomIn: 1,
-            zoomOut: 1,
-            oneToOne: 1,
-            reset: 1,
-            rotateLeft: 1,
-            rotateRight: 1,
-            flipHorizontal: 1,
-            flipVertical: 1
-          }
+          navbar: false, title: false,
+          toolbar: { zoomIn: 1, zoomOut: 1, oneToOne: 1, reset: 1, rotateLeft: 1, rotateRight: 1, flipHorizontal: 1, flipVertical: 1 }
         });
       }
       return;
     } catch(e) {
       console.error('Viewer.js 加载失败', e);
-      preview.innerHTML = '<div style="text-align:center;">'
-        + '<img src="' + url + '" style="max-width:100%;max-height:70vh;border-radius:8px;display:block;margin:0 auto;" alt="' + escapeHtml(fileNode.name) + '">'
-        + '</div>'
-        + '<p style="font-size:12px;color:var(--text-sec);margin-top:8px;text-align:center;"><a href="' + downloadUrl + '">下载原文件</a></p>';
+      preview.innerHTML = '<div style="text-align:center;"><img src="' + url + '" style="max-width:100%;max-height:70vh;border-radius:8px;display:block;margin:0 auto;"></div>';
       return;
     }
   }
 
-  // ============ 文本 / 代码 ============
   if (TEXT_EXTS.indexOf(ext) >= 0) {
     preview.innerHTML = '<div class="empty">正在加载...</div>';
     try {
@@ -2350,13 +2257,7 @@ async function renderPreview(){
       var isCode = CODE_EXTS.indexOf(ext) >= 0;
       var bg = isCode ? '#fafafa' : '#fff';
       var editorStyle = 'width:100%;min-height:520px;font-family:Consolas,Monaco,monospace;font-size:13px;line-height:1.6;padding:16px;border:1px solid var(--divider);border-radius:8px;background:' + bg + ';resize:vertical;box-sizing:border-box;';
-
-      if (ext === 'md') {
-        preview.innerHTML = '<div style="margin-bottom:8px;padding:8px 12px;background:#e3f2fd;border-radius:6px;font-size:13px;color:var(--primary);">Markdown 源文件 · 编辑后点下方“保存”</div>'
-          + '<textarea id="code-editor" spellcheck="false" style="' + editorStyle + '"></textarea>';
-      } else {
-        preview.innerHTML = '<textarea id="code-editor" spellcheck="false" style="' + editorStyle + '"></textarea>';
-      }
+      preview.innerHTML = '<textarea id="code-editor" spellcheck="false" style="' + editorStyle + '"></textarea>';
       document.getElementById('code-editor').value = text;
       document.getElementById('btn-save').style.display = 'inline-flex';
       return;
@@ -2366,13 +2267,11 @@ async function renderPreview(){
     }
   }
 
-  // ============ 压缩包 ============
   if (ext === 'zip' || ext === 'rar' || ext === '7z' || ext === 'tar' || ext === 'gz') {
     preview.innerHTML = downloadBox('压缩包无法在线预览', downloadUrl);
     return;
   }
 
-  // ============ 其他 ============
   preview.innerHTML = downloadBox('暂不支持预览此文件类型', downloadUrl);
 }
 
@@ -2386,47 +2285,49 @@ async function saveText(){
       body: JSON.stringify({ path: path, content: ta.value })
     });
     showMsg('已保存');
-  } catch(e) {
-    showMsg('保存失败: ' + e.message);
-  }
+  } catch(e) { showMsg('保存失败: ' + e.message); }
 }
 
 async function shareFile(){
   if (!fileNode) return;
-  await copyText(location.origin + '/share/' + fileNode.ssid);
-  showMsg('分享链接已复制');
+  var note = prompt('分享备注（可留空）：', '');
+  if (note === null) return;
+  var pwd = prompt('提取码（可留空）：', '');
+  if (pwd === null) return;
+  try {
+    var res = await api('/api/share/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths: [path], note: note || '', password: pwd || '' })
+    });
+    if (!res || !res.id) throw new Error('创建分享失败');
+    var shareUrl = DEFAULT_DOMAIN + '/s/' + res.id;
+    await copyText(shareUrl);
+    showMsg('分享链接已复制：' + shareUrl);
+  } catch(e) { showMsg('分享失败: ' + (e.message||e)); }
 }
 async function copyDirectLink(){
   if (!fileNode) return;
-  await copyText(location.origin + '/direct/' + fileNode.ssid + '/' + encodeURIComponent(fileNode.name));
+  await copyText(DEFAULT_DOMAIN + '/direct/' + fileNode.ssid + '/' + encodeURIComponent(fileNode.name));
   showMsg('直链已复制');
 }
 async function renameFile(){
   if (!fileNode) return;
   var n = prompt('新名称', fileNode.name);
   if (!n || n === fileNode.name) return;
-  await api('/api/file/rename', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: path, newName: n })
-  });
+  await api('/api/file/rename', { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({path:path, newName:n}) });
   location.reload();
 }
 async function deleteFile(){
   if (!fileNode) return;
   if (!confirm('确定删除?')) return;
-  await api('/api/file?path=' + encodeURIComponent(path), { method: 'DELETE' });
-  location.href = '/?path=' + encodeURIComponent(path.split('/').slice(0, -1).join('/'));
+  await api('/api/file?path=' + encodeURIComponent(path), { method:'DELETE' });
+  location.href = '/?path=' + encodeURIComponent(path.split('/').slice(0,-1).join('/'));
 }
 
 load();
 </script>
 `;
-
-
-;
-;
-;
 
 function settingsPage(settings = {}) {
   const primary = settings.primary || '#1976d2';
@@ -2588,41 +2489,26 @@ function generateThemeCss(settings = {}) {
   else if (isCustomCss) link = '<link rel="stylesheet" href="' + fontCss + '">';
   let css = '<style id="theme-style">';
   css += ':root { --primary:' + primary + '; }';
-
-  // 字体
-  if (isSourceHan) {
-    css += 'body, input, select, button, textarea { font-family: "SourceHanSerifSC", system-ui, sans-serif !important; }';
-  } else if (isCustomCss) {
-    css += 'body, input, select, button, textarea { font-family: ' + fontCssFamily + ', system-ui, sans-serif !important; }';
-  } else if (isCustomFontFile) {
+  if (isSourceHan) css += 'body, input, select, button, textarea { font-family: "SourceHanSerifSC", system-ui, sans-serif !important; }';
+  else if (isCustomCss) css += 'body, input, select, button, textarea { font-family: ' + fontCssFamily + ', system-ui, sans-serif !important; }';
+  else if (isCustomFontFile) {
     css += '@font-face { font-family: "CustomNetdiskFont"; src: url(' + fontFamily + '); }';
     css += 'body, input, select, button, textarea { font-family: "CustomNetdiskFont", system-ui, sans-serif !important; }';
-  } else {
-    css += 'body, input, select, button, textarea { font-family: system-ui, sans-serif !important; }';
-  }
-
-  // ★ 背景图：html 承载背景图，body 透明，禁用 ::before
+  } else css += 'body, input, select, button, textarea { font-family: system-ui, sans-serif !important; }';
   if (bg) {
     if (bg.startsWith('http') || bg.startsWith('data:') || bg.startsWith('/')) {
-      css += 'html { background-image: url(' + bg + ') !important; background-size: cover !important; background-attachment: fixed !important; background-position: center !important; background-repeat: no-repeat !important; }';
-      css += 'body { background: transparent !important; }';
-      css += 'body::before { display: none !important; content: none !important; }';
-    } else {
-      css += 'html, body { background: ' + bg + ' !important; }';
-      css += 'body::before { display: none !important; content: none !important; }';
-    }
+      css += 'html, body { background: transparent !important; }';
+      css += 'body::before { content:""; position:fixed; inset:0; z-index:-1; background-image: url(' + bg + '); background-size: cover; background-attachment: fixed; background-position: center; }';
+    } else css += 'html, body { background: ' + bg + ' !important; }';
   }
-
-  // ★ 卡片透明度：改用 rgba()
-  const a = Math.max(0, Math.min(1, Number(cardOpacity)));
-  css += '.file-card, .sort-select, #btn-select-mode, .selection-bar, .selection-bar button { background-color: rgba(255,255,255,' + a + ') !important; }';
-  css += '.card { background-color: rgba(255,255,255,' + Math.min(1, a + 0.05) + ') !important; }';
-  css += '.modal { background-color: rgba(255,255,255,' + Math.min(1, a + 0.1) + ') !important; }';
-  css += '.task-item { background-color: rgba(255,255,255,' + a + ') !important; }';
-
+  const alpha = Math.round(cardOpacity * 255).toString(16).padStart(2, '0');
+  const cardBg = cardOpacity < 1 ? 'ffffff' + alpha : 'ffffff';
+  css += '.file-card, .sort-select, #btn-select-mode, .selection-bar, .selection-bar button { background-color: #' + cardBg + ' !important; }';
   css += '</style>';
   return link + css;
 }
+
+
 function sharePageV3(share, tree, themeCss) {
   const shareIdJson = JSON.stringify(share.id);
   const hasPassword = Boolean(share.password);
@@ -2798,123 +2684,31 @@ function sharePageV3(share, tree, themeCss) {
   }
 
   function showPreview(relPath, name){
-  document.getElementById('list-area').style.display = 'none';
-  document.getElementById('preview-area').style.display = 'block';
-  document.getElementById('preview-title').textContent = name;
-  document.getElementById('preview-download-btn').onclick = function(){ location.href = downloadUrl(relPath); };
-  var content = document.getElementById('preview-content');
-  content.innerHTML = '<div class="empty">加载中...</div>';
-  var ext = name.split('.').pop().toLowerCase();
-  var mime = getMime(name);
-  var d = directUrl(relPath);
-  var dl = downloadUrl(relPath);
-
-  // PDF
-  if (ext === 'pdf') {
-    import('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/6.3.289/pdf.mjs').then(function(pdfjsLib){
-      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/6.3.289/pdf.worker.mjs';
-      return pdfjsLib.getDocument({ url: d }).promise;
-    }).then(function(pdf){
-      var total = pdf.numPages;
-      content.innerHTML = '<div style="text-align:center;margin-bottom:10px;">'
-        + '<button class="btn-secondary" id="pdf-prev" style="padding:6px 14px;border:none;border-radius:6px;cursor:pointer;margin-right:6px;">上一页</button>'
-        + '<span id="pdf-info" style="font-size:14px;color:var(--text-sec);margin:0 8px;">1 / ' + total + '</span>'
-        + '<button class="btn-secondary" id="pdf-next" style="padding:6px 14px;border:none;border-radius:6px;cursor:pointer;margin-left:6px;">下一页</button>'
-        + '</div><div id="pdf-container" style="text-align:center;overflow:auto;max-height:75vh;"></div>';
-      var container = document.getElementById('pdf-container');
-      var info = document.getElementById('pdf-info');
-      var cur = 1;
-      var renderPage = function(n){
-        pdf.getPage(n).then(function(page){
-          var vp = page.getViewport({ scale: 1.5 });
-          var canvas = document.createElement('canvas');
-          canvas.width = vp.width; canvas.height = vp.height;
-          canvas.style.maxWidth = '100%'; canvas.style.height = 'auto';
-          container.innerHTML = ''; container.appendChild(canvas);
-          page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise.then(function(){
-            info.textContent = n + ' / ' + total;
-          });
-        });
-      };
-      document.getElementById('pdf-prev').onclick = function(){ if (cur > 1) { cur--; renderPage(cur); } };
-      document.getElementById('pdf-next').onclick = function(){ if (cur < total) { cur++; renderPage(cur); } };
-      renderPage(1);
-    }).catch(function(e){
-      content.innerHTML = '<div class="empty">PDF 加载失败: ' + e.message + '<br><a href="' + dl + '">下载文件</a></div>';
-    });
-    return;
-  }
-
-  // 视频/音频 (Plyr)
-  var videoMimes = {mp4:'video/mp4', webm:'video/webm', mkv:'video/x-matroska', a3v8:'video/mp4', mov:'video/quicktime'};
-  var audioMimes = {mp3:'audio/mpeg', wav:'audio/wav', ogg:'audio/ogg', flac:'audio/flac', m4a:'audio/mp4'};
-  if (videoMimes[ext] || audioMimes[ext]) {
-    Promise.all([
-      new Promise(function(res, rej){ var l = document.createElement('link'); l.rel = 'stylesheet'; l.href = 'https://cdn.bootcdn.net/ajax/libs/plyr/3.8.4/plyr.css'; l.onload = res; l.onerror = rej; document.head.appendChild(l); }),
-      new Promise(function(res, rej){ var s = document.createElement('script'); s.src = 'https://cdn.bootcdn.net/ajax/libs/plyr/3.8.4/plyr.js'; s.onload = res; s.onerror = rej; document.head.appendChild(s); })
-    ]).then(function(){
-      var isVideo = !!videoMimes[ext];
-      var mt = isVideo ? 'video' : 'audio';
-      var mm = isVideo ? videoMimes[ext] : audioMimes[ext];
-      content.innerHTML = '<div style="max-width:' + (isVideo ? '900' : '600') + 'px;margin:0 auto;">'
-        + '<' + mt + ' id="plyr-player" controls playsinline style="width:100%;' + (isVideo ? 'max-height:80vh;background:#000;' : '') + '">'
-        + '<source src="' + d + '" type="' + mm + '"></' + mt + '></div>';
-      new Plyr('#plyr-player', {
-        controls: ['play', 'progress', 'settings'],
-        settings: ['speed'],
-        speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] }
+    document.getElementById('list-area').style.display = 'none';
+    document.getElementById('preview-area').style.display = 'block';
+    document.getElementById('preview-title').textContent = name;
+    document.getElementById('preview-download-btn').onclick = function(){ location.href = downloadUrl(relPath); };
+    var content = document.getElementById('preview-content');
+    content.innerHTML = '<div class="empty">加载中...</div>';
+    var ext = name.split('.').pop().toLowerCase();
+    var mime = getMime(name);
+    var d = directUrl(relPath);
+    if (mime.indexOf('video/') === 0) {
+      content.innerHTML = '<video controls playsinline preload="metadata" style="width:100%;max-height:70vh;background:#000;border-radius:8px;"><source src="' + d + '" type="' + mime + '"></video>';
+    } else if (mime.indexOf('audio/') === 0) {
+      content.innerHTML = '<audio controls src="' + d + '" style="width:100%;"></audio>';
+    } else if (['txt','md','json','js','css','html','xml'].indexOf(ext) >= 0) {
+      fetch(d).then(function(r){ return r.text(); }).then(function(text){
+        content.innerHTML = '<textarea readonly style="width:100%;min-height:400px;font-family:monospace;padding:12px;border:1px solid #e0e0e0;border-radius:8px;background:#fff;font-size:13px;">' + escapeHtml(text) + '</textarea>';
+      }).catch(function(e){
+        content.innerHTML = '<div class="empty">加载失败: ' + escapeHtml(e.message) + '</div>';
       });
-    }).catch(function(){
-      var isVideo = !!videoMimes[ext];
-      var mt = isVideo ? 'video' : 'audio';
-      var mm = isVideo ? videoMimes[ext] : audioMimes[ext];
-      content.innerHTML = '<' + mt + ' controls src="' + d + '" style="width:100%;max-height:80vh;"></' + mt + '>';
-    });
-    return;
+    } else if (mime.indexOf('image/') === 0) {
+      content.innerHTML = '<img src="' + d + '" style="max-width:100%;max-height:70vh;display:block;margin:0 auto;border-radius:8px;">';
+    } else {
+      content.innerHTML = '<div class="empty">无法预览此文件类型<br><a class="btn-primary" href="' + downloadUrl(relPath) + '" style="display:inline-block;padding:10px 20px;border-radius:8px;text-decoration:none;margin-top:12px;">下载文件</a></div>';
+    }
   }
-
-  // 图片 (Viewer.js)
-  var imageExts = ['jpg','jpeg','png','gif','webp','svg','bmp','ico'];
-  if (imageExts.indexOf(ext) >= 0) {
-    content.innerHTML = '<div style="text-align:center;"><img id="preview-img" src="' + d + '" style="max-width:100%;max-height:70vh;border-radius:8px;cursor:zoom-in;display:block;margin:0 auto;" alt="' + escapeHtml(name) + '"></div>';
-    Promise.all([
-      new Promise(function(res, rej){ var l = document.createElement('link'); l.rel = 'stylesheet'; l.href = 'https://cdn.bootcdn.net/ajax/libs/viewerjs/1.11.7/viewer.min.css'; l.onload = res; l.onerror = rej; document.head.appendChild(l); }),
-      new Promise(function(res, rej){ var s = document.createElement('script'); s.src = 'https://cdn.bootcdn.net/ajax/libs/viewerjs/1.11.7/viewer.min.js'; s.onload = res; s.onerror = rej; document.head.appendChild(s); })
-    ]).then(function(){
-      if (window.Viewer) {
-        new Viewer(document.getElementById('preview-img'), {
-          navbar: false, title: false,
-          toolbar: { zoomIn: 1, zoomOut: 1, oneToOne: 1, reset: 1, rotateLeft: 1, rotateRight: 1, flipHorizontal: 1, flipVertical: 1 }
-        });
-      }
-    });
-    return;
-  }
-
-  // 文本/代码
-  var textExts = ['txt','md','json','js','css','html','xml','log','yml','yaml','ini','conf','sh','py','java','c','cpp','go','rs','sql','ts','tsx','jsx','vue'];
-  if (textExts.indexOf(ext) >= 0) {
-    fetch(d).then(function(r){ return r.text(); }).then(function(text){
-      content.innerHTML = '<textarea readonly spellcheck="false" style="width:100%;min-height:520px;font-family:Consolas,Monaco,monospace;font-size:13px;line-height:1.6;padding:16px;border:1px solid var(--divider);border-radius:8px;background:#fff;resize:vertical;box-sizing:border-box;"></textarea>';
-      content.querySelector('textarea').value = text;
-    }).catch(function(e){
-      content.innerHTML = '<div class="empty">加载失败: ' + e.message + '<br><a href="' + dl + '">下载文件</a></div>';
-    });
-    return;
-  }
-
-  // Office（微软在线预览）
-  if (ext === 'docx' || ext === 'xlsx' || ext === 'pptx' || ext === 'doc' || ext === 'xls' || ext === 'ppt') {
-    var absoluteUrl = location.origin + d;
-    var officeUrl = 'https://view.officeapps.live.com/op/embed.aspx?src=' + encodeURIComponent(absoluteUrl);
-    content.innerHTML = '<iframe src="' + officeUrl + '" style="width:100%;height:75vh;border:1px solid var(--divider);border-radius:8px;background:#fff;"></iframe>'
-      + '<p style="font-size:12px;color:var(--text-sec);margin-top:8px;text-align:center;">由微软 Office Online 提供 · <a href="' + dl + '">下载原文件</a></p>';
-    return;
-  }
-
-  // 其他
-  content.innerHTML = '<div class="empty">无法预览<br><button class="btn-primary" onclick="location.href=\'' + dl + '\'" style="padding:10px 20px;border-radius:8px;margin-top:12px;border:none;cursor:pointer;">下载文件</button></div>';
-}
 
   function downloadAll(){
     if (!SHARE_DATA || !SHARE_DATA.tree) { showMsg('数据未加载'); return; }
@@ -3017,7 +2811,7 @@ function shareExpiredPage(reason, themeCss) {
 }
 
 function shareManagePage(themeCss) {
-  const html = `<!DOCTYPE html><html><head>` + COMMON_HEAD + (themeCss || '') + `
+  const html = `<!DOCTYPE html><html><head>` + COMMON_HEAD + themeCss + `
   <style>
     .share-card { padding:12px;border:1px solid var(--divider);border-radius:8px;margin-bottom:10px;background:#fff; }
     .share-card .row { display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap; }
@@ -3027,10 +2821,6 @@ function shareManagePage(themeCss) {
     .share-card .actions button { padding:6px 12px;border:1px solid var(--divider);background:#fff;border-radius:6px;cursor:pointer;font-size:12px; }
     .share-card .actions button:hover { background:#f5f5f5; }
     .share-card .actions button.danger { color:var(--danger); }
-    .badge { display:inline-block;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:500; }
-    .badge.warn { background:#fff3e0;color:#e65100; }
-    .badge.danger { background:#ffebee;color:#c62828; }
-    .badge.info { background:#e3f2fd;color:#1565c0; }
   </style>
   </head><body>
   <div class="appbar"><span class="material-icons" onclick="history.back()">arrow_back</span><h1>分享管理</h1></div>
@@ -3038,64 +2828,10 @@ function shareManagePage(themeCss) {
     <div id="share-list"></div>
   </div>
   <div class="snackbar" id="snackbar"></div>
-
-  <div class="modal-overlay" id="edit-modal">
-    <div class="modal" style="max-width:400px;">
-      <h3 id="edit-title">修改分享</h3>
-
-      <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">备注</label>
-      <textarea id="edit-note" placeholder="备注（留空无备注）" style="min-height:60px;margin-bottom:10px;"></textarea>
-
-      <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">提取码（留空无提取码）</label>
-      <input type="text" id="edit-pwd" maxlength="32" placeholder="留空则不设提取码" style="margin-bottom:10px;">
-
-      <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">限制访问次数（留空/0 则无限次）</label>
-      <input type="number" id="edit-maxviews" min="1" placeholder="例如 10" style="margin-bottom:10px;">
-
-      <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">有效期</label>
-      <select id="edit-expire-preset" style="width:100%;padding:10px;border:1px solid var(--divider);border-radius:8px;font-size:14px;margin-bottom:8px;background:#fff;">
-        <option value="">永久有效</option>
-        <option value="1">1 天</option>
-        <option value="3">3 天</option>
-        <option value="5">5 天</option>
-        <option value="7">7 天</option>
-        <option value="30">1 个月</option>
-        <option value="60">2 个月</option>
-        <option value="90">3 个月</option>
-        <option value="180">6 个月</option>
-        <option value="365">1 年</option>
-        <option value="custom">自定义...</option>
-      </select>
-      <input type="datetime-local" id="edit-expire-custom" style="display:none;margin-bottom:10px;">
-      <p style="font-size:12px;color:var(--text-sec);margin-top:-4px;margin-bottom:10px;">留空 = 保持当前有效期不变</p>
-
-      <div class="modal-actions" style="margin-top:16px;">
-        <button class="btn-secondary" id="edit-cancel">取消</button>
-        <button class="btn-primary" id="edit-save">保存</button>
-      </div>
-    </div>
-  </div>
-
   <script>
   var DEFAULT_DOMAIN = 'https://cloud.myocd.de5.net';
-  var sharesCache = [];
-  var editingId = null;
-  var currentPreset = '';
-
-  function escapeHtml(t){ return String(t).replace(/[&<>"']/g, function(m){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]; }); }
-  function showMsg(msg){ var s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(function(){ s.classList.remove('show'); }, 2500); }
-
-  function formatExpire(ts){
-    if (!ts) return '永久';
-    var d = new Date(ts);
-    var now = Date.now();
-    if (ts < now) return '<span class="badge danger">已过期</span>';
-    var diff = Math.floor((ts - now) / 3600000);
-    var hint = '';
-    if (diff < 24) hint = diff + ' 小时后';
-    else hint = Math.floor(diff / 24) + ' 天后';
-    return d.toLocaleDateString('zh-CN') + ' (' + hint + ')';
-  }
+  function escapeHtml(t){ return String(t).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+  function showMsg(msg){ var s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(function(){s.classList.remove('show');},2500); }
 
   function loadShares(){
     var el = document.getElementById('share-list');
@@ -3104,39 +2840,30 @@ function shareManagePage(themeCss) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.json();
     }).then(function(shares){
-      sharesCache = shares;
-      if (shares.length === 0) {
-        el.innerHTML = '<div class="empty">暂无分享</div>';
-        return;
-      }
+      if (shares.length === 0) { el.innerHTML = '<div class="empty">暂无分享</div>'; return; }
       el.innerHTML = shares.map(function(s){
         var url = DEFAULT_DOMAIN + '/s/' + s.id;
-        var expireStr = formatExpire(s.expiresAt);
-        var viewsStr = s.maxViews > 0
-          ? '<span class="badge ' + ((s.views || 0) >= s.maxViews ? 'danger' : 'info') + '">' + (s.views || 0) + '/' + s.maxViews + ' 次</span>'
-          : '<span class="badge">无限次</span>';
-
         return '<div class="share-card" data-id="' + escapeHtml(s.id) + '">' +
-          '<div class="row">' +
-          '<span class="note">' + escapeHtml(s.note || '（无备注）') + '</span>' +
-          (s.hasPassword ? '<span class="badge warn">🔒 加密</span>' : '') +
-          '</div>' +
+          '<div class="row"><span class="note">' + escapeHtml(s.note || '（无备注）') + '</span>' +
+          (s.hasPassword ? '<span style="color:#f9a825;font-size:12px;">🔒 已加密</span>' : '') + '</div>' +
           '<div class="meta">' + new Date(s.createdAt).toLocaleString() + ' · ' + s.fileCount + ' 个文件</div>' +
-          '<div class="meta" style="margin-top:4px;">有效期：' + expireStr + ' · 访问次数：' + viewsStr + '</div>' +
           '<div class="meta" style="word-break:break-all;margin-top:4px;">' + escapeHtml(url) + '</div>' +
           '<div class="actions">' +
           '<button data-act="copy" data-id="' + escapeHtml(s.id) + '">复制链接</button>' +
-          '<button data-act="edit" data-id="' + escapeHtml(s.id) + '">修改</button>' +
+          '<button data-act="note" data-id="' + escapeHtml(s.id) + '">改备注</button>' +
+          '<button data-act="pwd" data-id="' + escapeHtml(s.id) + '">改提取码</button>' +
           '<button class="danger" data-act="del" data-id="' + escapeHtml(s.id) + '">删除</button>' +
           '</div></div>';
       }).join('');
-
       el.querySelectorAll('button[data-act]').forEach(function(btn){
         btn.onclick = function(){
           var id = btn.getAttribute('data-id');
           var act = btn.getAttribute('data-act');
+          var s = shares.find(function(x){ return x.id === id; });
+          if (!s) return;
           if (act === 'copy') copyUrl(id);
-          else if (act === 'edit') openEdit(id);
+          else if (act === 'note') editNote(id, s.note || '');
+          else if (act === 'pwd') editPwd(id, s.password || '');
           else if (act === 'del') delShare(id);
         };
       });
@@ -3153,84 +2880,26 @@ function shareManagePage(themeCss) {
       prompt('复制失败，请手动复制：', url);
     }
   }
-
-  function openEdit(id){
-    var s = sharesCache.find(function(x){ return x.id === id; });
-    if (!s) return;
-    editingId = id;
-    document.getElementById('edit-note').value = s.note || '';
-    document.getElementById('edit-pwd').value = s.password || '';
-    document.getElementById('edit-maxviews').value = s.maxViews > 0 ? s.maxViews : '';
-    // ★ 读取当前 expiresAt 反推显示
-    if (s.expiresAt) {
-      var d = new Date(s.expiresAt);
-      var pad = function(n){ return String(n).padStart(2, '0'); };
-      document.getElementById('edit-expire-custom').value =
-        d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) +
-        'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
-      document.getElementById('edit-expire-preset').value = 'custom';
-      document.getElementById('edit-expire-custom').style.display = 'block';
-      currentPreset = 'custom';
-    } else {
-      document.getElementById('edit-expire-preset').value = '';
-      document.getElementById('edit-expire-custom').value = '';
-      document.getElementById('edit-expire-custom').style.display = 'none';
-      currentPreset = '';
-    }
-    document.getElementById('edit-modal').classList.add('show');
-  }
-
-  document.getElementById('edit-expire-preset').onchange = function(){
-    currentPreset = this.value;
-    document.getElementById('edit-expire-custom').style.display = this.value === 'custom' ? 'block' : 'none';
-  };
-
-  document.getElementById('edit-cancel').onclick = function(){
-    document.getElementById('edit-modal').classList.remove('show');
-    editingId = null;
-  };
-
-  document.getElementById('edit-save').onclick = function(){
-    if (!editingId) return;
-    var note = document.getElementById('edit-note').value;
-    var password = document.getElementById('edit-pwd').value.trim();
-    var maxViewsRaw = document.getElementById('edit-maxviews').value.trim();
-    var preset = document.getElementById('edit-expire-preset').value;
-
-    var payload = {
-      note: note,
-      password: password,
-      maxViews: maxViewsRaw === '' ? 0 : parseInt(maxViewsRaw, 10)
-    };
-
-    // 有效期
-    if (preset === 'custom') {
-      var dt = document.getElementById('edit-expire-custom').value;
-      if (dt) {
-        var t = new Date(dt).getTime();
-        if (!isNaN(t)) payload.expiresAt = t;
-      }
-    } else if (preset) {
-      payload.expiresAt = Date.now() + parseInt(preset, 10) * 24 * 3600 * 1000;
-    }
-    // preset 为空 → 不传 expiresAt → 保持不变（用户想清空可选"永久有效"？加个选项更友好）
-
-    fetch('/api/shares/' + editingId, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+  function editNote(id, oldNote){
+    var note = prompt('修改备注：', oldNote);
+    if (note === null) return;
+    fetch('/api/shares/' + id, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note: note })
     }).then(function(r){
-      if (r.ok) {
-        showMsg('已保存');
-        document.getElementById('edit-modal').classList.remove('show');
-        editingId = null;
-        loadShares();
-      } else {
-        r.json().then(function(j){ showMsg('保存失败: ' + (j.error || r.status)); }).catch(function(){ showMsg('保存失败'); });
-      }
-    }).catch(function(e){ showMsg('网络错误: ' + e.message); });
-  };
-
+      if (r.ok) { showMsg('已更新'); loadShares(); } else showMsg('更新失败');
+    });
+  }
+  function editPwd(id, oldPwd){
+    var pwd = prompt('修改提取码（留空则移除）：', oldPwd);
+    if (pwd === null) return;
+    fetch('/api/shares/' + id, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: pwd })
+    }).then(function(r){
+      if (r.ok) { showMsg('已更新'); loadShares(); } else showMsg('更新失败');
+    });
+  }
   function delShare(id){
     if (!confirm('确定删除此分享？')) return;
     fetch('/api/shares/' + id, { method: 'DELETE' }).then(function(r){
@@ -3245,7 +2914,6 @@ function shareManagePage(themeCss) {
     headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }
   });
 }
-
 
 function sharePage(node) {
   return page('分享', `
@@ -3357,8 +3025,7 @@ async function handleRequest(request, env, ctx = null) {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
     const body = await request.json();
-    await withStructureLock(async () => {
-const structure = await getStructure(env);
+    const structure = await getStructure(env);
     const parts = body.path.split('/').filter(Boolean);
     let parent = structure;
     for (const p of parts) {
@@ -3366,7 +3033,6 @@ const structure = await getStructure(env);
       parent = parent.children[p];
     }
     await saveStructure(env, structure);
-    });
     return jsonResponse({ ok: true });
   }
 
@@ -3387,11 +3053,9 @@ const structure = await getStructure(env);
         headers: { 'Authorization': `token ${env.GITHUB_TOKEN}`, 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json', 'User-Agent': 'netdisk-worker' },
         body: JSON.stringify({ message: 'text', content: base64 })
       }, 60000);
-      await withStructureLock(async () => {
-const structure = await getStructure(env);
+      const structure = await getStructure(env);
       setNode(structure, body.path, { type: 'file', name, ssid: id, storage: 'github', size: content.byteLength, chunks: 1, createdAt: Date.now() });
       await saveStructure(env, structure);
-    });
       await updateTask(env, taskId, { status: 'done', message: '完成', progress: 100 });
     } catch (e) {
       await updateTask(env, taskId, { status: 'error', message: e.message || '保存失败', progress: 0 });
@@ -3438,7 +3102,7 @@ const structure = await getStructure(env);
         const prog = Math.min(95, Math.floor((doneCount / total) * 95));
 
         await updateTask(env, taskId, {
-          message: '已上传 ' + doneCount + '/' + total + ' 分片',
+          message: '分片 ' + doneCount + '/' + total + ' 完成',
           progress: prog,
           doneChunks: doneCount,
           totalChunks: total,
@@ -3469,13 +3133,11 @@ const structure = await getStructure(env);
       return errorResponse('分片缺失 ' + missing.length + ' 个: ' + missing.slice(0, 5).join(',') + (missing.length > 5 ? '...' : ''), 400);
     }
 
-    await withStructureLock(async () => {
-const structure = await getStructure(env);
+    const structure = await getStructure(env);
     const oldNode = getNode(structure, filePath);
     if (oldNode && oldNode.type === 'file') { try { await deleteFileStorage(oldNode, env); } catch (e) {} }
-    setNode(structure, filePath, { type: 'file', name: filename, ssid: uploadId, storage: 'github', size, chunks, createdAt: Date.now(), fileHash: body.fileHash || null, hashAlgo: body.hashAlgo || null });
+    setNode(structure, filePath, { type: 'file', name: filename, ssid: uploadId, storage: 'github', size, chunks, createdAt: Date.now() });
     await saveStructure(env, structure);
-    });
     await updateTask(env, taskId, { status: 'done', message: '完成', progress: 100 });
     return jsonResponse({ ok: true });
   }
@@ -3496,8 +3158,7 @@ const structure = await getStructure(env);
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
     const p = url.searchParams.get('path') || '';
-    await withStructureLock(async () => {
-const structure = await getStructure(env);
+    const structure = await getStructure(env);
     const node = getNode(structure, p);
     if (!node) return errorResponse('不存在', 404);
     const filesToDelete = [];
@@ -3510,7 +3171,6 @@ const structure = await getStructure(env);
     }
     deleteNode(structure, p);
     await saveStructure(env, structure);
-    });
     const bgTask = (async () => { try { await deleteFileStoragesConcurrently(filesToDelete, env, 32); } catch (e) {} })();
     if (ctx && ctx.waitUntil) ctx.waitUntil(bgTask); else bgTask.catch(() => {});
     return jsonResponse({ ok: true });
@@ -3520,11 +3180,9 @@ const structure = await getStructure(env);
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
     const body = await request.json();
-    await withStructureLock(async () => {
-const structure = await getStructure(env);
+    const structure = await getStructure(env);
     renameNode(structure, body.path, body.newName);
     await saveStructure(env, structure);
-    });
     return jsonResponse({ ok: true });
   }
 
@@ -3532,8 +3190,7 @@ const structure = await getStructure(env);
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
     const body = await request.json();
-    await withStructureLock(async () => {
-const structure = await getStructure(env);
+    const structure = await getStructure(env);
     const paths = Array.isArray(body.paths) ? body.paths : [body.path];
     const errors = [];
     for (const p of paths) {
@@ -3541,7 +3198,6 @@ const structure = await getStructure(env);
       if (!res.ok) errors.push(`${p}: ${res.error}`);
     }
     await saveStructure(env, structure);
-    });
     if (errors.length) return errorResponse(errors.join('; '), 400);
     return jsonResponse({ ok: true });
   }
@@ -3550,8 +3206,7 @@ const structure = await getStructure(env);
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
     const body = await request.json();
-    await withStructureLock(async () => {
-const structure = await getStructure(env);
+    const structure = await getStructure(env);
     const paths = Array.isArray(body.paths) ? body.paths : [body.path];
     const errors = [];
     for (const p of paths) {
@@ -3559,7 +3214,6 @@ const structure = await getStructure(env);
       if (!res.ok) errors.push(`${p}: ${res.error}`);
     }
     await saveStructure(env, structure);
-    });
     if (errors.length) return errorResponse(errors.join('; '), 400);
     return jsonResponse({ ok: true });
   }
@@ -3569,8 +3223,7 @@ const structure = await getStructure(env);
     if (forbid) return forbid;
     const body = await request.json();
     const paths = body.paths || [];
-    await withStructureLock(async () => {
-const structure = await getStructure(env);
+    const structure = await getStructure(env);
     const filesToDelete = [];
     for (const p of paths) {
       const node = getNode(structure, p);
@@ -3585,7 +3238,6 @@ const structure = await getStructure(env);
       deleteNode(structure, p);
     }
     await saveStructure(env, structure);
-    });
     const bgTask = (async () => { try { await deleteFileStoragesConcurrently(filesToDelete, env, 32); } catch (e) {} })();
     if (ctx && ctx.waitUntil) ctx.waitUntil(bgTask); else bgTask.catch(() => {});
     return jsonResponse({ ok: true });
@@ -3595,8 +3247,7 @@ const structure = await getStructure(env);
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
     const body = await request.json();
-    await withStructureLock(async () => {
-const structure = await getStructure(env);
+    const structure = await getStructure(env);
     const node = getNode(structure, body.path);
     if (!node || node.type !== 'file') return errorResponse('文件不存在', 404);
     const content = new TextEncoder().encode(body.content || '');
@@ -3608,7 +3259,6 @@ const structure = await getStructure(env);
     }, 60000);
     node.size = content.byteLength;
     await saveStructure(env, structure);
-    });
     return jsonResponse({ ok: true });
   }
 
@@ -3636,55 +3286,10 @@ const structure = await getStructure(env);
     return jsonResponse({ ok: true });
   }
 
-  // ==================== CDN 代理路由 ====================
-
-
-  if (path.startsWith('/lib/')) {
-    const rest = path.slice('/lib/'.length);
-    const targetUrl = 'https://' + rest;
-    try {
-      const resp = await fetchWithTimeout(targetUrl, {
-        headers: { 'User-Agent': 'netdisk-worker-proxy' }
-      }, 30000);
-      if (!resp.ok) return new Response('CDN 加载失败: ' + resp.status, { status: resp.status });
-      const contentType = resp.headers.get('content-type') || 'application/javascript';
-      const headers = new Headers();
-      headers.set('Content-Type', contentType);
-      headers.set('Cache-Control', 'public, max-age=604800');
-      headers.set('Access-Control-Allow-Origin', '*');
-      return new Response(resp.body, { status: 200, headers });
-    } catch (e) {
-      return new Response('代理失败: ' + e.message, { status: 502 });
-    }
-  }
-
-  // ==================== 设置 API ====================
-  if (path === '/api/settings' && request.method === 'PUT') {
-    const forbid = requirePassword(request, env);
-    if (forbid) return forbid;
-    const body = await request.json();
-    const settings = {
-      primary: body.primary || '#1976d2',
-      bg: body.bg || '',
-      cardOpacity: body.cardOpacity != null ? body.cardOpacity : 1,
-      fontFamily: body.fontFamily || '',
-      fontCss: body.fontCss || '',
-      fontCssFamily: body.fontCssFamily || ''
-    };
-    await saveSettings(env, settings);
-    return jsonResponse({ ok: true });
-  }
-
-  if (path === '/api/settings' && request.method === 'GET') {
-    const forbid = requirePassword(request, env);
-    if (forbid) return forbid;
-    return jsonResponse(await getSettings(env));
-  }
-
   // ==================== 分享 API ====================
 
   // 创建分享
-    if (path === '/api/share/create' && request.method === 'POST') {
+  if (path === '/api/share/create' && request.method === 'POST') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
     const body = await request.json();
@@ -3692,7 +3297,7 @@ const structure = await getStructure(env);
     const note = String(body.note || '').slice(0, 2000);
     const pwd = String(body.password || '').slice(0, 32);
     let maxViews = null;
-    if (body.maxViews !== undefined && body.maxViews !== null && body.maxViews !== '' && body.maxViews !== 0) {
+    if (body.maxViews !== undefined && body.maxViews !== null && body.maxViews !== '') {
       const n = parseInt(body.maxViews, 10);
       if (!isNaN(n) && n > 0) maxViews = n;
     }
@@ -3706,7 +3311,6 @@ const structure = await getStructure(env);
     await saveShare(env, { id, paths, note, password: pwd, maxViews, expiresAt, views: 0, createdAt: Date.now() });
     return jsonResponse({ ok: true, id, url: '/s/' + id });
   }
-
 
   // 列出所有分享
   if (path === '/api/shares/list' && request.method === 'GET') {
@@ -3733,7 +3337,7 @@ const structure = await getStructure(env);
   }
 
   // 更新分享
-    if (path.startsWith('/api/shares/') && request.method === 'PUT') {
+  if (path.startsWith('/api/shares/') && request.method === 'PUT') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
     const id = path.slice('/api/shares/'.length);
@@ -3743,17 +3347,15 @@ const structure = await getStructure(env);
     if (body.note !== undefined) share.note = String(body.note).slice(0, 2000);
     if (body.password !== undefined) share.password = String(body.password).slice(0, 32);
     if (body.maxViews !== undefined) {
-      if (body.maxViews === '' || body.maxViews === null || body.maxViews === 0) {
-        share.maxViews = null;
-      } else {
+      if (body.maxViews === '' || body.maxViews === null) share.maxViews = null;
+      else {
         const n = parseInt(body.maxViews, 10);
         share.maxViews = (!isNaN(n) && n > 0) ? n : null;
       }
     }
     if (body.expiresAt !== undefined) {
-      if (!body.expiresAt) {
-        share.expiresAt = null;
-      } else {
+      if (!body.expiresAt) share.expiresAt = null;
+      else {
         const t = parseInt(body.expiresAt, 10);
         share.expiresAt = (!isNaN(t) && t > Date.now()) ? t : null;
       }
@@ -3762,7 +3364,6 @@ const structure = await getStructure(env);
     await saveShare(env, share);
     return jsonResponse({ ok: true });
   }
-
 
   // 删除分享
   if (path.startsWith('/api/shares/') && request.method === 'DELETE') {
@@ -3866,6 +3467,29 @@ const structure = await getStructure(env);
     return await buildShareZipResponse(files, env);
   }
 
+  // ==================== 设置 API ====================
+  if (path === '/api/settings' && request.method === 'PUT') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    const body = await request.json();
+    const settings = {
+      primary: body.primary || '#1976d2',
+      bg: body.bg || '',
+      cardOpacity: body.cardOpacity != null ? body.cardOpacity : 1,
+      fontFamily: body.fontFamily || '',
+      fontCss: body.fontCss || '',
+      fontCssFamily: body.fontCssFamily || ''
+    };
+    await saveSettings(env, settings);
+    return jsonResponse({ ok: true });
+  }
+
+  if (path === '/api/settings' && request.method === 'GET') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    return jsonResponse(await getSettings(env));
+  }
+
   // 页面路由
   if (path === '/login') return loginPage();
   if (path === '/') {
@@ -3937,7 +3561,7 @@ const structure = await getStructure(env);
       if (n && n.type === 'file' && n.ssid === id) { node = n; break; }
     }
     if (!node) return errorResponse('文件不存在', 404);
-    return handleRangeRequest(request, env, node, true);
+    return buildDownloadResponse(node, filename || node.name, env, true);
   }
 
   if (path.startsWith('/s/')) {
