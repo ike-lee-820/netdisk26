@@ -2118,10 +2118,75 @@ async function load(){
     document.getElementById('file-meta').textContent = formatSize(fileNode.size) + ' · ' + new Date(fileNode.createdAt).toLocaleString();
     document.getElementById('title').textContent = fileNode.name;
     await renderPreview();
+    loadSiblings();
   } catch(e) {
     preview.innerHTML = '<div class="empty">加载失败: ' + escapeHtml(e.message) + '</div>';
   }
 }
+
+async function loadSiblings(){
+  if (!fileNode) return;
+  var parentPath = path.split('/').slice(0, -1).join('/');
+  var ext = getExt(fileNode.name);
+  var type = '';
+  if (IMAGE_EXTS.indexOf(ext) >= 0) type = 'image';
+  else if (VIDEO_MIMES[ext]) type = 'video';
+  else if (AUDIO_MIMES[ext]) type = 'audio';
+  else return;
+
+  try {
+    var data = await api('/api/structure?path=' + encodeURIComponent(parentPath));
+    if (!data || !data.children) return;
+    var siblings = [];
+    for (var name in data.children) {
+      var n = data.children[name];
+      if (n.type !== 'file') continue;
+      var e = getExt(name);
+      var match = false;
+      if (type === 'image' && IMAGE_EXTS.indexOf(e) >= 0) match = true;
+      else if (type === 'video' && VIDEO_MIMES[e]) match = true;
+      else if (type === 'audio' && AUDIO_MIMES[e]) match = true;
+      if (match) siblings.push({ name: name, node: n, path: parentPath ? parentPath + '/' + name : name });
+    }
+    if (siblings.length <= 1) return;
+
+    var label = type === 'image' ? '图片' : (type === 'video' ? '视频' : '音频');
+    var html = '<div class="card" style="margin-top:12px;">';
+    html += '<h3 style="margin-top:0;font-size:14px;color:var(--text-sec);">同目录下的其他 ' + label + ' (' + (siblings.length - 1) + ')</h3>';
+    html += '<div style="display:flex;flex-wrap:wrap;gap:8px;">';
+    for (var i = 0; i < siblings.length; i++) {
+      var s = siblings[i];
+      var isCurrent = s.path === path;
+      var border = isCurrent ? '2px solid var(--primary)' : '1px solid var(--divider)';
+      var directUrl = '/direct/' + s.node.ssid + '/' + encodeURIComponent(s.name);
+      if (type === 'image') {
+        html += '<div class="sibling-item" data-sib="' + escapeHtml(s.path) + '" style="cursor:pointer;border:' + border + ';border-radius:6px;overflow:hidden;width:80px;height:80px;position:relative;">';
+        html += '<img src="' + directUrl + '" style="width:100%;height:100%;object-fit:cover;" loading="lazy">';
+        if (isCurrent) html += '<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(25,118,210,.85);color:#fff;font-size:10px;text-align:center;padding:1px;">当前</div>';
+        html += '</div>';
+      } else {
+        var bg = isCurrent ? '#e3f2fd' : '#fff';
+        html += '<div class="sibling-item" data-sib="' + escapeHtml(s.path) + '" style="cursor:pointer;border:' + border + ';border-radius:6px;padding:8px 12px;font-size:13px;background:' + bg + ';max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHtml(s.name) + '">';
+        html += escapeHtml(s.name);
+        html += '</div>';
+      }
+    }
+    html += '</div></div>';
+
+    var preview = document.getElementById('preview');
+    preview.insertAdjacentHTML('afterend', html);
+    var items = preview.parentNode.querySelectorAll('.sibling-item');
+    for (var j = 0; j < items.length; j++) {
+      items[j].onclick = function(){
+        var p = this.getAttribute('data-sib');
+        if (p) location.href = '/file?path=' + encodeURIComponent(p);
+      };
+    }
+  } catch(e) {
+    console.error('加载同目录文件失败', e);
+  }
+}
+
 
 function downloadBox(msg, downloadUrl){
   return '<div class="empty" style="padding:40px 20px;">' +
@@ -2280,7 +2345,7 @@ async function saveText(){
   } catch(e) { showMsg('保存失败: ' + e.message); }
 }
 
-async function shareFile(){ if(!fileNode) return; await copyText(location.origin + '/share/' + fileNode.ssid); showMsg('分享链接已复制'); }
+async function shareFile(){ if(!fileNode) return; openShareModal([path]); }
 async function copyDirectLink(){ if(!fileNode) return; await copyText(location.origin + '/direct/' + fileNode.ssid + '/' + encodeURIComponent(fileNode.name)); showMsg('直链已复制'); }
 async function renameFile(){ if(!fileNode) return; var n = prompt('新名称', fileNode.name); if(!n || n === fileNode.name) return; await api('/api/file/rename', { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({path:path, newName:n}) }); location.reload(); }
 async function deleteFile(){ if(!fileNode) return; if(!confirm('确定删除?')) return; await api('/api/file?path=' + encodeURIComponent(path), { method:'DELETE' }); location.href = '/?path=' + encodeURIComponent(path.split('/').slice(0,-1).join('/')); }
@@ -3290,10 +3355,33 @@ const structure = await getStructure(env);
     }
   }
 
+  // ==================== 设置 API ====================
+  if (path === '/api/settings' && request.method === 'PUT') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    const body = await request.json();
+    const settings = {
+      primary: body.primary || '#1976d2',
+      bg: body.bg || '',
+      cardOpacity: body.cardOpacity != null ? body.cardOpacity : 1,
+      fontFamily: body.fontFamily || '',
+      fontCss: body.fontCss || '',
+      fontCssFamily: body.fontCssFamily || ''
+    };
+    await saveSettings(env, settings);
+    return jsonResponse({ ok: true });
+  }
+
+  if (path === '/api/settings' && request.method === 'GET') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    return jsonResponse(await getSettings(env));
+  }
+
   // ==================== 分享 API ====================
 
   // 创建分享
-  if (path === '/api/share/create' && request.method === 'POST') {
+    if (path === '/api/share/create' && request.method === 'POST') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
     const body = await request.json();
@@ -3301,7 +3389,7 @@ const structure = await getStructure(env);
     const note = String(body.note || '').slice(0, 2000);
     const pwd = String(body.password || '').slice(0, 32);
     let maxViews = null;
-    if (body.maxViews !== undefined && body.maxViews !== null && body.maxViews !== '') {
+    if (body.maxViews !== undefined && body.maxViews !== null && body.maxViews !== '' && body.maxViews !== 0) {
       const n = parseInt(body.maxViews, 10);
       if (!isNaN(n) && n > 0) maxViews = n;
     }
@@ -3315,6 +3403,7 @@ const structure = await getStructure(env);
     await saveShare(env, { id, paths, note, password: pwd, maxViews, expiresAt, views: 0, createdAt: Date.now() });
     return jsonResponse({ ok: true, id, url: '/s/' + id });
   }
+
 
   // 列出所有分享
   if (path === '/api/shares/list' && request.method === 'GET') {
@@ -3341,7 +3430,7 @@ const structure = await getStructure(env);
   }
 
   // 更新分享
-  if (path.startsWith('/api/shares/') && request.method === 'PUT') {
+    if (path.startsWith('/api/shares/') && request.method === 'PUT') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
     const id = path.slice('/api/shares/'.length);
@@ -3351,15 +3440,17 @@ const structure = await getStructure(env);
     if (body.note !== undefined) share.note = String(body.note).slice(0, 2000);
     if (body.password !== undefined) share.password = String(body.password).slice(0, 32);
     if (body.maxViews !== undefined) {
-      if (body.maxViews === '' || body.maxViews === null) share.maxViews = null;
-      else {
+      if (body.maxViews === '' || body.maxViews === null || body.maxViews === 0) {
+        share.maxViews = null;
+      } else {
         const n = parseInt(body.maxViews, 10);
         share.maxViews = (!isNaN(n) && n > 0) ? n : null;
       }
     }
     if (body.expiresAt !== undefined) {
-      if (!body.expiresAt) share.expiresAt = null;
-      else {
+      if (!body.expiresAt) {
+        share.expiresAt = null;
+      } else {
         const t = parseInt(body.expiresAt, 10);
         share.expiresAt = (!isNaN(t) && t > Date.now()) ? t : null;
       }
@@ -3368,6 +3459,7 @@ const structure = await getStructure(env);
     await saveShare(env, share);
     return jsonResponse({ ok: true });
   }
+
 
   // 删除分享
   if (path.startsWith('/api/shares/') && request.method === 'DELETE') {
