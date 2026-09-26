@@ -2840,7 +2840,7 @@ function shareExpiredPage(reason, themeCss) {
 }
 
 function shareManagePage(themeCss) {
-  const html = `<!DOCTYPE html><html><head>` + COMMON_HEAD + themeCss + `
+  const html = `<!DOCTYPE html><html><head>` + COMMON_HEAD + (themeCss || '') + `
   <style>
     .share-card { padding:12px;border:1px solid var(--divider);border-radius:8px;margin-bottom:10px;background:#fff; }
     .share-card .row { display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap; }
@@ -2850,6 +2850,10 @@ function shareManagePage(themeCss) {
     .share-card .actions button { padding:6px 12px;border:1px solid var(--divider);background:#fff;border-radius:6px;cursor:pointer;font-size:12px; }
     .share-card .actions button:hover { background:#f5f5f5; }
     .share-card .actions button.danger { color:var(--danger); }
+    .badge { display:inline-block;padding:2px 6px;border-radius:4px;font-size:11px;font-weight:500; }
+    .badge.warn { background:#fff3e0;color:#e65100; }
+    .badge.danger { background:#ffebee;color:#c62828; }
+    .badge.info { background:#e3f2fd;color:#1565c0; }
   </style>
   </head><body>
   <div class="appbar"><span class="material-icons" onclick="history.back()">arrow_back</span><h1>分享管理</h1></div>
@@ -2857,10 +2861,64 @@ function shareManagePage(themeCss) {
     <div id="share-list"></div>
   </div>
   <div class="snackbar" id="snackbar"></div>
+
+  <div class="modal-overlay" id="edit-modal">
+    <div class="modal" style="max-width:400px;">
+      <h3 id="edit-title">修改分享</h3>
+
+      <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">备注</label>
+      <textarea id="edit-note" placeholder="备注（留空无备注）" style="min-height:60px;margin-bottom:10px;"></textarea>
+
+      <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">提取码（留空无提取码）</label>
+      <input type="text" id="edit-pwd" maxlength="32" placeholder="留空则不设提取码" style="margin-bottom:10px;">
+
+      <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">限制访问次数（留空/0 则无限次）</label>
+      <input type="number" id="edit-maxviews" min="1" placeholder="例如 10" style="margin-bottom:10px;">
+
+      <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">有效期</label>
+      <select id="edit-expire-preset" style="width:100%;padding:10px;border:1px solid var(--divider);border-radius:8px;font-size:14px;margin-bottom:8px;background:#fff;">
+        <option value="">永久有效</option>
+        <option value="1">1 天</option>
+        <option value="3">3 天</option>
+        <option value="5">5 天</option>
+        <option value="7">7 天</option>
+        <option value="30">1 个月</option>
+        <option value="60">2 个月</option>
+        <option value="90">3 个月</option>
+        <option value="180">6 个月</option>
+        <option value="365">1 年</option>
+        <option value="custom">自定义...</option>
+      </select>
+      <input type="datetime-local" id="edit-expire-custom" style="display:none;margin-bottom:10px;">
+      <p style="font-size:12px;color:var(--text-sec);margin-top:-4px;margin-bottom:10px;">留空 = 保持当前有效期不变</p>
+
+      <div class="modal-actions" style="margin-top:16px;">
+        <button class="btn-secondary" id="edit-cancel">取消</button>
+        <button class="btn-primary" id="edit-save">保存</button>
+      </div>
+    </div>
+  </div>
+
   <script>
   var DEFAULT_DOMAIN = 'https://cloud.myocd.de5.net';
-  function escapeHtml(t){ return String(t).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
-  function showMsg(msg){ var s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(function(){s.classList.remove('show');},2500); }
+  var sharesCache = [];
+  var editingId = null;
+  var currentPreset = '';
+
+  function escapeHtml(t){ return String(t).replace(/[&<>"']/g, function(m){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]; }); }
+  function showMsg(msg){ var s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(function(){ s.classList.remove('show'); }, 2500); }
+
+  function formatExpire(ts){
+    if (!ts) return '永久';
+    var d = new Date(ts);
+    var now = Date.now();
+    if (ts < now) return '<span class="badge danger">已过期</span>';
+    var diff = Math.floor((ts - now) / 3600000);
+    var hint = '';
+    if (diff < 24) hint = diff + ' 小时后';
+    else hint = Math.floor(diff / 24) + ' 天后';
+    return d.toLocaleDateString('zh-CN') + ' (' + hint + ')';
+  }
 
   function loadShares(){
     var el = document.getElementById('share-list');
@@ -2869,30 +2927,39 @@ function shareManagePage(themeCss) {
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.json();
     }).then(function(shares){
-      if (shares.length === 0) { el.innerHTML = '<div class="empty">暂无分享</div>'; return; }
+      sharesCache = shares;
+      if (shares.length === 0) {
+        el.innerHTML = '<div class="empty">暂无分享</div>';
+        return;
+      }
       el.innerHTML = shares.map(function(s){
         var url = DEFAULT_DOMAIN + '/s/' + s.id;
+        var expireStr = formatExpire(s.expiresAt);
+        var viewsStr = s.maxViews > 0
+          ? '<span class="badge ' + ((s.views || 0) >= s.maxViews ? 'danger' : 'info') + '">' + (s.views || 0) + '/' + s.maxViews + ' 次</span>'
+          : '<span class="badge">无限次</span>';
+
         return '<div class="share-card" data-id="' + escapeHtml(s.id) + '">' +
-          '<div class="row"><span class="note">' + escapeHtml(s.note || '（无备注）') + '</span>' +
-          (s.hasPassword ? '<span style="color:#f9a825;font-size:12px;">🔒 已加密</span>' : '') + '</div>' +
+          '<div class="row">' +
+          '<span class="note">' + escapeHtml(s.note || '（无备注）') + '</span>' +
+          (s.hasPassword ? '<span class="badge warn">🔒 加密</span>' : '') +
+          '</div>' +
           '<div class="meta">' + new Date(s.createdAt).toLocaleString() + ' · ' + s.fileCount + ' 个文件</div>' +
+          '<div class="meta" style="margin-top:4px;">有效期：' + expireStr + ' · 访问次数：' + viewsStr + '</div>' +
           '<div class="meta" style="word-break:break-all;margin-top:4px;">' + escapeHtml(url) + '</div>' +
           '<div class="actions">' +
           '<button data-act="copy" data-id="' + escapeHtml(s.id) + '">复制链接</button>' +
-          '<button data-act="note" data-id="' + escapeHtml(s.id) + '">改备注</button>' +
-          '<button data-act="pwd" data-id="' + escapeHtml(s.id) + '">改提取码</button>' +
+          '<button data-act="edit" data-id="' + escapeHtml(s.id) + '">修改</button>' +
           '<button class="danger" data-act="del" data-id="' + escapeHtml(s.id) + '">删除</button>' +
           '</div></div>';
       }).join('');
+
       el.querySelectorAll('button[data-act]').forEach(function(btn){
         btn.onclick = function(){
           var id = btn.getAttribute('data-id');
           var act = btn.getAttribute('data-act');
-          var s = shares.find(function(x){ return x.id === id; });
-          if (!s) return;
           if (act === 'copy') copyUrl(id);
-          else if (act === 'note') editNote(id, s.note || '');
-          else if (act === 'pwd') editPwd(id, s.password || '');
+          else if (act === 'edit') openEdit(id);
           else if (act === 'del') delShare(id);
         };
       });
@@ -2909,26 +2976,72 @@ function shareManagePage(themeCss) {
       prompt('复制失败，请手动复制：', url);
     }
   }
-  function editNote(id, oldNote){
-    var note = prompt('修改备注：', oldNote);
-    if (note === null) return;
-    fetch('/api/shares/' + id, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ note: note })
-    }).then(function(r){
-      if (r.ok) { showMsg('已更新'); loadShares(); } else showMsg('更新失败');
-    });
+
+  function openEdit(id){
+    var s = sharesCache.find(function(x){ return x.id === id; });
+    if (!s) return;
+    editingId = id;
+    document.getElementById('edit-note').value = s.note || '';
+    document.getElementById('edit-pwd').value = s.password || '';
+    document.getElementById('edit-maxviews').value = s.maxViews > 0 ? s.maxViews : '';
+    document.getElementById('edit-expire-preset').value = '';
+    document.getElementById('edit-expire-custom').value = '';
+    document.getElementById('edit-expire-custom').style.display = 'none';
+    currentPreset = '';
+    document.getElementById('edit-modal').classList.add('show');
   }
-  function editPwd(id, oldPwd){
-    var pwd = prompt('修改提取码（留空则移除）：', oldPwd);
-    if (pwd === null) return;
-    fetch('/api/shares/' + id, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: pwd })
+
+  document.getElementById('edit-expire-preset').onchange = function(){
+    currentPreset = this.value;
+    document.getElementById('edit-expire-custom').style.display = this.value === 'custom' ? 'block' : 'none';
+  };
+
+  document.getElementById('edit-cancel').onclick = function(){
+    document.getElementById('edit-modal').classList.remove('show');
+    editingId = null;
+  };
+
+  document.getElementById('edit-save').onclick = function(){
+    if (!editingId) return;
+    var note = document.getElementById('edit-note').value;
+    var password = document.getElementById('edit-pwd').value.trim();
+    var maxViewsRaw = document.getElementById('edit-maxviews').value.trim();
+    var preset = document.getElementById('edit-expire-preset').value;
+
+    var payload = {
+      note: note,
+      password: password,
+      maxViews: maxViewsRaw === '' ? 0 : parseInt(maxViewsRaw, 10)
+    };
+
+    // 有效期
+    if (preset === 'custom') {
+      var dt = document.getElementById('edit-expire-custom').value;
+      if (dt) {
+        var t = new Date(dt).getTime();
+        if (!isNaN(t)) payload.expiresAt = t;
+      }
+    } else if (preset) {
+      payload.expiresAt = Date.now() + parseInt(preset, 10) * 24 * 3600 * 1000;
+    }
+    // preset 为空 → 不传 expiresAt → 保持不变（用户想清空可选"永久有效"？加个选项更友好）
+
+    fetch('/api/shares/' + editingId, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
     }).then(function(r){
-      if (r.ok) { showMsg('已更新'); loadShares(); } else showMsg('更新失败');
-    });
-  }
+      if (r.ok) {
+        showMsg('已保存');
+        document.getElementById('edit-modal').classList.remove('show');
+        editingId = null;
+        loadShares();
+      } else {
+        r.json().then(function(j){ showMsg('保存失败: ' + (j.error || r.status)); }).catch(function(){ showMsg('保存失败'); });
+      }
+    }).catch(function(e){ showMsg('网络错误: ' + e.message); });
+  };
+
   function delShare(id){
     if (!confirm('确定删除此分享？')) return;
     fetch('/api/shares/' + id, { method: 'DELETE' }).then(function(r){
@@ -2943,6 +3056,7 @@ function shareManagePage(themeCss) {
     headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }
   });
 }
+
 
 function sharePage(node) {
   return page('分享', `
