@@ -879,7 +879,7 @@ body { margin:0; font-family:system-ui,sans-serif; background:var(--bg); color:v
 
 function page(title, body, scripts = '', themeCss = '') {
   return new Response(`<!DOCTYPE html><html><head>${COMMON_HEAD}${themeCss}<title>${escapeHtml(title)}</title></head><body>${body}${scripts}</body></html>`, {
-    headers: { 'Content-Type': 'text/html; charset=utf-8' }
+    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store, no-cache, must-revalidate' }
   });
 }
 
@@ -1748,11 +1748,19 @@ async function uploadOne(file, dir, externalTaskId){
     if(t){ t.message = '注册中...'; t.progress = 99; t.updatedAt = Date.now(); }
     debouncedLoadTasks();
 
-    const finishResp = await api('/api/upload/finish', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({uploadId, path, filename: file.name, size: file.size, chunks: total, taskId, chunkSize: blob.size })
-    });
+    console.log('[upload] 准备 finish', { uploadId, path, filename: file.name, size: file.size, chunks: total, taskId });
+    let finishResp;
+    try {
+      finishResp = await api('/api/upload/finish', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({uploadId, path, filename: file.name, size: file.size, chunks: total, taskId })
+      });
+      console.log('[upload] finish 响应:', finishResp);
+    } catch (fe) {
+      console.error('[upload] finish 失败:', fe);
+      throw new Error('finish 请求失败: ' + (fe.message || fe));
+    }
     if (!finishResp || !finishResp.ok) {
       throw new Error((finishResp && finishResp.error) || '注册失败');
     }
@@ -2175,9 +2183,9 @@ async function renderPreview(){
         await loadScript('https://cdn.jsdelivr.net/npm/vue@3.4.21/dist/vue.global.prod.js');
       }
       var officeMap = {
-        docx: { js: 'https://unpkg.com/@vue-office/docx@2.0.0/lib/index.umd.js', css: 'https://unpkg.com/@vue-office/docx@2.0.0/lib/index.css', comp: 'VueOfficeDocx' },
-        xlsx: { js: 'https://unpkg.com/@vue-office/excel@2.0.0/lib/index.umd.js', css: 'https://cdn.jsdelivr.net/npm/@vue-office/excel@1.6.2/lib/index.css', comp: 'VueOfficeExcel' },
-        pptx: { js: 'https://unpkg.com/@vue-office/pptx@2.0.0/lib/index.umd.js', css: 'https://unpkg.com/@vue-office/pptx@2.0.0/lib/index.css', comp: 'VueOfficePptx' }
+        docx: { js: 'https://cdn.jsdelivr.net/npm/vue-office@0.0.5/lib/index.js', css: 'https://cdn.jsdelivr.net/npm/vue-office@0.0.5/lib/index.css', comp: 'VueOfficeDocx' },
+        xlsx: { js: 'https://cdn.jsdelivr.net/npm/vue-office@0.0.5/lib/index.js', css: 'https://cdn.jsdelivr.net/npm/vue-office@0.0.5/lib/index.css', comp: 'VueOfficeExcel' },
+        pptx: { js: 'https://cdn.jsdelivr.net/npm/vue-office@0.0.5/lib/index.js', css: 'https://cdn.jsdelivr.net/npm/vue-office@0.0.5/lib/index.css', comp: 'VueOfficePptx' }
       };
       var cfg = officeMap[ext];
       try { await loadCSS(cfg.css); } catch(_){}
