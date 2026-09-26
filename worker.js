@@ -1548,10 +1548,12 @@ async function uploadOne(file, dir, externalTaskId){
 
   try {
     // 1. 请求上传参数
-    const start = await api('/api/upload/start', {
+    // ★ 用文件指纹请求断点续传
+    const fingerprint = file.name + '_' + file.size + '_' + (file.lastModified || 0);
+    const start = await api('/api/upload/resume', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path, filename: file.name, size: file.size, taskId })
+      body: JSON.stringify({ fingerprint, path, filename: file.name, size: file.size, taskId })
     });
     if (!start) throw new Error('初始化失败');
 
@@ -1976,6 +1978,7 @@ function fileBody(node, filePath) {
   </div>
   <div class="card" style="display:flex;gap:8px;flex-wrap:wrap;">
     <a class="btn-primary" href="${downloadUrl}" style="display:inline-flex;align-items:center;gap:4px;padding:10px 16px;border:none;border-radius:8px;cursor:pointer;text-decoration:none;"><span class="material-icons">download</span> 下载</a>
+    <button class="btn-secondary" onclick="multiThreadDownload()" style="display:inline-flex;align-items:center;gap:4px;padding:10px 16px;border:none;border-radius:8px;cursor:pointer;"><span class="material-icons">download_for_offline</span> 多线程下载</button>
     <button class="btn-secondary" onclick="shareFile()" style="padding:10px 16px;border:none;border-radius:8px;cursor:pointer;">分享</button>
     <button class="btn-secondary" onclick="copyDirectLink()" style="padding:10px 16px;border:none;border-radius:8px;cursor:pointer;">复制直链</button>
     <button class="btn-secondary" onclick="renameFile()" style="padding:10px 16px;border:none;border-radius:8px;cursor:pointer;">重命名</button>
@@ -2268,6 +2271,77 @@ async function renderPreview(){
   }
 
   preview.innerHTML = downloadBox('暂不支持预览此文件类型', downloadUrl);
+}
+
+
+async function multiThreadDownload(){
+  if (!fileNode) { showMsg('文件未加载'); return; }
+  var totalChunks = fileNode.chunks || 1;
+  var CONCURRENCY = 8;
+  var chunks = new Array(totalChunks);
+  var cursor = 0;
+  var completed = 0;
+  var totalBytes = 0;
+  var startTime = Date.now();
+
+  showMsg('多线程下载中 (0/' + totalChunks + ')...');
+
+  var counter = 0;
+  var progressTimer = setInterval(function(){
+    if (completed > 0) {
+      var elapsed = (Date.now() - startTime) / 1000;
+      var speed = totalBytes / elapsed;
+      var speedStr = speed >= 1048576 ? (speed/1048576).toFixed(1)+' MB/s'
+        : speed >= 1024 ? (speed/1024).toFixed(1)+' KB/s' : speed.toFixed(0)+' B/s';
+      showMsg('下载 ' + completed + '/' + totalChunks + ' · ' + speedStr);
+    }
+  }, 500);
+
+  async function worker() {
+    while (true) {
+      var i = cursor++;
+      if (i >= totalChunks) return;
+      try {
+        var r = await fetch('/api/download/chunk?ssid=' + encodeURIComponent(fileNode.ssid) + '&index=' + i, {
+          credentials: 'same-origin'
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        var blob = await r.blob();
+        chunks[i] = blob;
+        totalBytes += blob.size;
+        completed++;
+      } catch(e) {
+        console.error('分片 ' + i + ' 失败', e);
+        throw e;
+      }
+    }
+  }
+
+  try {
+    var workers = [];
+    for (var w = 0; w < Math.min(CONCURRENCY, totalChunks); w++) {
+      workers.push(worker());
+    }
+    await Promise.all(workers);
+
+    clearInterval(progressTimer);
+    showMsg('合并中...');
+
+    var finalBlob = new Blob(chunks, { type: 'application/octet-stream' });
+    var blobUrl = URL.createObjectURL(finalBlob);
+    var a = document.createElement('a');
+    a.href = blobUrl;
+    a.download = fileNode.name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(blobUrl); }, 10000);
+
+    showMsg('下载完成: ' + fileNode.name);
+  } catch(e) {
+    clearInterval(progressTimer);
+    showMsg('多线程下载失败: ' + e.message);
+  }
 }
 
 async function saveText(){
@@ -3106,6 +3180,66 @@ async function handleRequest(request, env, ctx = null) {
   }
 
   // ==================== 上传 API（只支持客户端直传）====================
+
+  // ==================== 上传断点续传 ====================
+  if (path === '/api/upload/resume' && request.method === 'POST') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    const body = await request.json();
+    const fingerprint = body.fingerprint;
+    const filePath = body.path;
+    const filename = body.filename;
+    const size = body.size;
+    const taskId = body.taskId || ssid();
+    if (!fingerprint || !filename || size == null) return errorResponse('缺少参数');
+    const chunks = Math.max(1, Math.ceil(size / CHUNK_SIZE));
+
+    // 用文件名+大小+修改时间生成稳定指纹
+    const fpKey = 'fp_' + fingerprint.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
+    const existing = await d1Get(env, fpKey, null);
+    let uploadId;
+    let uploadedIndexes = [];
+
+    if (existing && existing.uploadId) {
+      uploadId = existing.uploadId;
+      // 检查 GitHub 上哪些分片已存在
+      for (let i = 0; i < chunks; i++) {
+        const exists = await githubVerifyChunkExists(uploadId, i, env);
+        if (exists) uploadedIndexes.push(i);
+      }
+    } else {
+      uploadId = ssid();
+      await githubCreateRepo(uploadId, env);
+      await d1Set(env, fpKey, { uploadId, filename, size, createdAt: Date.now() });
+    }
+
+    await addTask(env, { id: taskId, name: filename, status: 'uploading', message: '准备中...', progress: uploadedIndexes.length > 0 ? Math.floor((uploadedIndexes.length / chunks) * 95) : 0, size, chunkMap: {}, createdAt: Date.now(), updatedAt: Date.now() });
+
+    return jsonResponse({
+      uploadId, taskId, chunks, chunkSize: CHUNK_SIZE,
+      uploadedIndexes, githubUser: GITHUB_USER,
+      repo: uploadId, token: env.GITHUB_TOKEN
+    });
+  }
+
+  // ==================== 分片下载（多线程） ====================
+  if (path === '/api/download/chunk' && request.method === 'GET') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    const sid = url.searchParams.get('ssid');
+    const index = parseInt(url.searchParams.get('index'), 10);
+    if (!sid || isNaN(index)) return errorResponse('缺少参数');
+    try {
+      const resp = await githubFetchFile(sid, 'chunk_' + index, env);
+      const headers = new Headers();
+      headers.set('Content-Type', 'application/octet-stream');
+      headers.set('Cache-Control', 'public, max-age=3600');
+      headers.set('Access-Control-Allow-Origin', '*');
+      return new Response(resp.body, { status: 200, headers });
+    } catch(e) {
+      return errorResponse('分片下载失败: ' + e.message, 500);
+    }
+  }
 
   if (path === '/api/upload/start' && request.method === 'POST') {
     const forbid = requirePassword(request, env);
