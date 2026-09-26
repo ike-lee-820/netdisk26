@@ -2172,9 +2172,9 @@ async function renderPreview(){
         await loadScript('https://cdn.jsdelivr.net/npm/vue@3.4.21/dist/vue.global.prod.js');
       }
       var officeMap = {
-        docx: { js: 'https://cdn.jsdelivr.net/npm/@vue-office/docx@1.6.2/dist/index.umd.js', css: 'https://cdn.jsdelivr.net/npm/@vue-office/docx@1.6.2/lib/index.css', comp: 'VueOfficeDocx' },
-        xlsx: { js: 'https://cdn.jsdelivr.net/npm/@vue-office/excel@1.6.2/dist/index.umd.js', css: 'https://cdn.jsdelivr.net/npm/@vue-office/excel@1.6.2/lib/index.css', comp: 'VueOfficeExcel' },
-        pptx: { js: 'https://cdn.jsdelivr.net/npm/@vue-office/pptx@1.6.2/dist/index.umd.js', css: 'https://cdn.jsdelivr.net/npm/@vue-office/pptx@1.6.2/lib/index.css', comp: 'VueOfficePptx' }
+        docx: { js: 'https://unpkg.com/@vue-office/docx@2.0.0/lib/index.umd.js', css: 'https://unpkg.com/@vue-office/docx@2.0.0/lib/index.css', comp: 'VueOfficeDocx' },
+        xlsx: { js: 'https://unpkg.com/@vue-office/excel@2.0.0/lib/index.umd.js', css: 'https://cdn.jsdelivr.net/npm/@vue-office/excel@1.6.2/lib/index.css', comp: 'VueOfficeExcel' },
+        pptx: { js: 'https://unpkg.com/@vue-office/pptx@2.0.0/lib/index.umd.js', css: 'https://unpkg.com/@vue-office/pptx@2.0.0/lib/index.css', comp: 'VueOfficePptx' }
       };
       var cfg = officeMap[ext];
       try { await loadCSS(cfg.css); } catch(_){}
@@ -2229,8 +2229,8 @@ async function renderPreview(){
   if (IMAGE_EXTS.indexOf(ext) >= 0) {
     preview.innerHTML = '<div class="empty">正在加载图片...</div>';
     try {
-      await loadCSS('https://cdn.bootcdn.net/ajax/libs/viewerjs/1.11.7/viewer.min.css');
-      await loadScript('https://cdn.bootcdn.net/ajax/libs/viewerjs/1.11.7/viewer.min.js');
+      await loadCSS('https://cdn.jsdelivr.net/npm/viewerjs@1.11.7/dist/viewer.min.css');
+      await loadScript('https://cdn.jsdelivr.net/npm/viewerjs@1.11.7/dist/viewer.min.js');
       preview.innerHTML = '<div style="text-align:center;overflow:auto;max-height:75vh;">'
         + '<img id="preview-img" src="' + url + '" style="max-width:100%;max-height:70vh;cursor:zoom-in;border-radius:8px;display:block;margin:0 auto;" alt="' + escapeHtml(fileNode.name) + '">'
         + '</div>'
@@ -2813,7 +2813,7 @@ function shareExpiredPage(reason, themeCss) {
 function shareManagePage(themeCss) {
   const html = `<!DOCTYPE html><html><head>` + COMMON_HEAD + themeCss + `
   <style>
-    .share-card { padding:12px;border:1px solid var(--divider);border-radius:8px;margin-bottom:10px;background:#fff; }
+    .share-card { padding:12px;border:1px solid var(--divider);border-radius:8px;margin-bottom:10px;background:rgba(255,255,255,var(--card-opacity,1)); }
     .share-card .row { display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap; }
     .share-card .note { font-size:15px;font-weight:500; }
     .share-card .meta { font-size:12px;color:var(--text-sec); }
@@ -2852,6 +2852,8 @@ function shareManagePage(themeCss) {
           '<button data-act="copy" data-id="' + escapeHtml(s.id) + '">复制链接</button>' +
           '<button data-act="note" data-id="' + escapeHtml(s.id) + '">改备注</button>' +
           '<button data-act="pwd" data-id="' + escapeHtml(s.id) + '">改提取码</button>' +
+          '<button data-act="expire" data-id="' + escapeHtml(s.id) + '">改有效期</button>' +
+          '<button data-act="maxviews" data-id="' + escapeHtml(s.id) + '">改次数</button>' +
           '<button class="danger" data-act="del" data-id="' + escapeHtml(s.id) + '">删除</button>' +
           '</div></div>';
       }).join('');
@@ -2864,6 +2866,8 @@ function shareManagePage(themeCss) {
           if (act === 'copy') copyUrl(id);
           else if (act === 'note') editNote(id, s.note || '');
           else if (act === 'pwd') editPwd(id, s.password || '');
+          else if (act === 'expire') editExpire(id, s.expiresAt || 0);
+          else if (act === 'maxviews') editMaxViews(id, s.maxViews || 0);
           else if (act === 'del') delShare(id);
         };
       });
@@ -2904,6 +2908,48 @@ function shareManagePage(themeCss) {
     if (!confirm('确定删除此分享？')) return;
     fetch('/api/shares/' + id, { method: 'DELETE' }).then(function(r){
       if (r.ok) { showMsg('已删除'); loadShares(); } else showMsg('删除失败');
+    });
+  }
+
+
+  function editExpire(id, currentExpire){
+    var now = Date.now();
+    var defaultValue = '';
+    if (currentExpire && currentExpire > now) {
+      var d = new Date(currentExpire);
+      var pad = function(n){ return String(n).padStart(2, '0'); };
+      defaultValue = d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+    }
+    var input = prompt('输入新的到期时间（格式：YYYY-MM-DDTHH:MM，留空表示永久有效）：', defaultValue);
+    if (input === null) return;
+    var newExpire = null;
+    if (input.trim()) {
+      var t = new Date(input.trim()).getTime();
+      if (!isNaN(t)) newExpire = t;
+    }
+    fetch('/api/shares/' + id, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expiresAt: newExpire })
+    }).then(function(r){
+      if (r.ok) { showMsg('有效期已更新'); loadShares(); } else showMsg('更新失败');
+    });
+  }
+
+  function editMaxViews(id, currentMax){
+    var input = prompt('输入新的访问次数限制（留空或 0 表示无限次）：', currentMax || '');
+    if (input === null) return;
+    var newMax = null;
+    if (input.trim()) {
+      var n = parseInt(input.trim(), 10);
+      if (!isNaN(n) && n > 0) newMax = n;
+    }
+    fetch('/api/shares/' + id, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ maxViews: newMax })
+    }).then(function(r){
+      if (r.ok) { showMsg('访问次数已更新'); loadShares(); } else showMsg('更新失败');
     });
   }
 
