@@ -2049,7 +2049,7 @@ async function renderPreview(){
     try {
       var pdfjsLib = await import('/lib/cdnjs.cloudflare.com/ajax/libs/pdf.js/6.3.289/pdf.mjs');
       pdfjsLib.GlobalWorkerOptions.workerSrc = '/lib/cdnjs.cloudflare.com/ajax/libs/pdf.js/6.3.289/pdf.worker.mjs';
-      var pdf = await pdfjsLib.getDocument(url).promise;
+      var pdf = await pdfjsLib.getDocument({ url: url }).promise;
       var total = pdf.numPages;
       preview.innerHTML = '<div style="text-align:center;margin-bottom:10px;">' +
         '<button class="btn-secondary" id="pdf-prev" style="padding:6px 14px;border:none;border-radius:6px;cursor:pointer;margin-right:6px;">上一页</button>' +
@@ -2094,9 +2094,28 @@ async function renderPreview(){
     try {
       await loadCSS('/lib/vjs.zencdn.net/8.23.3/video-js.css');
       await loadScript('/lib/vjs.zencdn.net/8.23.3/video.js');
-      preview.innerHTML = '<video id="v-player" class="video-js vjs-big-play-centered vjs-fluid" controls preload="metadata" style="width:100%;height:70vh;background:#000;">' +
+      preview.innerHTML = '<video id="v-player" class="video-js vjs-big-play-centered vjs-16-9" controls preload="metadata" style="width:100%;background:#000;max-height:80vh;">' +
         '<source src="' + url + '" type="' + VIDEO_MIMES[ext] + '"></video>';
-      window.videojs('v-player', { fluid: true, aspectRatio: '16:9', playbackRates: [0.5, 1, 1.25, 1.5, 2] });
+      var player = window.videojs('v-player', {
+        playbackRates: [0.5, 1, 1.25, 1.5, 2],
+        controlBar: { pictureInPictureToggle: true },
+        html5: { vhs: { overrideNative: false } }
+      });
+      // 视频加载元数据后，根据实际宽高比调整容器
+      player.one('loadedmetadata', function(){
+        var vw = player.videoWidth();
+        var vh = player.videoHeight();
+        if (vw && vh) {
+          var ratio = vw / vh;
+          var el = player.el();
+          el.style.aspectRatio = vw + ' / ' + vh;
+          el.style.maxHeight = '80vh';
+          el.style.width = '100%';
+          el.style.height = 'auto';
+          // 移除 video.js 自动加的 padding-top 类
+          el.classList.remove('vjs-16-9');
+        }
+      });
       return;
     } catch(e) {
       console.error('Video.js 加载失败', e);
@@ -2111,8 +2130,10 @@ async function renderPreview(){
     try {
       await loadCSS('/lib/vjs.zencdn.net/8.23.3/video-js.css');
       await loadScript('/lib/vjs.zencdn.net/8.23.3/video.js');
-      preview.innerHTML = '<div style="max-width:600px;margin:40px auto;"><video id="a-player" class="video-js vjs-big-play-centered" controls preload="metadata" style="width:100%;"><source src="' + url + '" type="' + AUDIO_MIMES[ext] + '"></video></div>';
-      window.videojs('a-player');
+      preview.innerHTML = '<div style="max-width:700px;margin:40px auto;"><video id="a-player" class="video-js vjs-big-play-centered" controls preload="metadata" style="width:100%;"><source src="' + url + '" type="' + AUDIO_MIMES[ext] + '"></video></div>';
+      window.videojs('a-player', {
+        controlBar: { pictureInPictureToggle: false, fullscreenToggle: false }
+      });
       return;
     } catch(e) {
       preview.innerHTML = '<audio controls src="' + url + '" style="width:100%;"></audio>';
