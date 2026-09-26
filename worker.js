@@ -1117,6 +1117,20 @@ function getIcon(name){
   return 'insert_drive_file';
 }
 
+
+function setupMarquee(){
+  requestAnimationFrame(function(){
+    document.querySelectorAll('.file-name-wrap').forEach(function(wrap){
+      var name = wrap.querySelector('.file-name');
+      if (name && name.scrollWidth > wrap.clientWidth + 5) {
+        name.classList.add('marquee');
+      } else if (name) {
+        name.classList.remove('marquee');
+      }
+    });
+  });
+}
+
 async function loadList(){
   const data=await api('/api/structure?path='+encodeURIComponent(currentPath));
   if(!data) return;
@@ -1153,6 +1167,7 @@ async function loadList(){
     </div>\`;
   }).join('');
   updateSelectionUI();
+  setupMarquee();
 }
 
 document.getElementById('file-list').addEventListener('click', e=>{
@@ -1654,21 +1669,6 @@ async function uploadOne(file, dir, externalTaskId){
   // 启动本地定时渲染（防止某次分片卡住 UI 不刷新）
   const localTimer = setInterval(() => updateUI(), 500);
 
-  // ★ 初始化哈希器（xxh3-128，失败自动回退 SHA-256）
-  window.__fileHasher = null;
-  window.__hashAlgo = null;
-  try {
-    if (window.hashwasm && window.hashwasm.createXXHash128) {
-      // ★ createXXHash128 需要 seedLow 和 seedHigh 两个参数
-      window.__fileHasher = await window.hashwasm.createXXHash128(0, 0);
-      window.__fileHasher.init();
-      window.__hashAlgo = 'xxh3-128';
-      console.log('[hash] xxh3-128 initialized for', file.name);
-    } else {
-      console.warn('[hash] hashwasm 未加载或 createXXHash128 不可用');
-    }
-  } catch(e) { console.warn('[hash] xxh3 init failed', e); }
-
   try {
     // 请求上传参数
     const start = await api('/api/upload/start', {
@@ -1781,22 +1781,12 @@ async function uploadOne(file, dir, externalTaskId){
     // 全部完成
     clearInterval(localTimer);
     updateUI('注册中...');
-
-    // ★ 计算最终哈希
-    let fileHash = null;
-    let hashAlgo = null;
-    if (window.__fileHasher) {
-      try {
-        fileHash = window.__fileHasher.digest('hex');
-        hashAlgo = window.__hashAlgo;
-        console.log('[hash]', hashAlgo, '=', fileHash);
-      } catch(e) { console.warn('[hash] digest failed', e); }
     }
 
     await api('/api/upload/finish', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ uploadId, path, filename: file.name, size: fileSize, chunks: total, taskId, fileHash, hashAlgo })
+      body: JSON.stringify({ uploadId, path, filename: file.name, size: fileSize, chunks: total, taskId })
     });
 
     t.status = 'done';
@@ -2016,15 +2006,7 @@ function closeModal(){ document.getElementById('modal').classList.remove('show')
 bindShareModalEvents();
 loadList();
 
-// 加载 xxh3 哈希库（异步，不阻塞）
-(function(){
-  var s = document.createElement('script');
-  s.src = 'https://cdn.jsdelivr.net/npm/hash-wasm@4';
-  s.async = true;
-  s.onload = function(){ console.log('[hash] xxh3 loaded'); };
-  s.onerror = function(){ console.warn('[hash] xxh3 加载失败，将使用 SHA-256'); };
-  document.head.appendChild(s);
-})();
+
 
 // ★ 全局实时刷新：每 500ms 刷新任务列表 UI，每 2s 拉服务端
 setInterval(() => { if (typeof scheduleRenderTaskList === 'function') scheduleRenderTaskList(); }, 500);
@@ -2163,7 +2145,7 @@ async function load(){
     document.getElementById('file-meta').textContent = formatSize(fileNode.size) + ' · ' + new Date(fileNode.createdAt).toLocaleString();
     document.getElementById('title').textContent = fileNode.name;
     await renderPreview();
-    renderHashInfo();
+    setupTitleMarquee();
     loadSiblings();
   } catch(e) {
     preview.innerHTML = '<div class="empty">加载失败: ' + escapeHtml(e.message) + '</div>';
@@ -2171,102 +2153,30 @@ async function load(){
 }
 
 
-function renderHashInfo(){
-  if (!fileNode || !fileNode.fileHash) return;
-  var preview = document.getElementById('preview');
-  var algo = fileNode.hashAlgo || 'unknown';
-  var hash = fileNode.fileHash;
-  var html = '<div class="card" style="margin-top:12px;">' +
-    '<h3 style="margin-top:0;font-size:14px;color:var(--text-sec);">文件校验</h3>' +
-    '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">' +
-    '<code style="flex:1;background:#f5f5f5;padding:8px;border-radius:6px;font-size:12px;word-break:break-all;user-select:all;">' + escapeHtml(hash) + '</code>' +
-    '<button class="btn-secondary" onclick="copyHash()" style="padding:6px 12px;border:none;border-radius:6px;cursor:pointer;font-size:12px;">复制</button>' +
-    '<button class="btn-primary" id="verify-btn" onclick="verifyHash()" style="padding:6px 12px;border:none;border-radius:6px;cursor:pointer;font-size:12px;">验证</button>' +
-    '</div>' +
-    '<p style="font-size:12px;color:var(--text-sec);margin:8px 0 0 0;">算法：' + escapeHtml(algo) + '</p>' +
-    '<p id="verify-result" style="font-size:13px;margin:8px 0 0 0;"></p>' +
-    '</div>';
-  preview.insertAdjacentHTML('afterend', html);
-}
 
-function copyHash(){
-  if (!fileNode || !fileNode.fileHash) return;
-  copyText(fileNode.fileHash).then(function(){ showMsg('哈希已复制'); });
-}
 
-async function verifyHash(){
-  if (!fileNode || !fileNode.fileHash) return;
-  var btn = document.getElementById('verify-btn');
-  var result = document.getElementById('verify-result');
-  btn.disabled = true;
-  btn.textContent = '计算中...';
-  result.textContent = '正在下载并计算哈希...';
-  result.style.color = 'var(--text-sec)';
 
-  try {
-    var algo = fileNode.hashAlgo || '';
-    var hasher = null;
-    var shaChunks = [];
 
-    if (algo.indexOf('xxh3') >= 0) {
-      await loadScript('https://cdn.jsdelivr.net/npm/hash-wasm@4');
-      if (window.hashwasm && window.hashwasm.createXXHash128) {
-        hasher = await window.hashwasm.createXXHash128();
-        hasher.init();
-      }
+
+
+
+function setupTitleMarquee(){
+  setTimeout(function(){
+    var titleEl = document.getElementById('title');
+    if (!titleEl) return;
+    var container = titleEl.parentNode;
+    if (!container) return;
+    var cw = container.clientWidth;
+    var tw = titleEl.scrollWidth;
+    if (tw > cw) {
+      titleEl.style.display = 'inline-block';
+      titleEl.style.whiteSpace = 'nowrap';
+      titleEl.style.animation = 'marqueeTitle 8s linear infinite';
+      var style = document.createElement('style');
+      style.textContent = '@keyframes marqueeTitle { 0% { transform: translateX(0); } 50% { transform: translateX(calc(-1 * (100% - 100vw + 24px))); } 100% { transform: translateX(0); } }';
+      document.head.appendChild(style);
     }
-
-    var url = '/direct/' + fileNode.ssid + '/' + encodeURIComponent(fileNode.name);
-    var resp = await fetch(url);
-    var reader = resp.body.getReader();
-    var total = 0;
-    var lastTick = Date.now();
-
-    while (true) {
-      var chunk = await reader.read();
-      if (chunk.done) break;
-      total += chunk.value.byteLength;
-      if (hasher) {
-        hasher.update(chunk.value);
-      } else {
-        shaChunks.push(chunk.value);
-      }
-      if (Date.now() - lastTick > 300) {
-        result.textContent = '已下载 ' + formatSize(total) + '...';
-        lastTick = Date.now();
-      }
-    }
-
-    var computed = null;
-    if (hasher) {
-      computed = hasher.digest();
-    } else {
-      var combined = new Uint8Array(total);
-      var off = 0;
-      for (var i = 0; i < shaChunks.length; i++) { combined.set(shaChunks[i], off); off += shaChunks[i].byteLength; }
-      var hashBuf = await crypto.subtle.digest('SHA-256', combined);
-      computed = Array.from(new Uint8Array(hashBuf)).map(function(b){ return b.toString(16).padStart(2, '0'); }).join('');
-    }
-
-    if (computed === fileNode.fileHash) {
-      result.textContent = '✓ 校验通过，文件完整';
-      result.style.color = 'var(--success)';
-      showMsg('✓ 校验通过');
-    } else {
-      result.textContent = '✗ 校验失败！
-计算值: ' + computed + '
-存储值: ' + fileNode.fileHash;
-      result.style.color = 'var(--danger)';
-      result.style.whiteSpace = 'pre-wrap';
-      showMsg('✗ 校验失败');
-    }
-  } catch(e) {
-    result.textContent = '验证失败: ' + e.message;
-    result.style.color = 'var(--danger)';
-  } finally {
-    btn.disabled = false;
-    btn.textContent = '验证';
-  }
+  }, 100);
 }
 
 async function loadSiblings(){
@@ -2395,44 +2305,54 @@ async function renderPreview(){
     }
   }
 
-  // ===== Office 微软在线预览 =====
-  if (['docx','xlsx','pptx','doc','xls','ppt'].indexOf(ext) >= 0) {
-    var officeUrl = 'https://view.officeapps.live.com/op/embed.aspx?src=' + encodeURIComponent(absoluteUrl);
-    preview.innerHTML = '<iframe src="' + officeUrl + '" style="width:100%;height:75vh;border:1px solid var(--divider);border-radius:8px;background:#fff;"></iframe>' +
-      '<p style="font-size:12px;color:var(--text-sec);margin-top:8px;text-align:center;">由微软 Office Online 提供 · <a href="' + downloadUrl + '">下载原文件</a></p>';
-    return;
-  }
-
-  
-  // ===== 视频/音频：Plyr =====
-  if (VIDEO_MIMES[ext] || AUDIO_MIMES[ext]) {
-    preview.innerHTML = '<div class="empty">正在加载播放器...</div>';
+    // ===== Office (vue-office UMD) =====
+  if (['docx', 'xlsx', 'pptx'].indexOf(ext) >= 0) {
+    preview.innerHTML = '<div class="empty">正在加载 Office 预览...</div>';
     try {
-      await loadScript('https://cdn.bootcdn.net/ajax/libs/plyr/3.8.4/plyr.js');
-      await loadCSS('https://cdn.bootcdn.net/ajax/libs/plyr/3.8.4/plyr.css');
+      if (!window.Vue) {
+        await loadScript('https://cdn.jsdelivr.net/npm/vue@3.4.21/dist/vue.global.prod.js');
+      }
 
-      const isVideo = !!VIDEO_MIMES[ext];
-      const mediaType = isVideo ? 'video' : 'audio';
-      const style = isVideo ? 'width:100%;max-height:80vh;background:#000;' : 'width:100%;max-width:600px;margin:0 auto;';
-      const mime = isVideo ? VIDEO_MIMES[ext] : AUDIO_MIMES[ext];
+      var cdnMap = {
+        docx: {
+          js: 'https://unpkg.com/@vue-office/docx@2.0.0/lib/index.umd.js',
+          css: 'https://unpkg.com/@vue-office/docx@2.0.0/lib/index.css',
+          comp: 'VueOfficeDocx'
+        },
+        xlsx: {
+          js: 'https://unpkg.com/@vue-office/excel@2.0.0/lib/index.umd.js',
+          css: 'https://unpkg.com/@vue-office/excel@2.0.0/lib/index.css',
+          comp: 'VueOfficeExcel'
+        },
+        pptx: {
+          js: 'https://unpkg.com/@vue-office/pptx@2.0.0/lib/index.umd.js',
+          css: 'https://unpkg.com/@vue-office/pptx@2.0.0/lib/index.css',
+          comp: 'VueOfficePptx'
+        }
+      };
+      var c = cdnMap[ext];
+      await loadCSS(c.css);
+      await loadScript(c.js);
 
-      preview.innerHTML = '<div style="display:flex;justify-content:center;"><' + mediaType + ' id="plyr-player" controls style="' + style + '">'
-        + '<source src="' + url + '" type="' + mime + '">'
-        + '</' + mediaType + '></div>';
+      var Comp = window[c.comp];
+      if (!Comp) throw new Error('组件未注册: ' + c.comp);
 
-      const player = new Plyr('#plyr-player', {
-        controls: ['play', 'progress', 'settings'],
-        settings: ['speed'],
-        speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] },
-      });
+      var resp = await fetch(url);
+      if (!resp.ok) throw new Error('下载文件失败: ' + resp.status);
+      var buf = await resp.arrayBuffer();
 
-      if (!isVideo) player.fullscreen.disable();
+      preview.innerHTML = '<div id="office-preview" style="overflow:auto;max-height:75vh;background:#fff;border-radius:8px;min-height:500px;"></div>';
+
+      window.Vue.createApp({
+        render: function(){
+          return window.Vue.h(Comp, { src: buf, style: 'min-height:500px;' });
+        }
+      }).mount('#office-preview');
       return;
     } catch(e) {
-      console.error('Plyr 加载失败', e);
-      const fallbackType = VIDEO_MIMES[ext] ? 'video' : 'audio';
-      const fallbackMime = VIDEO_MIMES[ext] ? VIDEO_MIMES[ext] : AUDIO_MIMES[ext];
-      preview.innerHTML = '<' + fallbackType + ' controls src="' + url + '" style="width:100%;max-height:80vh;background:#000;"><source src="' + url + '" type="' + fallbackMime + '"></' + fallbackType + '>';
+      console.error('Office preview error:', e);
+      preview.innerHTML = '<div class="empty">Office 预览失败: ' + escapeHtml(e.message) +
+        '<br><br><a class="btn-primary" href="' + downloadUrl + '" style="display:inline-block;padding:10px 20px;border-radius:8px;text-decoration:none;">下载文件</a></div>';
       return;
     }
   }
@@ -2647,6 +2567,58 @@ async function clearAllData(){
 }
 
 function generateThemeCss(settings = {}) {
+  const primary = settings.primary || '#1976d2';
+  const bg = (settings.bg || '').replace(/["'`<>]/g, '');
+  const cardOpacity = settings.cardOpacity != null ? settings.cardOpacity : 1;
+  const fontFamily = (settings.fontFamily || '').replace(/["'`<>]/g, '');
+  const fontCss = (settings.fontCss || '').replace(/["'`<>]/g, '');
+  let fontCssFamily = (settings.fontCssFamily || '').replace(/["'`]/g, '').trim();
+  if (fontCssFamily && !/^[a-zA-Z0-9_-]+$/.test(fontCssFamily)) fontCssFamily = '"' + fontCssFamily + '"';
+  const SOURCE_HAN_SERIF_CSS = 'https://v6.gh-proxy.com/github.com/ike-lee-820/font/raw/main/siyuansongti/Font_Source_Han_Serif.css';
+  const isCustomFontFile = fontFamily && (fontFamily.startsWith('http') || fontFamily.startsWith('/'));
+  const isSourceHan = fontFamily === 'SourceHanSerifSC, serif';
+  const isCustomCss = Boolean(fontCss && fontCssFamily);
+  let link = '';
+  if (isSourceHan) link = '<link rel="stylesheet" href="' + SOURCE_HAN_SERIF_CSS + '">';
+  else if (isCustomCss) link = '<link rel="stylesheet" href="' + fontCss + '">';
+  let css = '<style id="theme-style">';
+  css += ':root { --primary:' + primary + '; }';
+
+  // 字体
+  if (isSourceHan) {
+    css += 'body, input, select, button, textarea { font-family: "SourceHanSerifSC", system-ui, sans-serif !important; }';
+  } else if (isCustomCss) {
+    css += 'body, input, select, button, textarea { font-family: ' + fontCssFamily + ', system-ui, sans-serif !important; }';
+  } else if (isCustomFontFile) {
+    css += '@font-face { font-family: "CustomNetdiskFont"; src: url(' + fontFamily + '); }';
+    css += 'body, input, select, button, textarea { font-family: "CustomNetdiskFont", system-ui, sans-serif !important; }';
+  } else {
+    css += 'body, input, select, button, textarea { font-family: system-ui, sans-serif !important; }';
+  }
+
+  // ★ 背景图：html 承载背景图，body 透明，禁用 ::before
+  if (bg) {
+    if (bg.startsWith('http') || bg.startsWith('data:') || bg.startsWith('/')) {
+      css += 'html { background-image: url(' + bg + ') !important; background-size: cover !important; background-attachment: fixed !important; background-position: center !important; background-repeat: no-repeat !important; }';
+      css += 'body { background: transparent !important; }';
+      css += 'body::before { display: none !important; content: none !important; }';
+    } else {
+      css += 'html, body { background: ' + bg + ' !important; }';
+      css += 'body::before { display: none !important; content: none !important; }';
+    }
+  }
+
+  // ★ 卡片透明度：改用 rgba()
+  const a = Math.max(0, Math.min(1, Number(cardOpacity)));
+  css += '.file-card, .sort-select, #btn-select-mode, .selection-bar, .selection-bar button { background-color: rgba(255,255,255,' + a + ') !important; }';
+  css += '.card { background-color: rgba(255,255,255,' + Math.min(1, a + 0.05) + ') !important; }';
+  css += '.modal { background-color: rgba(255,255,255,' + Math.min(1, a + 0.1) + ') !important; }';
+  css += '.task-item { background-color: rgba(255,255,255,' + a + ') !important; }';
+
+  css += '</style>';
+  return link + css;
+}
+) {
   const primary = settings.primary || '#1976d2';
   const bg = (settings.bg || '').replace(/["'`<>]/g, '');
   const cardOpacity = settings.cardOpacity != null ? settings.cardOpacity : 1;
@@ -3129,10 +3101,22 @@ function shareManagePage(themeCss) {
     document.getElementById('edit-note').value = s.note || '';
     document.getElementById('edit-pwd').value = s.password || '';
     document.getElementById('edit-maxviews').value = s.maxViews > 0 ? s.maxViews : '';
-    document.getElementById('edit-expire-preset').value = '';
-    document.getElementById('edit-expire-custom').value = '';
-    document.getElementById('edit-expire-custom').style.display = 'none';
-    currentPreset = '';
+    // ★ 读取当前 expiresAt 反推显示
+    if (s.expiresAt) {
+      var d = new Date(s.expiresAt);
+      var pad = function(n){ return String(n).padStart(2, '0'); };
+      document.getElementById('edit-expire-custom').value =
+        d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) +
+        'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+      document.getElementById('edit-expire-preset').value = 'custom';
+      document.getElementById('edit-expire-custom').style.display = 'block';
+      currentPreset = 'custom';
+    } else {
+      document.getElementById('edit-expire-preset').value = '';
+      document.getElementById('edit-expire-custom').value = '';
+      document.getElementById('edit-expire-custom').style.display = 'none';
+      currentPreset = '';
+    }
     document.getElementById('edit-modal').classList.add('show');
   }
 
