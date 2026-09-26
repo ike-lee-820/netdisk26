@@ -375,19 +375,27 @@ async function githubGetDownloadUrl(sid, path, env) {
   return data.download_url;
 }
 
-async function githubFetchFile(sid, path, env) {
+async function githubFetchFile(sid, path, env, extraHeaders) {
   const url = await githubGetDownloadUrl(sid, path, env);
   const proxiedUrl = url.startsWith(GH_PROXY) ? url : GH_PROXY + url;
+  const headers = {
+    'User-Agent': 'netdisk-worker',
+    'Accept-Encoding': 'identity'
+  };
+  if (extraHeaders) {
+    for (const k in extraHeaders) headers[k] = extraHeaders[k];
+  }
   let lastErr = null;
   for (let i = 0; i < 5; i++) {
-    const resp = await fetchWithTimeout(proxiedUrl, { headers: { 'User-Agent': 'netdisk-worker', 'Accept-Encoding': 'identity' } }, 60000);
-    if (resp.ok) return resp;
-    lastErr = `GitHub 下载失败: ${resp.status}`;
+    const resp = await fetchWithTimeout(proxiedUrl, { headers: headers }, 120000);
+    if (resp.ok || resp.status === 206) return resp;
+    lastErr = 'GitHub 下载失败: ' + resp.status;
     if (resp.status === 404) { await new Promise(r => setTimeout(r, 800)); continue; }
     throw new Error(lastErr);
   }
   throw new Error(lastErr);
 }
+
 
 async function githubStreamChunks(fileNode, writable, env) {
   const writer = writable.getWriter();
@@ -600,47 +608,153 @@ async function deleteFileStoragesConcurrently(nodes, env, concurrency = 32) {
   await Promise.all(runners);
 }
 
-async function buildDownloadResponse(node, filename, env, inline = false) {
+function handleBufferRange(buffer, rangeHeader, baseHeaders) {
+  const size = buffer.byteLength;
+  const headers = new Headers(baseHeaders);
+  headers.set('Accept-Ranges', 'bytes');
+  headers.set('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
+  if (!rangeHeader) {
+    headers.set('Content-Length', String(size));
+    return new Response(buffer, { status: 200, headers });
+  }
+  const m = rangeHeader.match(/^bytes=(\d+)-(\d*)$/);
+  if (!m) return new Response('Range 格式错误', { status: 416, headers });
+  let start = parseInt(m[1], 10);
+  let end = m[2] ? parseInt(m[2], 10) : size - 1;
+  if (isNaN(start) || isNaN(end) || start < 0 || end >= size || start > end) {
+    headers.set('Content-Range', 'bytes */' + size);
+    return new Response('Range 越界', { status: 416, headers });
+  }
+  const slice = buffer.slice(start, end + 1);
+  headers.set('Content-Range', 'bytes ' + start + '-' + end + '/' + size);
+  headers.set('Content-Length', String(end - start + 1));
+  return new Response(slice, { status: 206, headers });
+}
+
+async function buildDownloadResponse(request, node, filename, env, inline) {
+  if (inline === undefined) inline = false;
   const disp = inline ? 'inline' : 'attachment';
-  const headers = {
-    'Content-Disposition': `${disp}; filename*=UTF-8''${encodeURIComponent(filename)}`,
-    'Content-Type': getMime(filename)
+  const baseHeaders = {
+    'Content-Disposition': disp + "; filename*=UTF-8''" + encodeURIComponent(filename),
+    'Content-Type': getMime(filename),
+    'Accept-Ranges': 'bytes',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Accept-Ranges'
   };
+  const rangeHeader = request ? request.headers.get('Range') : null;
+
   try {
+    // ============ KV：内存切片 ============
     if (node.storage === 'kv') {
       const data = await getKV(node.ssid, env).get(node.ssid, { type: 'arrayBuffer' });
       if (!data) throw new Error('KV 数据丢失');
-      return new Response(data, { headers });
+      return handleBufferRange(data, rangeHeader, baseHeaders);
     }
-    if (node.chunks > 1) {
+
+    // ============ 单分片：直接转发 GitHub ============
+    if (node.chunks === 1) {
+      const extra = rangeHeader ? { 'Range': rangeHeader } : null;
+      const resp = await githubFetchFile(node.ssid, 'chunk_0', env, extra);
+      const outHeaders = new Headers(baseHeaders);
+      const cl = resp.headers.get('Content-Length');
+      const cr = resp.headers.get('Content-Range');
+      if (cl) outHeaders.set('Content-Length', cl);
+      if (cr) outHeaders.set('Content-Range', cr);
+      return new Response(resp.body, { status: resp.status, headers: outHeaders });
+    }
+
+    // ============ 多分片 ============
+    const fileSize = node.size;
+    const chunkCount = node.chunks;
+    const chunkSize = CHUNK_SIZE;
+
+    // ---- 无 Range：流式拼接 ----
+    if (!rangeHeader) {
       const { readable, writable } = new TransformStream();
       githubStreamChunks(node, writable, env);
-      return new Response(readable, { headers });
+      const outHeaders = new Headers(baseHeaders);
+      outHeaders.set('Content-Length', String(fileSize));
+      return new Response(readable, { status: 200, headers: outHeaders });
     }
-    if (node.chunks === 1) {
-      const resp = await githubFetchFile(node.ssid, 'chunk_0', env);
-      return new Response(resp.body, { headers });
+
+    // ---- 有 Range：解析并映射到分片 ----
+    const m = rangeHeader.match(/^bytes=(\d+)-(\d*)$/);
+    if (!m) {
+      return new Response('Range 格式错误', { status: 416, headers: { 'Content-Range': 'bytes */' + fileSize } });
     }
-    const resp = await githubFetchFile(node.ssid, node.githubPath || node.name || filename, env);
-    return new Response(resp.body, { headers });
+    let start = parseInt(m[1], 10);
+    let end = m[2] ? parseInt(m[2], 10) : fileSize - 1;
+    if (isNaN(start) || isNaN(end) || start < 0 || end >= fileSize || start > end) {
+      return new Response('Range 越界', { status: 416, headers: { 'Content-Range': 'bytes */' + fileSize } });
+    }
+
+    const startChunk = Math.floor(start / chunkSize);
+    const endChunk = Math.floor(end / chunkSize);
+    const totalLen = end - start + 1;
+
+    const outHeaders = new Headers(baseHeaders);
+    outHeaders.set('Content-Range', 'bytes ' + start + '-' + end + '/' + fileSize);
+    outHeaders.set('Content-Length', String(totalLen));
+
+    const { readable, writable } = new TransformStream();
+    (async function() {
+      const writer = writable.getWriter();
+      try {
+        for (let i = startChunk; i <= endChunk; i++) {
+          const resp = await githubFetchFile(node.ssid, 'chunk_' + i, env);
+          const isFirst = (i === startChunk);
+          const isLast = (i === endChunk);
+          if (!isFirst && !isLast) {
+            // 中间分片：整片流式
+            const reader = resp.body.getReader();
+            while (true) {
+              const r = await reader.read();
+              if (r.done) break;
+              await writer.write(r.value);
+            }
+          } else {
+            // 首/尾分片：读取后裁剪（单分片 ≤ 5MB）
+            const buf = await resp.arrayBuffer();
+            const view = new Uint8Array(buf);
+            let s = 0, e = view.byteLength;
+            if (isFirst) s = start - i * chunkSize;
+            if (isLast) e = Math.min(view.byteLength, end - i * chunkSize + 1);
+            await writer.write(view.subarray(s, e));
+          }
+        }
+      } catch (e) {
+        console.error('stream range error', e);
+        try { await writer.abort(e); } catch (_) {}
+        return;
+      }
+      try { await writer.close(); } catch (_) {}
+    })();
+
+    return new Response(readable, { status: 206, headers: outHeaders });
   } catch (e) {
+    console.error('buildDownloadResponse error', e);
     return errorResponse('文件下载失败: ' + e.message, 500);
   }
 }
 
+
+
 // ==================== 分享下载辅助 ====================
 
-async function buildShareFileResponse(node, env, inline = false) {
+async function buildShareFileResponse(request, node, env, inline = false) {
   const disp = inline ? 'inline' : 'attachment';
   const headers = {
     'Content-Disposition': `${disp}; filename*=UTF-8''${encodeURIComponent(node.name)}`,
     'Content-Type': getMime(node.name),
+    'Accept-Ranges': 'bytes',
+    'Access-Control-Allow-Origin': '*',
     'Cache-Control': 'no-store'
   };
   try {
     if (node.storage === 'kv') {
       const data = await getKV(node.ssid, env).get(node.ssid, { type: 'arrayBuffer' });
       if (!data) throw new Error('KV 数据丢失');
+      headers['Content-Length'] = String(data.byteLength);
       return new Response(data, { headers });
     }
     if (node.chunks > 1) {
@@ -650,14 +764,19 @@ async function buildShareFileResponse(node, env, inline = false) {
     }
     if (node.chunks === 1) {
       const resp = await githubFetchFile(node.ssid, 'chunk_0', env);
+      const cl = resp.headers.get('Content-Length');
+      if (cl) headers['Content-Length'] = cl;
       return new Response(resp.body, { headers });
     }
     const resp = await githubFetchFile(node.ssid, node.githubPath || node.name, env);
+    const cl = resp.headers.get('Content-Length');
+    if (cl) headers['Content-Length'] = cl;
     return new Response(resp.body, { headers });
   } catch (e) {
     return errorResponse('下载失败: ' + e.message, 500);
   }
 }
+
 
 async function buildShareZipResponse(files, env) {
   if (files.length === 0) return errorResponse('分享内容为空', 404);
@@ -1977,7 +2096,8 @@ function fileBody(node, filePath) {
     <div class="preview-box" id="preview"><div class="empty">正在加载预览…</div></div>
   </div>
   <div class="card" style="display:flex;gap:8px;flex-wrap:wrap;">
-    <a class="btn-primary" href="${downloadUrl}" style="display:inline-flex;align-items:center;gap:4px;padding:10px 16px;border:none;border-radius:8px;cursor:pointer;text-decoration:none;"><span class="material-icons">download</span> 下载</a>
+    <button class="btn-primary" onclick="multiThreadDownload()" style="display:inline-flex;align-items:center;gap:4px;padding:10px 16px;border:none;border-radius:8px;cursor:pointer;"><span class="material-icons">download</span> 下载</button>
+    <a class="btn-secondary" href="${downloadUrl}" style="display:inline-flex;align-items:center;gap:4px;padding:10px 16px;border:none;border-radius:8px;cursor:pointer;text-decoration:none;"><span class="material-icons">link</span> 直链</a>
     <button class="btn-secondary" onclick="multiThreadDownload()" style="display:inline-flex;align-items:center;gap:4px;padding:10px 16px;border:none;border-radius:8px;cursor:pointer;"><span class="material-icons">download_for_offline</span> 多线程下载</button>
     <button class="btn-secondary" onclick="shareFile()" style="padding:10px 16px;border:none;border-radius:8px;cursor:pointer;">分享</button>
     <button class="btn-secondary" onclick="copyDirectLink()" style="padding:10px 16px;border:none;border-radius:8px;cursor:pointer;">复制直链</button>
@@ -2274,46 +2394,151 @@ async function renderPreview(){
 }
 
 
+
+// ==================== 多线程分片下载 ====================
+var __dlState = null;
+
 async function multiThreadDownload(){
   if (!fileNode) { showMsg('文件未加载'); return; }
-  var totalChunks = fileNode.chunks || 1;
-  var CONCURRENCY = 8;
-  var chunks = new Array(totalChunks);
-  var cursor = 0;
-  var completed = 0;
-  var totalBytes = 0;
-  var startTime = Date.now();
+  if (__dlState) { showMsg('已有下载任务在进行'); return; }
 
-  showMsg('多线程下载中 (0/' + totalChunks + ')...');
+  var ssid = fileNode.ssid;
+  var fileName = fileNode.name;
 
-  var counter = 0;
-  var progressTimer = setInterval(function(){
-    if (completed > 0) {
-      var elapsed = (Date.now() - startTime) / 1000;
-      var speed = totalBytes / elapsed;
-      var speedStr = speed >= 1048576 ? (speed/1048576).toFixed(1)+' MB/s'
-        : speed >= 1024 ? (speed/1024).toFixed(1)+' KB/s' : speed.toFixed(0)+' B/s';
-      showMsg('下载 ' + completed + '/' + totalChunks + ' · ' + speedStr);
+  // 1. 获取分片元数据
+  var meta;
+  try {
+    meta = await api('/api/download/meta?ssid=' + encodeURIComponent(ssid));
+  } catch(e) {
+    showMsg('获取下载信息失败: ' + e.message);
+    return;
+  }
+
+  var totalChunks = meta.chunks || 1;
+  var chunkSize = meta.chunkSize || (5 * 1024 * 1024);
+
+  // 2. 单分片直接跳转
+  if (totalChunks === 1) {
+    location.href = '/direct/' + ssid + '/' + encodeURIComponent(fileName);
+    return;
+  }
+
+  // 3. 创建下载状态
+  __dlState = {
+    cancelled: false,
+    paused: false,
+    chunks: new Array(totalChunks),
+    completed: 0,
+    totalBytes: 0,
+    startTime: Date.now(),
+    lastBytes: 0,
+    lastTime: Date.now(),
+    smoothSpeed: 0
+  };
+
+  // 4. 创建进度 UI
+  var ui = document.createElement('div');
+  ui.id = 'dl-progress-ui';
+  ui.style.cssText = 'position:fixed;bottom:64px;left:50%;transform:translateX(-50%);width:90%;max-width:480px;background:#fff;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,.2);padding:16px;z-index:9999;';
+  ui.innerHTML = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">'
+    + '<span class="material-icons" style="color:var(--primary);">download</span>'
+    + '<span style="flex:1;font-size:14px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(fileName) + '</span>'
+    + '<span id="dl-close" class="material-icons" style="cursor:pointer;font-size:18px;color:var(--text-sec);">close</span>'
+    + '</div>'
+    + '<div style="height:6px;background:#e0e0e0;border-radius:3px;overflow:hidden;margin-bottom:8px;">'
+    + '<div id="dl-bar" style="height:100%;width:0%;background:var(--primary);transition:width .2s;"></div>'
+    + '</div>'
+    + '<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text-sec);">'
+    + '<span id="dl-status">准备中...</span>'
+    + '<span id="dl-speed"></span>'
+    + '</div>'
+    + '<div style="display:flex;gap:8px;margin-top:10px;">'
+    + '<button id="dl-pause" class="btn-secondary" style="flex:1;padding:8px;border:none;border-radius:6px;cursor:pointer;font-size:13px;">暂停</button>'
+    + '<button id="dl-cancel" class="btn-secondary" style="flex:1;padding:8px;border:none;border-radius:6px;cursor:pointer;font-size:13px;color:var(--danger);">取消</button>'
+    + '</div>';
+  document.body.appendChild(ui);
+
+  function updateUI(){
+    var st = __dlState;
+    if (!st) return;
+    var pct = Math.floor((st.completed / totalChunks) * 100);
+    var now = Date.now();
+    var dt = (now - st.lastTime) / 1000;
+    if (dt > 0.3) {
+      var instant = (st.totalBytes - st.lastBytes) / dt;
+      st.smoothSpeed = st.smoothSpeed * 0.6 + instant * 0.4;
+      st.lastBytes = st.totalBytes;
+      st.lastTime = now;
     }
-  }, 500);
+    document.getElementById('dl-bar').style.width = pct + '%';
+    document.getElementById('dl-status').textContent = st.completed + '/' + totalChunks + ' 分片 (' + pct + '%)';
+    document.getElementById('dl-speed').textContent = formatSpeed(st.smoothSpeed || 0);
+  }
 
-  async function worker() {
-    while (true) {
-      var i = cursor++;
-      if (i >= totalChunks) return;
+  var uiTimer = setInterval(updateUI, 500);
+
+  document.getElementById('dl-close').onclick = function(){
+    if (confirm('关闭下载窗口将中止下载，确定？')) {
+      __dlState.cancelled = true;
+      clearInterval(uiTimer);
+      ui.remove();
+      __dlState = null;
+      showMsg('下载已中止');
+    }
+  };
+  document.getElementById('dl-cancel').onclick = function(){
+    __dlState.cancelled = true;
+    clearInterval(uiTimer);
+    ui.remove();
+    __dlState = null;
+    showMsg('下载已取消');
+  };
+  document.getElementById('dl-pause').onclick = function(){
+    var st = __dlState;
+    if (!st) return;
+    st.paused = !st.paused;
+    this.textContent = st.paused ? '继续' : '暂停';
+  };
+
+  // 5. 并发下载分片
+  var CONCURRENCY = 8;
+  var cursor = 0;
+  var failedChunks = [];
+
+  async function downloadChunk(i){
+    while (__dlState && __dlState.paused) {
+      await new Promise(function(r){ setTimeout(r, 200); });
+    }
+    if (!__dlState || __dlState.cancelled) throw new Error('已取消');
+    var retries = 0;
+    while (retries < 3) {
       try {
-        var r = await fetch('/api/download/chunk?ssid=' + encodeURIComponent(fileNode.ssid) + '&index=' + i, {
+        var r = await fetch('/api/download/chunk?ssid=' + encodeURIComponent(ssid) + '&index=' + i, {
           credentials: 'same-origin'
         });
         if (!r.ok) throw new Error('HTTP ' + r.status);
         var blob = await r.blob();
-        chunks[i] = blob;
-        totalBytes += blob.size;
-        completed++;
+        __dlState.chunks[i] = blob;
+        __dlState.totalBytes += blob.size;
+        __dlState.completed++;
+        return;
       } catch(e) {
-        console.error('分片 ' + i + ' 失败', e);
-        throw e;
+        retries++;
+        if (retries >= 3) {
+          failedChunks.push(i);
+          throw e;
+        }
+        await new Promise(function(r){ setTimeout(r, 1000 * retries); });
       }
+    }
+  }
+
+  async function worker(){
+    while (true) {
+      if (!__dlState || __dlState.cancelled) return;
+      var i = cursor++;
+      if (i >= totalChunks) return;
+      await downloadChunk(i);
     }
   }
 
@@ -2323,26 +2548,45 @@ async function multiThreadDownload(){
       workers.push(worker());
     }
     await Promise.all(workers);
+    clearInterval(uiTimer);
 
-    clearInterval(progressTimer);
-    showMsg('合并中...');
+    if (failedChunks.length > 0) {
+      document.getElementById('dl-status').textContent = '部分分片失败：' + failedChunks.join(',');
+      throw new Error('有 ' + failedChunks.length + ' 个分片失败');
+    }
 
-    var finalBlob = new Blob(chunks, { type: 'application/octet-stream' });
+    if (!__dlState || __dlState.cancelled) return;
+
+    // 6. 合并
+    document.getElementById('dl-status').textContent = '合并中...';
+    var finalBlob = new Blob(__dlState.chunks, { type: 'application/octet-stream' });
     var blobUrl = URL.createObjectURL(finalBlob);
     var a = document.createElement('a');
     a.href = blobUrl;
-    a.download = fileNode.name;
+    a.download = fileName;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    setTimeout(function(){ URL.revokeObjectURL(blobUrl); }, 10000);
+    setTimeout(function(){ URL.revokeObjectURL(blobUrl); }, 30000);
 
-    showMsg('下载完成: ' + fileNode.name);
+    // 7. 完成
+    document.getElementById('dl-bar').style.width = '100%';
+    document.getElementById('dl-status').textContent = '完成 · ' + formatSize(__dlState.totalBytes);
+    document.getElementById('dl-speed').textContent = '';
+    setTimeout(function(){
+      ui.remove();
+      __dlState = null;
+    }, 3000);
+    showMsg('下载完成: ' + fileName);
   } catch(e) {
-    clearInterval(progressTimer);
-    showMsg('多线程下载失败: ' + e.message);
+    clearInterval(uiTimer);
+    if (__dlState && !__dlState.cancelled) {
+      document.getElementById('dl-status').textContent = '失败: ' + e.message;
+      document.getElementById('dl-status').style.color = 'var(--danger)';
+    }
   }
 }
+
 
 async function saveText(){
   var ta = document.getElementById('code-editor');
@@ -3241,6 +3485,49 @@ async function handleRequest(request, env, ctx = null) {
     }
   }
 
+  // ==================== 下载分片元数据 ====================
+  if (path === '/api/download/meta' && request.method === 'GET') {
+    const sid = url.searchParams.get('ssid');
+    if (!sid) return errorResponse('缺少 ssid');
+    const structure = await getStructure(env);
+    const allPaths = collectPaths(structure);
+    let node = null;
+    for (const p of allPaths) {
+      const n = getNode(structure, p);
+      if (n && n.type === 'file' && n.ssid === sid) { node = n; break; }
+    }
+    if (!node) return errorResponse('文件不存在', 404);
+    return jsonResponse({
+      ssid: node.ssid,
+      name: node.name,
+      size: node.size,
+      chunks: node.chunks || 1,
+      chunkSize: CHUNK_SIZE,
+      storage: node.storage
+    });
+  }
+
+  // ==================== 下载单个分片（前端多线程用）====================
+  if (path === '/api/download/chunk' && request.method === 'GET') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    const sid = url.searchParams.get('ssid');
+    const index = parseInt(url.searchParams.get('index'), 10);
+    if (!sid || isNaN(index)) return errorResponse('缺少参数');
+    try {
+      const resp = await githubFetchFile(sid, 'chunk_' + index, env);
+      const headers = new Headers();
+      headers.set('Content-Type', 'application/octet-stream');
+      headers.set('Cache-Control', 'public, max-age=3600');
+      headers.set('Access-Control-Allow-Origin', '*');
+      const cl = resp.headers.get('Content-Length');
+      if (cl) headers.set('Content-Length', cl);
+      return new Response(resp.body, { status: 200, headers });
+    } catch(e) {
+      return errorResponse('分片下载失败: ' + e.message, 500);
+    }
+  }
+
   if (path === '/api/upload/start' && request.method === 'POST') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
@@ -3606,7 +3893,7 @@ async function handleRequest(request, env, ctx = null) {
     const tree = buildShareTree(structure, share.paths);
     const node = relPath ? getNode(tree, relPath) : null;
     if (!node || node.type !== 'file') return errorResponse('文件不存在', 404);
-    return await buildShareFileResponse(node, env);
+    return await buildShareFileResponse(request, node, env);
   }
 
   // 分享内单文件预览
@@ -3624,7 +3911,7 @@ async function handleRequest(request, env, ctx = null) {
     const tree = buildShareTree(structure, share.paths);
     const node = relPath ? getNode(tree, relPath) : null;
     if (!node || node.type !== 'file') return errorResponse('文件不存在', 404);
-    return await buildShareFileResponse(node, env, true);
+    return await buildShareFileResponse(request, node, env, true);
   }
 
   // 分享内打包下载
@@ -3722,7 +4009,7 @@ async function handleRequest(request, env, ctx = null) {
       if (n && n.type === 'file' && n.ssid === id) { node = n; break; }
     }
     if (!node) return errorResponse('文件不存在', 404);
-    return buildDownloadResponse(node, filename || node.name, env, false);
+    return buildDownloadResponse(request, node, filename || node.name, env, false);
   }
 
   if (path.startsWith('/direct/')) {
@@ -3737,7 +4024,7 @@ async function handleRequest(request, env, ctx = null) {
       if (n && n.type === 'file' && n.ssid === id) { node = n; break; }
     }
     if (!node) return errorResponse('文件不存在', 404);
-    return buildDownloadResponse(node, filename || node.name, env, true);
+    return buildDownloadResponse(request, node, filename || node.name, env, true);
   }
 
   if (path.startsWith('/s/')) {
