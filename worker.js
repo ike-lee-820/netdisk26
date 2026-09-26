@@ -609,42 +609,6 @@ async function deleteFileStoragesConcurrently(nodes, env, concurrency = 32) {
 }
 
 
-// 处理断点续传的核心函数
-async function handleRangeRequest(request, env, node, isInline = false) {
-    const rangeHeader = request.headers.get('Range');
-    const headers = new Headers({
-        'Content-Type': getMime(node.name),
-        'Accept-Ranges': 'bytes',
-        'Access-Control-Allow-Origin': '*',
-        'Cache-Control': 'public, max-age=3600',
-    });
-    const disp = isInline ? 'inline' : 'attachment';
-    headers.set('Content-Disposition', `${disp}; filename*=UTF-8''${encodeURIComponent(node.name)}`);
-
-    const downloadUrl = await githubGetDownloadUrl(node.ssid, node.chunks > 1 ? 'chunk_0' : (node.githubPath || node.name), env);
-    
-    const fetchHeaders = new Headers({
-        'User-Agent': 'netdisk-worker',
-        'Accept-Encoding': 'identity'
-    });
-    if (rangeHeader) fetchHeaders.set('Range', rangeHeader);
-
-    const resp = await fetch(downloadUrl, { headers: fetchHeaders });
-
-    if (resp.status === 206) {
-        const contentRange = resp.headers.get('Content-Range');
-        const contentLength = resp.headers.get('Content-Length');
-        if (contentRange) headers.set('Content-Range', contentRange);
-        if (contentLength) headers.set('Content-Length', contentLength);
-        return new Response(resp.body, { status: 206, headers });
-    } else if (resp.status === 200) {
-        const contentLength = resp.headers.get('Content-Length');
-        if (contentLength) headers.set('Content-Length', contentLength);
-        return new Response(resp.body, { status: 200, headers });
-    } else {
-        return new Response('Failed to fetch file', { status: resp.status });
-    }
-}
 
 async function buildDownloadResponse(node, filename, env, inline = false) {
   const disp = inline ? 'inline' : 'attachment';
@@ -2251,7 +2215,7 @@ async function renderPreview(){
     preview.innerHTML = '<div class="empty">正在加载 ' + ext.toUpperCase() + ' 预览...</div>';
     try {
       if (!window.Vue) {
-        await import('https://cdn.bootcdn.net/ajax/libs/vue/3.4.21/vue.global.prod.js');
+        await loadScript('https://cdn.bootcdn.net/ajax/libs/vue/3.4.21/vue.global.prod.js');
       }
       var officeMap = {
         docx: {
@@ -3866,7 +3830,7 @@ const structure = await getStructure(env);
       if (n && n.type === 'file' && n.ssid === id) { node = n; break; }
     }
     if (!node) return errorResponse('文件不存在', 404);
-    return await handleRangeRequest(request, env, node, false);
+    return buildDownloadResponse(node, filename || node.name, env, false);
   }
 
   if (path.startsWith('/direct/')) {
