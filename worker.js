@@ -900,7 +900,7 @@ body { margin:0; font-family:system-ui,sans-serif; background:var(--bg); color:v
 .drawer.show { right:0; }
 .drawer-head { height:48px; background:var(--primary); color:#fff; display:flex; align-items:center; padding:0 12px; font-weight:500; font-size:15px; }
 .drawer-body { flex:1; overflow-y:auto; padding:8px; }
-.task-item { padding:8px 10px; border-bottom:1px solid var(--divider); }
+.task-item { transition: opacity .15s ease; padding:8px 10px; border-bottom:1px solid var(--divider); }
 .task-title { font-size:13px; font-weight:500; }
 .task-msg { font-size:11px; color:var(--text-sec); margin-top:1px; }
 .task-progress { height:3px; background:var(--divider); border-radius:1.5px; margin-top:5px; overflow:hidden; }
@@ -1795,11 +1795,21 @@ function debounce(fn, ms){
   };
 }
 
+var renderTaskListScheduled = false;
+function scheduleRenderTaskList(){
+  if (renderTaskListScheduled) return;
+  renderTaskListScheduled = true;
+  requestAnimationFrame(function(){
+    renderTaskListScheduled = false;
+    renderTaskList();
+  });
+}
+
 function renderTaskList(){
   const map = new Map();
   for (const t of localTasks.values()) map.set(t.id, t);
   for (const t of serverTasksCache) { if (!map.has(t.id)) map.set(t.id, t); }
-  const tasks = [...map.values()].sort((a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt));
+  const tasks = [...map.values()].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   const box = document.getElementById('task-list');
   if (!box) return;
   if (tasks.length === 0) { box.innerHTML = '<div class="empty">暂无任务</div>'; return; }
@@ -1855,39 +1865,87 @@ async function loadTasks(){
 const debouncedLoadTasks = debounce(loadTasks, 400);
 
 async function cancelTask(id, el){
+  // ★ 立即响应 UI
   cancelledUploads.add(id);
   const ctrl = abortControllers.get(id);
   if (ctrl) { try { ctrl.abort(); } catch(e){} }
   const t = localTasks.get(id);
-  if (t) { t.status = 'cancelled'; t.message = '已取消'; }
+  if (t) { t.status = 'cancelled'; t.message = '已取消'; t.updatedAt = Date.now(); }
   removeLocalTask(id);
-  if (el) { const item = el.closest('.task-item'); if (item) item.remove(); }
-  else { loadTasks(); }
-  try { await api('/api/tasks/' + id + '?cancel=1', { method: 'DELETE' }); }
-  catch (e) { showMsg('取消失败: ' + e.message); }
+  if (el) {
+    const item = el.closest('.task-item');
+    if (item) item.style.opacity = '0.3';
+  }
+  // 立即重新渲染
+  renderTaskList();
+  showMsg('已取消');
+
+  // ★ 异步通知服务器，不阻塞 UI
+  api('/api/tasks/' + id + '?cancel=1', { method: 'DELETE' })
+    .then(() => { serverTasksCache = (serverTasksCache || []).filter(x => x.id !== id); })
+    .catch(() => {})
+    .finally(() => { setTimeout(() => loadTasks(), 500); });
 }
+
 async function deleteTask(id, el){
+  // ★ 立即响应
   cancelledUploads.add(id);
   const ctrl = abortControllers.get(id);
   if (ctrl) { try { ctrl.abort(); } catch(e){} }
   removeLocalTask(id);
-  if (el) { const item = el.closest('.task-item'); if (item) item.remove(); }
-  try { await api('/api/tasks/' + id, { method: 'DELETE' }); }
-  catch (e) { showMsg('删除失败: ' + e.message); loadTasks(); }
-}
-async function clearDoneTasks(){
-  const serverTasks = await api('/api/tasks') || [];
-  const ids = [];
-  for (const t of serverTasks) {
-    if (t.status === 'done' || t.status === 'error' || t.status === 'cancelled') { ids.push(t.id); removeLocalTask(t.id); }
+  serverTasksCache = (serverTasksCache || []).filter(x => x.id !== id);
+
+  if (el) {
+    const item = el.closest('.task-item');
+    if (item) {
+      item.style.transition = 'opacity .15s';
+      item.style.opacity = '0';
+      setTimeout(() => item.remove(), 150);
+    }
   }
-  document.querySelectorAll('.task-item').forEach(el => el.remove());
-  if (!ids.length) { showMsg('没有可清除的任务'); return; }
-  try {
-    await api('/api/tasks/batch', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) });
-    showMsg('已清除 ' + ids.length + ' 个任务');
-  } catch (e) { showMsg('清除失败: ' + e.message); loadTasks(); }
+  renderTaskList();
+
+  // ★ 异步通知服务器
+  api('/api/tasks/' + id, { method: 'DELETE' }).catch(() => {});
 }
+
+async function clearDoneTasks(){
+  // ★ 立即从本地移除
+  const localIds = [];
+  for (const [id, t] of localTasks.entries()) {
+    if (t.status === 'done' || t.status === 'error' || t.status === 'cancelled') {
+      localIds.push(id);
+      localTasks.delete(id);
+    }
+  }
+  const serverIds = [];
+  if (serverTasksCache) {
+    for (const t of serverTasksCache) {
+      if (t.status === 'done' || t.status === 'error' || t.status === 'cancelled') {
+        serverIds.push(t.id);
+      }
+    }
+  }
+  const ids = [...new Set([...localIds, ...serverIds])];
+  if (ids.length === 0) { showMsg('没有可清除的任务'); return; }
+
+  // 立即清空服务器缓存中的已完成
+  if (serverTasksCache) {
+    serverTasksCache = serverTasksCache.filter(t =>
+      t.status !== 'done' && t.status !== 'error' && t.status !== 'cancelled'
+    );
+  }
+  renderTaskList();
+  showMsg('已清除 ' + ids.length + ' 个任务');
+
+  // ★ 异步通知服务器
+  api('/api/tasks/batch', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids })
+  }).catch(() => {});
+}
+
 
 document.getElementById('btn-tasks').onclick=()=>{ document.getElementById('task-drawer').classList.add('show'); loadTasks(); };
 document.getElementById('close-tasks').onclick=()=>{ document.getElementById('task-drawer').classList.remove('show'); if(taskTimer)clearInterval(taskTimer); };
@@ -1924,7 +1982,7 @@ bindShareModalEvents();
 loadList();
 
 // ★ 全局实时刷新：每 500ms 刷新任务列表 UI，每 2s 拉服务端
-setInterval(() => { if (typeof renderTaskList === 'function') renderTaskList(); }, 300);
+setInterval(() => { if (typeof scheduleRenderTaskList === 'function') scheduleRenderTaskList(); }, 500);
 setInterval(() => { loadTasks(); }, 3000);   // 只同步最终状态，间隔拉长
 </script>
 `;
