@@ -121,6 +121,14 @@ async function d1Delete(env, key) {
   await getD1(env).prepare('DELETE FROM kv_store WHERE key = ?').bind(key).run();
 }
 
+// 文件结构写操作互斥锁（防并发覆盖）
+let structureLock = Promise.resolve();
+function withStructureLock(fn) {
+  const result = structureLock.then(fn, fn);
+  structureLock = result.then(() => {}, () => {});
+  return result;
+}
+
 async function getStructure(env) {
   return await d1Get(env, 'file_structure', { type: 'root', name: '', children: {}, createdAt: Date.now() });
 }
@@ -600,6 +608,44 @@ async function deleteFileStoragesConcurrently(nodes, env, concurrency = 32) {
   await Promise.all(runners);
 }
 
+
+// 处理断点续传的核心函数
+async function handleRangeRequest(request, env, node, isInline = false) {
+    const rangeHeader = request.headers.get('Range');
+    const headers = new Headers({
+        'Content-Type': getMime(node.name),
+        'Accept-Ranges': 'bytes',
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'public, max-age=3600',
+    });
+    const disp = isInline ? 'inline' : 'attachment';
+    headers.set('Content-Disposition', `${disp}; filename*=UTF-8''${encodeURIComponent(node.name)}`);
+
+    const downloadUrl = await githubGetDownloadUrl(node.ssid, node.chunks > 1 ? 'chunk_0' : (node.githubPath || node.name), env);
+    
+    const fetchHeaders = new Headers({
+        'User-Agent': 'netdisk-worker',
+        'Accept-Encoding': 'identity'
+    });
+    if (rangeHeader) fetchHeaders.set('Range', rangeHeader);
+
+    const resp = await fetch(downloadUrl, { headers: fetchHeaders });
+
+    if (resp.status === 206) {
+        const contentRange = resp.headers.get('Content-Range');
+        const contentLength = resp.headers.get('Content-Length');
+        if (contentRange) headers.set('Content-Range', contentRange);
+        if (contentLength) headers.set('Content-Length', contentLength);
+        return new Response(resp.body, { status: 206, headers });
+    } else if (resp.status === 200) {
+        const contentLength = resp.headers.get('Content-Length');
+        if (contentLength) headers.set('Content-Length', contentLength);
+        return new Response(resp.body, { status: 200, headers });
+    } else {
+        return new Response('Failed to fetch file', { status: resp.status });
+    }
+}
+
 async function buildDownloadResponse(node, filename, env, inline = false) {
   const disp = inline ? 'inline' : 'attachment';
   const headers = {
@@ -812,6 +858,7 @@ const COMMON_HEAD = `
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/plyr/3.8.4/plyr.css" />
 <style>
 :root { --primary:#1976d2; --surface:#fff; --bg:#f5f5f5; --divider:#e0e0e0; --text:#212121; --text-sec:#757575; --danger:#d32f2f; --success:#388e3c; }
 * { box-sizing:border-box; }
@@ -2088,60 +2135,41 @@ async function renderPreview(){
     return;
   }
 
-  // ===== 视频 =====
-  if (VIDEO_MIMES[ext]) {
+  
+  // ===== 视频/音频：Plyr =====
+  if (VIDEO_MIMES[ext] || AUDIO_MIMES[ext]) {
     preview.innerHTML = '<div class="empty">正在加载播放器...</div>';
     try {
-      await loadCSS('/lib/vjs.zencdn.net/8.23.3/video-js.css');
-      await loadScript('/lib/vjs.zencdn.net/8.23.3/video.js');
-      preview.innerHTML = '<video id="v-player" class="video-js vjs-big-play-centered vjs-16-9" controls preload="metadata" style="width:100%;background:#000;max-height:80vh;">' +
-        '<source src="' + url + '" type="' + VIDEO_MIMES[ext] + '"></video>';
-      var player = window.videojs('v-player', {
-        playbackRates: [0.5, 1, 1.25, 1.5, 2],
-        controlBar: { pictureInPictureToggle: true },
-        html5: { vhs: { overrideNative: false } }
+      await loadScript('https://cdn.bootcdn.net/ajax/libs/plyr/3.8.4/plyr.js');
+      await loadCSS('https://cdn.bootcdn.net/ajax/libs/plyr/3.8.4/plyr.css');
+
+      const isVideo = !!VIDEO_MIMES[ext];
+      const mediaType = isVideo ? 'video' : 'audio';
+      const style = isVideo ? 'width:100%;max-height:80vh;background:#000;' : 'width:100%;max-width:600px;margin:0 auto;';
+      const mime = isVideo ? VIDEO_MIMES[ext] : AUDIO_MIMES[ext];
+
+      preview.innerHTML = `<div style="display:flex;justify-content:center;"><${mediaType} id="plyr-player" controls style="${style}">
+        <source src="${url}" type="${mime}">
+      </${mediaType}></div>`;
+
+      const player = new Plyr('#plyr-player', {
+        controls: ['play', 'progress', 'settings'],
+        settings: ['speed'],
+        speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] },
       });
-      // 视频加载元数据后，根据实际宽高比调整容器
-      player.one('loadedmetadata', function(){
-        var vw = player.videoWidth();
-        var vh = player.videoHeight();
-        if (vw && vh) {
-          var ratio = vw / vh;
-          var el = player.el();
-          el.style.aspectRatio = vw + ' / ' + vh;
-          el.style.maxHeight = '80vh';
-          el.style.width = '100%';
-          el.style.height = 'auto';
-          // 移除 video.js 自动加的 padding-top 类
-          el.classList.remove('vjs-16-9');
-        }
-      });
+
+      if (!isVideo) player.fullscreen.disable();
       return;
     } catch(e) {
-      console.error('Video.js 加载失败', e);
-      preview.innerHTML = '<video controls playsinline style="width:100%;max-height:70vh;background:#000;"><source src="' + url + '" type="' + VIDEO_MIMES[ext] + '"></video>';
+      console.error('Plyr 加载失败', e);
+      const fallbackType = VIDEO_MIMES[ext] ? 'video' : 'audio';
+      const fallbackMime = VIDEO_MIMES[ext] ? VIDEO_MIMES[ext] : AUDIO_MIMES[ext];
+      preview.innerHTML = `<${fallbackType} controls src="${url}" style="width:100%;max-height:80vh;background:#000;"><source src="${url}" type="${fallbackMime}"></${fallbackType}>`;
       return;
     }
   }
 
-  // ===== 音频 =====
-  if (AUDIO_MIMES[ext]) {
-    preview.innerHTML = '<div class="empty">正在加载播放器...</div>';
-    try {
-      await loadCSS('/lib/vjs.zencdn.net/8.23.3/video-js.css');
-      await loadScript('/lib/vjs.zencdn.net/8.23.3/video.js');
-      preview.innerHTML = '<div style="max-width:700px;margin:40px auto;"><video id="a-player" class="video-js vjs-big-play-centered" controls preload="metadata" style="width:100%;"><source src="' + url + '" type="' + AUDIO_MIMES[ext] + '"></video></div>';
-      window.videojs('a-player', {
-        controlBar: { pictureInPictureToggle: false, fullscreenToggle: false }
-      });
-      return;
-    } catch(e) {
-      preview.innerHTML = '<audio controls src="' + url + '" style="width:100%;"></audio>';
-      return;
-    }
-  }
-
-  // ===== 图片 =====
+// ===== 图片 =====
   if (IMAGE_EXTS.indexOf(ext) >= 0) {
     preview.innerHTML = '<div style="text-align:center;overflow:auto;max-height:75vh;">' +
       '<img id="preview-img" src="' + url + '" data-zoomed="0" style="max-width:100%;max-height:70vh;cursor:zoom-in;border-radius:8px;" onclick="toggleImageZoom(this)" alt="' + escapeHtml(fileNode.name) + '">' +
@@ -2903,7 +2931,8 @@ async function handleRequest(request, env, ctx = null) {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
     const body = await request.json();
-    const structure = await getStructure(env);
+    await withStructureLock(async () => {
+const structure = await getStructure(env);
     const parts = body.path.split('/').filter(Boolean);
     let parent = structure;
     for (const p of parts) {
@@ -2911,6 +2940,7 @@ async function handleRequest(request, env, ctx = null) {
       parent = parent.children[p];
     }
     await saveStructure(env, structure);
+    });
     return jsonResponse({ ok: true });
   }
 
@@ -2931,9 +2961,11 @@ async function handleRequest(request, env, ctx = null) {
         headers: { 'Authorization': `token ${env.GITHUB_TOKEN}`, 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json', 'User-Agent': 'netdisk-worker' },
         body: JSON.stringify({ message: 'text', content: base64 })
       }, 60000);
-      const structure = await getStructure(env);
+      await withStructureLock(async () => {
+const structure = await getStructure(env);
       setNode(structure, body.path, { type: 'file', name, ssid: id, storage: 'github', size: content.byteLength, chunks: 1, createdAt: Date.now() });
       await saveStructure(env, structure);
+    });
       await updateTask(env, taskId, { status: 'done', message: '完成', progress: 100 });
     } catch (e) {
       await updateTask(env, taskId, { status: 'error', message: e.message || '保存失败', progress: 0 });
@@ -3011,11 +3043,13 @@ async function handleRequest(request, env, ctx = null) {
       return errorResponse('分片缺失 ' + missing.length + ' 个: ' + missing.slice(0, 5).join(',') + (missing.length > 5 ? '...' : ''), 400);
     }
 
-    const structure = await getStructure(env);
+    await withStructureLock(async () => {
+const structure = await getStructure(env);
     const oldNode = getNode(structure, filePath);
     if (oldNode && oldNode.type === 'file') { try { await deleteFileStorage(oldNode, env); } catch (e) {} }
     setNode(structure, filePath, { type: 'file', name: filename, ssid: uploadId, storage: 'github', size, chunks, createdAt: Date.now() });
     await saveStructure(env, structure);
+    });
     await updateTask(env, taskId, { status: 'done', message: '完成', progress: 100 });
     return jsonResponse({ ok: true });
   }
@@ -3036,7 +3070,8 @@ async function handleRequest(request, env, ctx = null) {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
     const p = url.searchParams.get('path') || '';
-    const structure = await getStructure(env);
+    await withStructureLock(async () => {
+const structure = await getStructure(env);
     const node = getNode(structure, p);
     if (!node) return errorResponse('不存在', 404);
     const filesToDelete = [];
@@ -3049,6 +3084,7 @@ async function handleRequest(request, env, ctx = null) {
     }
     deleteNode(structure, p);
     await saveStructure(env, structure);
+    });
     const bgTask = (async () => { try { await deleteFileStoragesConcurrently(filesToDelete, env, 32); } catch (e) {} })();
     if (ctx && ctx.waitUntil) ctx.waitUntil(bgTask); else bgTask.catch(() => {});
     return jsonResponse({ ok: true });
@@ -3058,9 +3094,11 @@ async function handleRequest(request, env, ctx = null) {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
     const body = await request.json();
-    const structure = await getStructure(env);
+    await withStructureLock(async () => {
+const structure = await getStructure(env);
     renameNode(structure, body.path, body.newName);
     await saveStructure(env, structure);
+    });
     return jsonResponse({ ok: true });
   }
 
@@ -3068,7 +3106,8 @@ async function handleRequest(request, env, ctx = null) {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
     const body = await request.json();
-    const structure = await getStructure(env);
+    await withStructureLock(async () => {
+const structure = await getStructure(env);
     const paths = Array.isArray(body.paths) ? body.paths : [body.path];
     const errors = [];
     for (const p of paths) {
@@ -3076,6 +3115,7 @@ async function handleRequest(request, env, ctx = null) {
       if (!res.ok) errors.push(`${p}: ${res.error}`);
     }
     await saveStructure(env, structure);
+    });
     if (errors.length) return errorResponse(errors.join('; '), 400);
     return jsonResponse({ ok: true });
   }
@@ -3084,7 +3124,8 @@ async function handleRequest(request, env, ctx = null) {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
     const body = await request.json();
-    const structure = await getStructure(env);
+    await withStructureLock(async () => {
+const structure = await getStructure(env);
     const paths = Array.isArray(body.paths) ? body.paths : [body.path];
     const errors = [];
     for (const p of paths) {
@@ -3092,6 +3133,7 @@ async function handleRequest(request, env, ctx = null) {
       if (!res.ok) errors.push(`${p}: ${res.error}`);
     }
     await saveStructure(env, structure);
+    });
     if (errors.length) return errorResponse(errors.join('; '), 400);
     return jsonResponse({ ok: true });
   }
@@ -3101,7 +3143,8 @@ async function handleRequest(request, env, ctx = null) {
     if (forbid) return forbid;
     const body = await request.json();
     const paths = body.paths || [];
-    const structure = await getStructure(env);
+    await withStructureLock(async () => {
+const structure = await getStructure(env);
     const filesToDelete = [];
     for (const p of paths) {
       const node = getNode(structure, p);
@@ -3116,6 +3159,7 @@ async function handleRequest(request, env, ctx = null) {
       deleteNode(structure, p);
     }
     await saveStructure(env, structure);
+    });
     const bgTask = (async () => { try { await deleteFileStoragesConcurrently(filesToDelete, env, 32); } catch (e) {} })();
     if (ctx && ctx.waitUntil) ctx.waitUntil(bgTask); else bgTask.catch(() => {});
     return jsonResponse({ ok: true });
@@ -3125,7 +3169,8 @@ async function handleRequest(request, env, ctx = null) {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
     const body = await request.json();
-    const structure = await getStructure(env);
+    await withStructureLock(async () => {
+const structure = await getStructure(env);
     const node = getNode(structure, body.path);
     if (!node || node.type !== 'file') return errorResponse('文件不存在', 404);
     const content = new TextEncoder().encode(body.content || '');
@@ -3137,6 +3182,7 @@ async function handleRequest(request, env, ctx = null) {
     }, 60000);
     node.size = content.byteLength;
     await saveStructure(env, structure);
+    });
     return jsonResponse({ ok: true });
   }
 
@@ -3423,7 +3469,7 @@ async function handleRequest(request, env, ctx = null) {
       if (n && n.type === 'file' && n.ssid === id) { node = n; break; }
     }
     if (!node) return errorResponse('文件不存在', 404);
-    return buildDownloadResponse(node, filename || node.name, env, false);
+    return await handleRangeRequest(request, env, node, false);
   }
 
   if (path.startsWith('/direct/')) {
@@ -3438,7 +3484,7 @@ async function handleRequest(request, env, ctx = null) {
       if (n && n.type === 'file' && n.ssid === id) { node = n; break; }
     }
     if (!node) return errorResponse('文件不存在', 404);
-    return buildDownloadResponse(node, filename || node.name, env, true);
+    return handleRangeRequest(request, env, node, true);
   }
 
   if (path.startsWith('/s/')) {
