@@ -1534,6 +1534,7 @@ async function uploadFiles(files){
 
 // 上传单个文件：客户端直传 GitHub
 async function uploadOne(file, dir, externalTaskId){
+  // 允许所有文件后缀上传
   const path = dir ? dir + '/' + file.name : file.name;
   const taskId = externalTaskId || genTaskId();
   cancelledUploads.delete(taskId);
@@ -2131,8 +2132,10 @@ async function renderPreview(){
   if (ext === 'pdf') {
     preview.innerHTML = '<div class="empty">正在加载 PDF...</div>';
     try {
+      // PDF.js v6 必须使用 ES Module 导入
       var pdfjsLib = await import('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/6.3.289/pdf.min.mjs');
       pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/6.3.289/pdf.worker.min.mjs';
+      // v6 的 getDocument 只接受 { url } 对象，且会自动处理 blob 转换
       var pdf = await pdfjsLib.getDocument({ url: url }).promise;
       var total = pdf.numPages;
       preview.innerHTML = '<div style="text-align:center;margin-bottom:10px;">'
@@ -2229,8 +2232,8 @@ async function renderPreview(){
   if (IMAGE_EXTS.indexOf(ext) >= 0) {
     preview.innerHTML = '<div class="empty">正在加载图片...</div>';
     try {
-      await loadCSS('https://cdn.jsdelivr.net/npm/viewerjs@1.11.7/dist/viewer.min.css');
-      await loadScript('https://cdn.jsdelivr.net/npm/viewerjs@1.11.7/dist/viewer.min.js');
+      await loadCSS('https://cdn.bootcdn.net/ajax/libs/viewerjs/1.11.8/viewer.css');
+      await loadScript('https://cdn.bootcdn.net/ajax/libs/viewerjs/1.11.8/viewer.js');
       preview.innerHTML = '<div style="text-align:center;overflow:auto;max-height:75vh;">'
         + '<img id="preview-img" src="' + url + '" style="max-width:100%;max-height:70vh;cursor:zoom-in;border-radius:8px;display:block;margin:0 auto;" alt="' + escapeHtml(fileNode.name) + '">'
         + '</div>'
@@ -3118,6 +3121,7 @@ async function handleRequest(request, env, ctx = null) {
     const body = await request.json();
     const filename = body.filename, size = body.size, filePath = body.path;
     if (!filename || size == null || !filePath) return errorResponse('缺少参数');
+    // 允许所有文件后缀上传
     const uploadId = ssid();
     const taskId = body.taskId || ssid();
     const chunks = Math.max(1, Math.ceil(size / CHUNK_SIZE));
