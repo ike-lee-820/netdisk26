@@ -2184,9 +2184,9 @@ async function renderPreview(){
         await loadScript('https://cdn.jsdelivr.net/npm/vue@3.4.21/dist/vue.global.prod.js');
       }
       var officeMap = {
-        docx: { js: 'https://cdn.jsdelivr.net/npm/vue-office@0.0.5/lib/index.js', css: 'https://cdn.jsdelivr.net/npm/vue-office@0.0.5/lib/index.css', comp: 'VueOfficeDocx' },
-        xlsx: { js: 'https://cdn.jsdelivr.net/npm/vue-office@0.0.5/lib/index.js', css: 'https://cdn.jsdelivr.net/npm/vue-office@0.0.5/lib/index.css', comp: 'VueOfficeExcel' },
-        pptx: { js: 'https://cdn.jsdelivr.net/npm/vue-office@0.0.5/lib/index.js', css: 'https://cdn.jsdelivr.net/npm/vue-office@0.0.5/lib/index.css', comp: 'VueOfficePptx' }
+        docx: { js: 'https://cdn.jsdelivr.net/npm/@vue-office/docx@2.0.0/lib/index.umd.js', css: 'https://cdn.jsdelivr.net/npm/@vue-office/docx@2.0.0/lib/index.css', comp: 'VueOfficeDocx' },
+        xlsx: { js: 'https://cdn.jsdelivr.net/npm/@vue-office/excel@2.0.0/lib/index.umd.js', css: 'https://cdn.jsdelivr.net/npm/@vue-office/excel@2.0.0/lib/index.css', comp: 'VueOfficeExcel' },
+        pptx: { js: 'https://cdn.jsdelivr.net/npm/@vue-office/pptx@2.0.0/lib/index.umd.js', css: 'https://cdn.jsdelivr.net/npm/@vue-office/pptx@2.0.0/lib/index.css', comp: 'VueOfficePptx' }
       };
       var cfg = officeMap[ext];
       try { await loadCSS(cfg.css); } catch(_){}
