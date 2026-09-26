@@ -2659,43 +2659,6 @@ function generateThemeCss(settings = {}) {
   css += '</style>';
   return link + css;
 }
-function generateThemeCss(settings = {}) {
-  const primary = settings.primary || '#1976d2';
-  const bg = (settings.bg || '').replace(/["'`<>]/g, '');
-  const cardOpacity = settings.cardOpacity != null ? settings.cardOpacity : 1;
-  const fontFamily = (settings.fontFamily || '').replace(/["'`<>]/g, '');
-  const fontCss = (settings.fontCss || '').replace(/["'`<>]/g, '');
-  let fontCssFamily = (settings.fontCssFamily || '').replace(/["'`]/g, '').trim();
-  if (fontCssFamily && !/^[a-zA-Z0-9_-]+$/.test(fontCssFamily)) fontCssFamily = '"' + fontCssFamily + '"';
-  const SOURCE_HAN_SERIF_CSS = 'https://v6.gh-proxy.com/github.com/ike-lee-820/font/raw/main/siyuansongti/Font_Source_Han_Serif.css';
-  const isCustomFontFile = fontFamily && (fontFamily.startsWith('http') || fontFamily.startsWith('/'));
-  const isSourceHan = fontFamily === 'SourceHanSerifSC, serif';
-  const isCustomCss = Boolean(fontCss && fontCssFamily);
-  let link = '';
-  if (isSourceHan) link = '<link rel="stylesheet" href="' + SOURCE_HAN_SERIF_CSS + '">';
-  else if (isCustomCss) link = '<link rel="stylesheet" href="' + fontCss + '">';
-  let css = '<style id="theme-style">';
-  css += ':root { --primary:' + primary + '; }';
-  if (isSourceHan) css += 'body, input, select, button, textarea { font-family: "SourceHanSerifSC", system-ui, sans-serif !important; }';
-  else if (isCustomCss) css += 'body, input, select, button, textarea { font-family: ' + fontCssFamily + ', system-ui, sans-serif !important; }';
-  else if (isCustomFontFile) {
-    css += '@font-face { font-family: "CustomNetdiskFont"; src: url(' + fontFamily + '); }';
-    css += 'body, input, select, button, textarea { font-family: "CustomNetdiskFont", system-ui, sans-serif !important; }';
-  } else css += 'body, input, select, button, textarea { font-family: system-ui, sans-serif !important; }';
-  if (bg) {
-    if (bg.startsWith('http') || bg.startsWith('data:') || bg.startsWith('/')) {
-      css += 'html, body { background: transparent !important; }';
-      css += 'body::before { content:""; position:fixed; inset:0; z-index:-1; background-image: url(' + bg + '); background-size: cover; background-attachment: fixed; background-position: center; }';
-    } else css += 'html, body { background: ' + bg + ' !important; }';
-  }
-  const alpha = Math.round(cardOpacity * 255).toString(16).padStart(2, '0');
-  const cardBg = cardOpacity < 1 ? 'ffffff' + alpha : 'ffffff';
-  css += '.file-card, .sort-select, #btn-select-mode, .selection-bar, .selection-bar button { background-color: #' + cardBg + ' !important; }';
-  css += '</style>';
-  return link + css;
-}
-
-
 function sharePageV3(share, tree, themeCss) {
   const shareIdJson = JSON.stringify(share.id);
   const hasPassword = Boolean(share.password);
