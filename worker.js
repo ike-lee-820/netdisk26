@@ -2329,7 +2329,7 @@ async function renderPreview(){
         + '<source src="' + url + '" type="' + mm + '">'
         + '</' + mediaType + '></div>';
       new Plyr('#plyr-player', {
-        controls: ['play', 'progress', 'settings'],
+        controls: ['play', 'progress', 'settings', 'fullscreen'],
         settings: ['speed'],
         speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] }
       });
