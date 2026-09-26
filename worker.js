@@ -2141,8 +2141,9 @@ async function renderPreview(){
     preview.innerHTML = '<div class="empty">正在加载 PDF...</div>';
     try {
       // PDF.js v6 必须使用 ES Module 导入
-      var pdfjsLib = await import('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/6.3.289/pdf.min.mjs');
-      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/6.3.289/pdf.worker.min.mjs';
+      await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js');
+      var pdfjsLib = window.pdfjsLib;
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
       // v6 的 getDocument 只接受 { url } 对象，且会自动处理 blob 转换
       var pdf = await pdfjsLib.getDocument({ url: url }).promise;
       var total = pdf.numPages;
