@@ -858,7 +858,7 @@ const COMMON_HEAD = `
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
-<link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/plyr/3.8.4/plyr.css" />
+<link rel="stylesheet" href="https://cdn.plyr.io/3.8.4/plyr.css" />
 <style>
 :root { --primary:#1976d2; --surface:#fff; --bg:#f5f5f5; --divider:#e0e0e0; --text:#212121; --text-sec:#757575; --danger:#d32f2f; --success:#388e3c; }
 * { box-sizing:border-box; }
@@ -2073,6 +2073,7 @@ var fileNode = null;
 
 function showMsg(msg){
   var s = document.getElementById('snackbar');
+  if (!s) return;
   s.textContent = msg;
   s.classList.add('show');
   setTimeout(function(){ s.classList.remove('show'); }, 2500);
@@ -2089,17 +2090,29 @@ function formatSize(b){
   return (b / Math.pow(k, i)).toFixed(2) + ' ' + s[i];
 }
 async function copyText(text){
-  try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return; } } catch(e){}
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+  } catch(e){}
   var ta = document.createElement('textarea');
-  ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-  document.body.appendChild(ta); ta.select();
-  document.execCommand('copy'); document.body.removeChild(ta);
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand('copy');
+  document.body.removeChild(ta);
 }
 async function api(url, opts){
   opts = opts || {};
   var r = await fetch(url, opts);
   if (r.status === 401) { location.href = '/login'; return null; }
-  if (!r.ok) { var j = await r.json().catch(function(){ return {}; }); throw new Error(j.error || r.statusText); }
+  if (!r.ok) {
+    var j = await r.json().catch(function(){ return {}; });
+    throw new Error(j.error || r.statusText);
+  }
   return r.json().catch(function(){ return null; });
 }
 
@@ -2120,7 +2133,8 @@ function loadCSS(href){
   if (libCache[href]) return libCache[href];
   libCache[href] = new Promise(function(resolve, reject){
     var l = document.createElement('link');
-    l.rel = 'stylesheet'; l.href = href;
+    l.rel = 'stylesheet';
+    l.href = href;
     var t = setTimeout(function(){ reject(new Error('加载超时: ' + href)); }, 30000);
     l.onload = function(){ clearTimeout(t); resolve(); };
     l.onerror = function(){ clearTimeout(t); reject(new Error('加载失败: ' + href)); };
@@ -2140,25 +2154,19 @@ async function load(){
   var preview = document.getElementById('preview');
   try {
     fileNode = await api('/api/file?path=' + encodeURIComponent(path));
-    if (!fileNode) { preview.innerHTML = '<div class="empty">文件不存在</div>'; return; }
+    if (!fileNode) {
+      preview.innerHTML = '<div class="empty">文件不存在</div>';
+      return;
+    }
     document.getElementById('file-name').textContent = fileNode.name;
     document.getElementById('file-meta').textContent = formatSize(fileNode.size) + ' · ' + new Date(fileNode.createdAt).toLocaleString();
     document.getElementById('title').textContent = fileNode.name;
     await renderPreview();
     setupTitleMarquee();
-    loadSiblings();
   } catch(e) {
     preview.innerHTML = '<div class="empty">加载失败: ' + escapeHtml(e.message) + '</div>';
   }
 }
-
-
-
-
-
-
-
-
 
 function setupTitleMarquee(){
   setTimeout(function(){
@@ -2166,99 +2174,26 @@ function setupTitleMarquee(){
     if (!titleEl) return;
     var container = titleEl.parentNode;
     if (!container) return;
-    var cw = container.clientWidth;
-    var tw = titleEl.scrollWidth;
-    if (tw > cw) {
+    if (titleEl.scrollWidth > container.clientWidth + 10) {
       titleEl.style.display = 'inline-block';
       titleEl.style.whiteSpace = 'nowrap';
-      titleEl.style.animation = 'marqueeTitle 8s linear infinite';
-      var style = document.createElement('style');
-      style.textContent = '@keyframes marqueeTitle { 0% { transform: translateX(0); } 50% { transform: translateX(calc(-1 * (100% - 100vw + 24px))); } 100% { transform: translateX(0); } }';
-      document.head.appendChild(style);
-    }
-  }, 100);
-}
-
-async function loadSiblings(){
-  if (!fileNode) return;
-  var parentPath = path.split('/').slice(0, -1).join('/');
-  var ext = getExt(fileNode.name);
-  var type = '';
-  if (IMAGE_EXTS.indexOf(ext) >= 0) type = 'image';
-  else if (VIDEO_MIMES[ext]) type = 'video';
-  else if (AUDIO_MIMES[ext]) type = 'audio';
-  else return;
-
-  try {
-    var data = await api('/api/structure?path=' + encodeURIComponent(parentPath));
-    if (!data || !data.children) return;
-    var siblings = [];
-    for (var name in data.children) {
-      var n = data.children[name];
-      if (n.type !== 'file') continue;
-      var e = getExt(name);
-      var match = false;
-      if (type === 'image' && IMAGE_EXTS.indexOf(e) >= 0) match = true;
-      else if (type === 'video' && VIDEO_MIMES[e]) match = true;
-      else if (type === 'audio' && AUDIO_MIMES[e]) match = true;
-      if (match) siblings.push({ name: name, node: n, path: parentPath ? parentPath + '/' + name : name });
-    }
-    if (siblings.length <= 1) return;
-
-    var label = type === 'image' ? '图片' : (type === 'video' ? '视频' : '音频');
-    var html = '<div class="card" style="margin-top:12px;">';
-    html += '<h3 style="margin-top:0;font-size:14px;color:var(--text-sec);">同目录下的其他 ' + label + ' (' + (siblings.length - 1) + ')</h3>';
-    html += '<div style="display:flex;flex-wrap:wrap;gap:8px;">';
-    for (var i = 0; i < siblings.length; i++) {
-      var s = siblings[i];
-      var isCurrent = s.path === path;
-      var border = isCurrent ? '2px solid var(--primary)' : '1px solid var(--divider)';
-      var directUrl = '/direct/' + s.node.ssid + '/' + encodeURIComponent(s.name);
-      if (type === 'image') {
-        html += '<div class="sibling-item" data-sib="' + escapeHtml(s.path) + '" style="cursor:pointer;border:' + border + ';border-radius:6px;overflow:hidden;width:80px;height:80px;position:relative;">';
-        html += '<img src="' + directUrl + '" style="width:100%;height:100%;object-fit:cover;" loading="lazy">';
-        if (isCurrent) html += '<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(25,118,210,.85);color:#fff;font-size:10px;text-align:center;padding:1px;">当前</div>';
-        html += '</div>';
-      } else {
-        var bg = isCurrent ? '#e3f2fd' : '#fff';
-        html += '<div class="sibling-item" data-sib="' + escapeHtml(s.path) + '" style="cursor:pointer;border:' + border + ';border-radius:6px;padding:8px 12px;font-size:13px;background:' + bg + ';max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHtml(s.name) + '">';
-        html += escapeHtml(s.name);
-        html += '</div>';
+      titleEl.style.animation = 'marqueeTitle 10s linear infinite';
+      if (!document.getElementById('marquee-title-style')) {
+        var style = document.createElement('style');
+        style.id = 'marquee-title-style';
+        style.textContent = '@keyframes marqueeTitle { 0% { transform: translateX(0); } 45% { transform: translateX(calc(-1 * (100% - 100vw + 48px))); } 55% { transform: translateX(calc(-1 * (100% - 100vw + 48px))); } 100% { transform: translateX(0); } }';
+        document.head.appendChild(style);
       }
     }
-    html += '</div></div>';
-
-    var preview = document.getElementById('preview');
-    preview.insertAdjacentHTML('afterend', html);
-    var items = preview.parentNode.querySelectorAll('.sibling-item');
-    for (var j = 0; j < items.length; j++) {
-      items[j].onclick = function(){
-        var p = this.getAttribute('data-sib');
-        if (p) location.href = '/file?path=' + encodeURIComponent(p);
-      };
-    }
-  } catch(e) {
-    console.error('加载同目录文件失败', e);
-  }
+  }, 150);
 }
-
 
 function downloadBox(msg, downloadUrl){
-  return '<div class="empty" style="padding:40px 20px;">' +
-    '<span class="material-icons" style="font-size:56px;color:#bdbdbd;">download</span>' +
-    '<p style="margin-top:12px;">' + msg + '</p>' +
-    '<a class="btn-primary" href="' + downloadUrl + '" style="display:inline-block;padding:10px 24px;border-radius:8px;text-decoration:none;margin-top:8px;">下载文件</a>' +
-    '</div>';
-}
-
-function toggleImageZoom(img){
-  if (img.getAttribute('data-zoomed') === '1') {
-    img.style.maxHeight = '70vh'; img.style.maxWidth = '100%';
-    img.style.cursor = 'zoom-in'; img.setAttribute('data-zoomed', '0');
-  } else {
-    img.style.maxHeight = 'none'; img.style.maxWidth = 'none';
-    img.style.cursor = 'zoom-out'; img.setAttribute('data-zoomed', '1');
-  }
+  return '<div class="empty" style="padding:40px 20px;">'
+    + '<span class="material-icons" style="font-size:56px;color:#bdbdbd;">download</span>'
+    + '<p style="margin-top:12px;">' + msg + '</p>'
+    + '<a class="btn-primary" href="' + downloadUrl + '" style="display:inline-block;padding:10px 24px;border-radius:8px;text-decoration:none;margin-top:8px;">下载文件</a>'
+    + '</div>';
 }
 
 async function renderPreview(){
@@ -2266,37 +2201,43 @@ async function renderPreview(){
   var ext = getExt(fileNode.name);
   var url = '/direct/' + fileNode.ssid + '/' + encodeURIComponent(fileNode.name);
   var downloadUrl = '/download/' + fileNode.ssid + '/' + encodeURIComponent(fileNode.name);
-  var absoluteUrl = location.origin + url;
 
-  // ===== PDF =====
+  // ============ PDF ============
   if (ext === 'pdf') {
     preview.innerHTML = '<div class="empty">正在加载 PDF...</div>';
     try {
-      var pdfjsLib = await import('/lib/cdnjs.cloudflare.com/ajax/libs/pdf.js/6.3.289/pdf.mjs');
-      pdfjsLib.GlobalWorkerOptions.workerSrc = '/lib/cdnjs.cloudflare.com/ajax/libs/pdf.js/6.3.289/pdf.worker.mjs';
+      var pdfjsLib = await import('https://cdn.bootcdn.net/ajax/libs/pdf.js/6.3.289/pdf.min.mjs');
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.bootcdn.net/ajax/libs/pdf.js/6.3.289/pdf.worker.min.mjs';
       var pdf = await pdfjsLib.getDocument({ url: url }).promise;
       var total = pdf.numPages;
-      preview.innerHTML = '<div style="text-align:center;margin-bottom:10px;">' +
-        '<button class="btn-secondary" id="pdf-prev" style="padding:6px 14px;border:none;border-radius:6px;cursor:pointer;margin-right:6px;">上一页</button>' +
-        '<span id="pdf-info" style="font-size:14px;color:var(--text-sec);margin:0 8px;">1 / ' + total + '</span>' +
-        '<button class="btn-secondary" id="pdf-next" style="padding:6px 14px;border:none;border-radius:6px;cursor:pointer;margin-left:6px;">下一页</button>' +
-        '</div><div id="pdf-container" style="text-align:center;overflow:auto;max-height:75vh;"></div>';
+
+      preview.innerHTML = '<div style="text-align:center;margin-bottom:10px;">'
+        + '<button class="btn-secondary" id="pdf-prev" style="padding:6px 14px;border:none;border-radius:6px;cursor:pointer;margin-right:6px;">上一页</button>'
+        + '<span id="pdf-info" style="font-size:14px;color:var(--text-sec);margin:0 8px;">1 / ' + total + '</span>'
+        + '<button class="btn-secondary" id="pdf-next" style="padding:6px 14px;border:none;border-radius:6px;cursor:pointer;margin-left:6px;">下一页</button>'
+        + '</div>'
+        + '<div id="pdf-container" style="text-align:center;overflow:auto;max-height:75vh;"></div>';
+
       var container = document.getElementById('pdf-container');
       var info = document.getElementById('pdf-info');
       var cur = 1;
-      var render = async function(n){
+      var renderPage = async function(n){
         var page = await pdf.getPage(n);
         var vp = page.getViewport({ scale: 1.5 });
         var canvas = document.createElement('canvas');
-        canvas.width = vp.width; canvas.height = vp.height;
-        canvas.style.maxWidth = '100%'; canvas.style.height = 'auto';
-        container.innerHTML = ''; container.appendChild(canvas);
+        canvas.width = vp.width;
+        canvas.height = vp.height;
+        canvas.style.maxWidth = '100%';
+        canvas.style.height = 'auto';
+        canvas.style.boxShadow = '0 2px 12px rgba(0,0,0,.15)';
+        container.innerHTML = '';
+        container.appendChild(canvas);
         await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
         info.textContent = n + ' / ' + total;
       };
-      document.getElementById('pdf-prev').onclick = function(){ if (cur > 1) { cur--; render(cur); } };
-      document.getElementById('pdf-next').onclick = function(){ if (cur < total) { cur++; render(cur); } };
-      await render(1);
+      document.getElementById('pdf-prev').onclick = function(){ if (cur > 1) { cur--; renderPage(cur); } };
+      document.getElementById('pdf-next').onclick = function(){ if (cur < total) { cur++; renderPage(cur); } };
+      await renderPage(1);
       return;
     } catch(e) {
       console.error('PDF 加载失败', e);
@@ -2305,37 +2246,36 @@ async function renderPreview(){
     }
   }
 
-    // ===== Office (vue-office UMD) =====
-  if (['docx', 'xlsx', 'pptx'].indexOf(ext) >= 0) {
-    preview.innerHTML = '<div class="empty">正在加载 Office 预览...</div>';
+  // ============ Office (vue-office) ============
+  if (ext === 'docx' || ext === 'xlsx' || ext === 'pptx') {
+    preview.innerHTML = '<div class="empty">正在加载 ' + ext.toUpperCase() + ' 预览...</div>';
     try {
       if (!window.Vue) {
-        await loadScript('https://cdn.jsdelivr.net/npm/vue@3.4.21/dist/vue.global.prod.js');
+        await loadScript('https://cdn.bootcdn.net/ajax/libs/vue/3.4.21/vue.global.prod.js');
       }
-
-      var cdnMap = {
+      var officeMap = {
         docx: {
-          js: 'https://unpkg.com/@vue-office/docx@2.0.0/lib/index.umd.js',
-          css: 'https://unpkg.com/@vue-office/docx@2.0.0/lib/index.css',
+          js: 'https://cdn.jsdelivr.net/npm/@vue-office/docx@1.6.2/dist/index.umd.js',
+          css: 'https://cdn.jsdelivr.net/npm/@vue-office/docx@1.6.2/lib/index.css',
           comp: 'VueOfficeDocx'
         },
         xlsx: {
-          js: 'https://unpkg.com/@vue-office/excel@2.0.0/lib/index.umd.js',
-          css: 'https://unpkg.com/@vue-office/excel@2.0.0/lib/index.css',
+          js: 'https://cdn.jsdelivr.net/npm/@vue-office/excel@1.6.2/dist/index.umd.js',
+          css: 'https://cdn.jsdelivr.net/npm/@vue-office/excel@1.6.2/lib/index.css',
           comp: 'VueOfficeExcel'
         },
         pptx: {
-          js: 'https://unpkg.com/@vue-office/pptx@2.0.0/lib/index.umd.js',
-          css: 'https://unpkg.com/@vue-office/pptx@2.0.0/lib/index.css',
+          js: 'https://cdn.jsdelivr.net/npm/@vue-office/pptx@1.6.2/dist/index.umd.js',
+          css: 'https://cdn.jsdelivr.net/npm/@vue-office/pptx@1.6.2/lib/index.css',
           comp: 'VueOfficePptx'
         }
       };
-      var c = cdnMap[ext];
-      await loadCSS(c.css);
-      await loadScript(c.js);
+      var cfg = officeMap[ext];
+      try { await loadCSS(cfg.css); } catch(_){}
+      await loadScript(cfg.js);
 
-      var Comp = window[c.comp];
-      if (!Comp) throw new Error('组件未注册: ' + c.comp);
+      var Comp = window[cfg.comp];
+      if (!Comp) throw new Error('组件未注册: ' + cfg.comp);
 
       var resp = await fetch(url);
       if (!resp.ok) throw new Error('下载文件失败: ' + resp.status);
@@ -2343,29 +2283,101 @@ async function renderPreview(){
 
       preview.innerHTML = '<div id="office-preview" style="overflow:auto;max-height:75vh;background:#fff;border-radius:8px;min-height:500px;"></div>';
 
-      window.Vue.createApp({
+      var createApp = window.Vue.createApp;
+      var h = window.Vue.h;
+      createApp({
         render: function(){
-          return window.Vue.h(Comp, { src: buf, style: 'min-height:500px;' });
+          return h(Comp, { src: buf, options: {}, style: 'min-height:500px;' });
         }
       }).mount('#office-preview');
       return;
     } catch(e) {
-      console.error('Office preview error:', e);
-      preview.innerHTML = '<div class="empty">Office 预览失败: ' + escapeHtml(e.message) +
-        '<br><br><a class="btn-primary" href="' + downloadUrl + '" style="display:inline-block;padding:10px 20px;border-radius:8px;text-decoration:none;">下载文件</a></div>';
+      console.error('Office 预览失败', e);
+      preview.innerHTML = downloadBox('Office 预览失败: ' + escapeHtml(e.message), downloadUrl);
       return;
     }
   }
 
-// ===== 图片 =====
-  if (IMAGE_EXTS.indexOf(ext) >= 0) {
-    preview.innerHTML = '<div style="text-align:center;overflow:auto;max-height:75vh;">' +
-      '<img id="preview-img" src="' + url + '" data-zoomed="0" style="max-width:100%;max-height:70vh;cursor:zoom-in;border-radius:8px;" onclick="toggleImageZoom(this)" alt="' + escapeHtml(fileNode.name) + '">' +
-      '</div><p style="font-size:12px;color:var(--text-sec);margin-top:8px;text-align:center;">点击图片放大/还原 · <a href="' + downloadUrl + '">下载原文件</a></p>';
-    return;
+  // ============ 视频 / 音频 (Plyr) ============
+  if (VIDEO_MIMES[ext] || AUDIO_MIMES[ext]) {
+    preview.innerHTML = '<div class="empty">正在加载播放器...</div>';
+    try {
+      await loadCSS('https://cdn.bootcdn.net/ajax/libs/plyr/3.8.4/plyr.css');
+      await loadScript('https://cdn.bootcdn.net/ajax/libs/plyr/3.8.4/plyr.js');
+
+      var isVideo = !!VIDEO_MIMES[ext];
+      var mediaType = isVideo ? 'video' : 'audio';
+      var mime = isVideo ? VIDEO_MIMES[ext] : AUDIO_MIMES[ext];
+      var wrapperStyle = isVideo
+        ? 'width:100%;max-width:900px;margin:0 auto;'
+        : 'width:100%;max-width:600px;margin:40px auto;';
+      var mediaStyle = isVideo
+        ? 'width:100%;max-height:80vh;background:#000;'
+        : 'width:100%;';
+
+      preview.innerHTML = '<div style="' + wrapperStyle + '">'
+        + '<' + mediaType + ' id="plyr-player" controls playsinline style="' + mediaStyle + '">'
+        + '<source src="' + url + '" type="' + mime + '">'
+        + '</' + mediaType + '>'
+        + '</div>';
+
+      new Plyr('#plyr-player', {
+        controls: ['play', 'progress', 'settings'],
+        settings: ['speed'],
+        speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] },
+        keyboard: { focused: true, global: false }
+      });
+      return;
+    } catch(e) {
+      console.error('Plyr 加载失败', e);
+      var isV = !!VIDEO_MIMES[ext];
+      var mt = isV ? 'video' : 'audio';
+      var mm = isV ? VIDEO_MIMES[ext] : AUDIO_MIMES[ext];
+      preview.innerHTML = '<' + mt + ' controls src="' + url + '" style="width:100%;max-height:80vh;"></' + mt + '>';
+      return;
+    }
   }
 
-  // ===== 文本 =====
+  // ============ 图片 (Viewer.js) ============
+  if (IMAGE_EXTS.indexOf(ext) >= 0) {
+    preview.innerHTML = '<div class="empty">正在加载图片...</div>';
+    try {
+      await loadCSS('https://cdn.bootcdn.net/ajax/libs/viewerjs/1.11.7/viewer.min.css');
+      await loadScript('https://cdn.bootcdn.net/ajax/libs/viewerjs/1.11.7/viewer.min.js');
+
+      preview.innerHTML = '<div style="text-align:center;overflow:auto;max-height:75vh;">'
+        + '<img id="preview-img" src="' + url + '" style="max-width:100%;max-height:70vh;cursor:zoom-in;border-radius:8px;display:block;margin:0 auto;" alt="' + escapeHtml(fileNode.name) + '">'
+        + '</div>'
+        + '<p style="font-size:12px;color:var(--text-sec);margin-top:8px;text-align:center;">点击图片可放大查看 · <a href="' + downloadUrl + '">下载原文件</a></p>';
+
+      if (window.Viewer) {
+        new Viewer(document.getElementById('preview-img'), {
+          navbar: false,
+          title: false,
+          toolbar: {
+            zoomIn: 1,
+            zoomOut: 1,
+            oneToOne: 1,
+            reset: 1,
+            rotateLeft: 1,
+            rotateRight: 1,
+            flipHorizontal: 1,
+            flipVertical: 1
+          }
+        });
+      }
+      return;
+    } catch(e) {
+      console.error('Viewer.js 加载失败', e);
+      preview.innerHTML = '<div style="text-align:center;">'
+        + '<img src="' + url + '" style="max-width:100%;max-height:70vh;border-radius:8px;display:block;margin:0 auto;" alt="' + escapeHtml(fileNode.name) + '">'
+        + '</div>'
+        + '<p style="font-size:12px;color:var(--text-sec);margin-top:8px;text-align:center;"><a href="' + downloadUrl + '">下载原文件</a></p>';
+      return;
+    }
+  }
+
+  // ============ 文本 / 代码 ============
   if (TEXT_EXTS.indexOf(ext) >= 0) {
     preview.innerHTML = '<div class="empty">正在加载...</div>';
     try {
@@ -2373,12 +2385,13 @@ async function renderPreview(){
       var text = await r.text();
       var isCode = CODE_EXTS.indexOf(ext) >= 0;
       var bg = isCode ? '#fafafa' : '#fff';
-      var style = 'width:100%;min-height:520px;font-family:Consolas,Monaco,monospace;font-size:13px;line-height:1.6;padding:16px;border:1px solid var(--divider);border-radius:8px;background:' + bg + ';resize:vertical;box-sizing:border-box;';
+      var editorStyle = 'width:100%;min-height:520px;font-family:Consolas,Monaco,monospace;font-size:13px;line-height:1.6;padding:16px;border:1px solid var(--divider);border-radius:8px;background:' + bg + ';resize:vertical;box-sizing:border-box;';
+
       if (ext === 'md') {
-        preview.innerHTML = '<div style="margin-bottom:8px;padding:8px 12px;background:#e3f2fd;border-radius:6px;font-size:13px;color:var(--primary);">Markdown 文件 · 编辑后点保存</div>' +
-          '<textarea id="code-editor" spellcheck="false" style="' + style + '"></textarea>';
+        preview.innerHTML = '<div style="margin-bottom:8px;padding:8px 12px;background:#e3f2fd;border-radius:6px;font-size:13px;color:var(--primary);">Markdown 源文件 · 编辑后点下方“保存”</div>'
+          + '<textarea id="code-editor" spellcheck="false" style="' + editorStyle + '"></textarea>';
       } else {
-        preview.innerHTML = '<textarea id="code-editor" spellcheck="false" style="' + style + '"></textarea>';
+        preview.innerHTML = '<textarea id="code-editor" spellcheck="false" style="' + editorStyle + '"></textarea>';
       }
       document.getElementById('code-editor').value = text;
       document.getElementById('btn-save').style.display = 'inline-flex';
@@ -2389,11 +2402,13 @@ async function renderPreview(){
     }
   }
 
-  // ===== 压缩包 / 其他 =====
-  if (['zip','rar','7z','tar','gz'].indexOf(ext) >= 0) {
+  // ============ 压缩包 ============
+  if (ext === 'zip' || ext === 'rar' || ext === '7z' || ext === 'tar' || ext === 'gz') {
     preview.innerHTML = downloadBox('压缩包无法在线预览', downloadUrl);
     return;
   }
+
+  // ============ 其他 ============
   preview.innerHTML = downloadBox('暂不支持预览此文件类型', downloadUrl);
 }
 
@@ -2407,17 +2422,43 @@ async function saveText(){
       body: JSON.stringify({ path: path, content: ta.value })
     });
     showMsg('已保存');
-  } catch(e) { showMsg('保存失败: ' + e.message); }
+  } catch(e) {
+    showMsg('保存失败: ' + e.message);
+  }
 }
 
-async function shareFile(){ if(!fileNode) return; openShareModal([path]); }
-async function copyDirectLink(){ if(!fileNode) return; await copyText(location.origin + '/direct/' + fileNode.ssid + '/' + encodeURIComponent(fileNode.name)); showMsg('直链已复制'); }
-async function renameFile(){ if(!fileNode) return; var n = prompt('新名称', fileNode.name); if(!n || n === fileNode.name) return; await api('/api/file/rename', { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({path:path, newName:n}) }); location.reload(); }
-async function deleteFile(){ if(!fileNode) return; if(!confirm('确定删除?')) return; await api('/api/file?path=' + encodeURIComponent(path), { method:'DELETE' }); location.href = '/?path=' + encodeURIComponent(path.split('/').slice(0,-1).join('/')); }
+async function shareFile(){
+  if (!fileNode) return;
+  await copyText(location.origin + '/share/' + fileNode.ssid);
+  showMsg('分享链接已复制');
+}
+async function copyDirectLink(){
+  if (!fileNode) return;
+  await copyText(location.origin + '/direct/' + fileNode.ssid + '/' + encodeURIComponent(fileNode.name));
+  showMsg('直链已复制');
+}
+async function renameFile(){
+  if (!fileNode) return;
+  var n = prompt('新名称', fileNode.name);
+  if (!n || n === fileNode.name) return;
+  await api('/api/file/rename', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: path, newName: n })
+  });
+  location.reload();
+}
+async function deleteFile(){
+  if (!fileNode) return;
+  if (!confirm('确定删除?')) return;
+  await api('/api/file?path=' + encodeURIComponent(path), { method: 'DELETE' });
+  location.href = '/?path=' + encodeURIComponent(path.split('/').slice(0, -1).join('/'));
+}
 
 load();
 </script>
 `;
+
 
 ;
 ;
