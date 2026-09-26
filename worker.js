@@ -2251,21 +2251,21 @@ async function renderPreview(){
     preview.innerHTML = '<div class="empty">正在加载 ' + ext.toUpperCase() + ' 预览...</div>';
     try {
       if (!window.Vue) {
-        await loadScript('https://cdn.bootcdn.net/ajax/libs/vue/3.4.21/vue.global.prod.js');
+        await import('https://cdn.bootcdn.net/ajax/libs/vue/3.4.21/vue.global.prod.js');
       }
       var officeMap = {
         docx: {
-          js: 'https://cdn.jsdelivr.net/npm/@vue-office/docx@1.6.2/dist/index.umd.js',
+          js: 'https://unpkg.com/@vue-office/docx@2.0.0/lib/index.umd.js',
           css: 'https://cdn.jsdelivr.net/npm/@vue-office/docx@1.6.2/lib/index.css',
           comp: 'VueOfficeDocx'
         },
         xlsx: {
-          js: 'https://cdn.jsdelivr.net/npm/@vue-office/excel@1.6.2/dist/index.umd.js',
+          js: 'https://unpkg.com/@vue-office/excel@2.0.0/lib/index.umd.js',
           css: 'https://cdn.jsdelivr.net/npm/@vue-office/excel@1.6.2/lib/index.css',
           comp: 'VueOfficeExcel'
         },
         pptx: {
-          js: 'https://cdn.jsdelivr.net/npm/@vue-office/pptx@1.6.2/dist/index.umd.js',
+          js: 'https://unpkg.com/@vue-office/pptx@2.0.0/lib/index.umd.js',
           css: 'https://cdn.jsdelivr.net/npm/@vue-office/pptx@1.6.2/lib/index.css',
           comp: 'VueOfficePptx'
         }
