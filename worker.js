@@ -639,6 +639,7 @@ async function buildDownloadResponse(request, node, filename, env, inline) {
     'Content-Type': getMime(filename),
     'Accept-Ranges': 'bytes',
     'Access-Control-Allow-Origin': '*',
+    'Cache-Control': 'public, max-age=3600',
     'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Accept-Ranges'
   };
   const rangeHeader = request ? request.headers.get('Range') : null;
@@ -996,9 +997,36 @@ body { margin:0; font-family:system-ui,sans-serif; background:var(--bg); color:v
 </style>
 `;
 
-function page(title, body, scripts = '', themeCss = '') {
-  return new Response(`<!DOCTYPE html><html><head>${COMMON_HEAD}${themeCss}<title>${escapeHtml(title)}</title></head><body>${body}${scripts}</body></html>`, {
-    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store, no-cache, must-revalidate' }
+async function hashStr(s) {
+  const buf = new TextEncoder().encode(s);
+  const hash = await crypto.subtle.digest('SHA-1', buf);
+  return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function page(title, body, scripts = '', themeCss = '', request = null) {
+  const html = `<!DOCTYPE html><html><head>${COMMON_HEAD}${themeCss}<title>${escapeHtml(title)}</title></head><body>${body}${scripts}</body></html>`;
+  const etag = '"' + (await hashStr(html)) + '"';
+
+  // ETag 匹配 → 304 Not Modified，不传输内容
+  if (request) {
+    const clientEtag = request.headers.get('If-None-Match');
+    if (clientEtag === etag) {
+      return new Response(null, {
+        status: 304,
+        headers: {
+          'ETag': etag,
+          'Cache-Control': 'public, max-age=300, must-revalidate'
+        }
+      });
+    }
+  }
+
+  return new Response(html, {
+    headers: {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'public, max-age=300, must-revalidate',
+      'ETag': etag
+    }
   });
 }
 
@@ -2057,8 +2085,8 @@ setInterval(() => { loadTasks(); }, 800);
 </script>
 `;
 
-function loginPage() {
-  return page('登录', `
+async function loginPage(request) {
+  return await page('登录', `
 <div class="container login-box">
   <div class="card">
     <h2 style="margin-top:0;color:var(--primary);">网盘登录</h2>
@@ -2642,7 +2670,7 @@ load();
 </script>
 `;
 
-function settingsPage(settings = {}) {
+async function settingsPage(settings = {}, request = null) {
   const primary = settings.primary || '#1976d2';
   const bg = settings.bg || '';
   const cardOpacity = settings.cardOpacity != null ? settings.cardOpacity : 1;
@@ -2659,7 +2687,7 @@ function settingsPage(settings = {}) {
   else if (useCustomCss) fontMode = 'customcss';
   const presetColors = ['#1976d2', '#d32f2f', '#388e3c', '#f9a825', '#7b1fa2', '#00796b', '#e64a19', '#5d4037', '#303f9f', '#c2185b'];
   const colorSwatches = presetColors.map(c => `<span class="color-swatch" data-color="${c}" style="width:24px;height:24px;border-radius:50%;background:${c};cursor:pointer;border:2px solid ${c===primary?'#fff':'transparent'};box-shadow:0 0 0 1px ${c===primary?c:'var(--divider)'};"></span>`).join('');
-  return page('设置', `
+  return await page('设置', `
 <div class="appbar"><span class="material-icons" onclick="history.back()">arrow_back</span><h1>设置</h1></div>
 <div class="container">
   <div class="card">
@@ -2782,7 +2810,7 @@ async function clearAllData(){
   showMsg('网盘已清空'); setTimeout(() => location.href = '/', 800);
 }
 </script>
-`, settings.themeCss || '');
+`, settings.themeCss || '', request);
 }
 
 function generateThemeCss(settings = {}) {
@@ -3954,11 +3982,11 @@ async function handleRequest(request, env, ctx = null) {
   }
 
   // 页面路由
-  if (path === '/login') return loginPage();
+  if (path === '/login') return await loginPage(request);
   if (path === '/') {
     if (!checkPassword(request, env)) return loginPage();
     const settings = await getSettings(env);
-    return page('我的网盘', HOME_BODY, HOME_SCRIPT, generateThemeCss(settings));
+    return page('我的网盘', HOME_BODY, HOME_SCRIPT, generateThemeCss(settings), request);
   }
   if (path === '/file') {
     if (!checkPassword(request, env)) return loginPage();
@@ -3967,13 +3995,13 @@ async function handleRequest(request, env, ctx = null) {
     const node = getNode(structure, filePath);
     if (!node || node.type !== 'file') return errorResponse('文件不存在或已删除', 404);
     const settings = await getSettings(env);
-    return page(node.name, fileBody(node, filePath), FILE_SCRIPT, generateThemeCss(settings));
+    return page(node.name, fileBody(node, filePath), FILE_SCRIPT, generateThemeCss(settings), request);
   }
   if (path === '/settings') {
     if (!checkPassword(request, env)) return loginPage();
     const settings = await getSettings(env);
     settings.themeCss = generateThemeCss(settings);
-    return settingsPage(settings);
+    return await settingsPage(settings, request);
   }
   if (path === '/zip') {
     if (!checkPassword(request, env)) return loginPage();
