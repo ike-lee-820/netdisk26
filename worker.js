@@ -3689,21 +3689,26 @@ function assetsPage(themeCss) {
         var url = location.origin + '/asset/' + a.name;
         var statusBadge = a.uploaded ? '<span class="badge ok">✓ 已缓存</span>' : '<span class="badge wait">⏳ 未缓存</span>';
         var typeBadge = a.sourceType === 'manual' ? ' <span class="badge manual">手动</span>' : '';
+        
         var cdnList = (a.cdnUrls || []).join('\\n');
+        
         html += '<div class="asset-card">';
         html += '<div class="asset-name">' + escapeHtml(a.name) + ' ' + statusBadge + typeBadge + '</div>';
         html += '<div class="asset-meta">' + formatSize(a.size || 0) + ' · ' + escapeHtml(a.contentType || 'unknown') + (a.cachedAt ? ' · ' + new Date(a.cachedAt).toLocaleString() : '') + '</div>';
         html += '<div class="asset-url">' + escapeHtml(url) + '</div>';
+        
         if (cdnList) {
           html += '<div class="asset-cdn">' + escapeHtml(cdnList).replace(/\\n/g, '<br>') + '</div>';
         }
-        html += '<button onclick="copyUrl(\'' + escapeHtml(a.name) + '\')">复制链接</button>';
-        html += '<a href="' + escapeHtml(url) + '" target="_blank">打开</a>';
+        
+        // ★ 使用模板字符串（反引号），彻底告别单引号转义噩梦！
+        html += `<button onclick="copyUrl('${escapeHtml(a.name)}')">复制链接</button>`;
+        html += `<a href="${escapeHtml(url)}" target="_blank">打开</a>`;
         if (!a.uploaded || a.sourceType === 'cdn') {
-          html += '<button class="warn" onclick="cacheAsset(\'' + escapeHtml(a.name) + '\')">' + (a.uploaded ? '重新缓存' : '缓存') + '</button>';
+          html += `<button class="warn" onclick="cacheAsset('${escapeHtml(a.name)}')">${a.uploaded ? '重新缓存' : '缓存'}</button>`;
         }
-        html += '<button onclick="editAsset(\'' + escapeHtml(a.name) + '\')">改链接</button>';
-        html += '<button class="danger" onclick="deleteAsset(\'' + escapeHtml(a.name) + '\')">删除</button>';
+        html += `<button onclick="editAsset('${escapeHtml(a.name)}')">改链接</button>`;
+        html += `<button class="danger" onclick="deleteAsset('${escapeHtml(a.name)}')">删除</button>`;
         html += '</div></div>';
       }
       box.innerHTML = html;
