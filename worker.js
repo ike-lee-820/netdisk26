@@ -3744,7 +3744,7 @@ function assetsPage(themeCss) {
   }
 
   async function deleteAsset(name){
-    if (!confirm('确定删除 "' + name + '"？\n\n这会同时从 GitHub 和 D1 中删除。')) return;
+    if (!confirm('确定删除 "' + name + '"？\\n\\n这会同时从 GitHub 和 D1 中删除。')) return;
     try {
       await api('/api/asset/delete', {
         method: 'POST', headers: {'Content-Type':'application/json'},
@@ -3755,36 +3755,6 @@ function assetsPage(themeCss) {
     } catch(e){ showMsg('失败: ' + e.message); }
   }
 
-  // ==================== 编辑链接 ====================
-  function editAsset(name){
-    var a = assetState.list.find(function(x){ return x.name === name; });
-    if (!a) return;
-    assetState.editingName = name;
-    document.getElementById('edit-name').value = name;
-    document.getElementById('edit-urls').value = (a.cdnUrls || []).join('\\n');
-    document.getElementById('edit-modal').classList.add('show');
-  }
-  function closeEditModal(){
-    document.getElementById('edit-modal').classList.remove('show');
-    assetState.editingName = null;
-  }
-  document.getElementById('edit-confirm').onclick = async function(){
-    var name = assetState.editingName;
-    if (!name) return;
-    var urls = document.getElementById('edit-urls').value
-      .split('\n').map(function(s){ return s.trim(); }).filter(Boolean);
-    try {
-      await api('/api/asset/update', {
-        method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ name: name, cdnUrls: urls })
-      });
-      showMsg('已保存');
-      closeEditModal();
-      loadAssets();
-    } catch(e){ showMsg('失败: ' + e.message); }
-  };
-
-  // ==================== 添加 CDN ====================
   function openAddModal(){
     document.getElementById('add-name').value = '';
     document.getElementById('add-urls').value = '';
