@@ -2053,8 +2053,7 @@ function openGoModal(name, content, type) {
           // wangEditor 10.x: editor.txt.html(html)
           if (mdEditorInstance.txt && mdEditorInstance.txt.html) {
             // 转义换行
-            var htmlContent = content.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/
-/g, '<br>');
+            var htmlContent = content.replace(/&/g, String.fromCharCode(38)+'amp;').replace(/</g, String.fromCharCode(38)+'lt;').replace(/>/g, String.fromCharCode(38)+'gt;').split(String.fromCharCode(10)).join('<br>');
             mdEditorInstance.txt.html(htmlContent);
           } else if (mdEditorInstance.setHtml) {
             // v5 API 兜底
