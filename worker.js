@@ -848,7 +848,7 @@ async function handleWebDAV(request, env, reqPath) {
 const COMMON_HEAD = `
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+<link href="/asset/material-icons.css" rel="stylesheet">
 <style>
 :root { --primary:#1976d2; --surface:#fff; --bg:#f5f5f5; --divider:#e0e0e0; --text:#212121; --text-sec:#757575; --danger:#d32f2f; --success:#388e3c; }
 * { box-sizing:border-box; }
@@ -2580,9 +2580,9 @@ async function renderPreview(){
     preview.innerHTML = '<div class="empty">正在加载 PDF...</div>';
     try {
       // PDF.js v6 必须使用 ES Module 导入
-      await loadScript('https://cdn.bootcdn.net/ajax/libs/pdf.js/6.2.108');
+      var pdfjsLib = await import('/asset/pdf.min.mjs');
       var pdfjsLib = window.pdfjsLib;
-      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.bootcdn.net/ajax/libs/pdf.js/6.2.108';
+      pdfjsLib.GlobalWorkerOptions.workerSrc = '/asset/pdf.worker.min.mjs';
       // v6 的 getDocument 只接受 { url } 对象，且会自动处理 blob 转换
       var pdf = await pdfjsLib.getDocument({ url: url }).promise;
       var total = pdf.numPages;
@@ -3081,7 +3081,7 @@ function generateThemeCss(settings = {}) {
   const fontCss = (settings.fontCss || '').replace(/["'`<>]/g, '');
   let fontCssFamily = (settings.fontCssFamily || '').replace(/["'`]/g, '').trim();
   if (fontCssFamily && !/^[a-zA-Z0-9_-]+$/.test(fontCssFamily)) fontCssFamily = '"' + fontCssFamily + '"';
-  const SOURCE_HAN_SERIF_CSS = 'https://v6.gh-proxy.com/github.com/ike-lee-820/font/raw/main/siyuansongti/Font_Source_Han_Serif.css';
+  const SOURCE_HAN_SERIF_CSS = '/asset/Font_Source_Han_Serif.css';
   const isCustomFontFile = fontFamily && (fontFamily.startsWith('http') || fontFamily.startsWith('/'));
   const isCustomCss = Boolean(fontCss && fontCssFamily);
   let link = '';
@@ -4396,6 +4396,8 @@ async function handleRequest(request, env, ctx = null) {
 
   // ==================== 资产库：默认数据 ====================
   const DEFAULT_ASSETS = {
+    'material-icons.css': { cdnUrls: ['https://fonts.googleapis.com/icon?family=Material+Icons'], contentType: 'text/css' },
+    'Font_Source_Han_Serif.css': { cdnUrls: ['https://v6.gh-proxy.com/github.com/ike-lee-820/font/raw/main/siyuansongti/Font_Source_Han_Serif.css'], contentType: 'text/css' },
     'plyr.css': { cdnUrls: ['https://cdn.bootcdn.net/ajax/libs/plyr/3.8.4/plyr.css', 'https://cdn.jsdelivr.net/npm/plyr@3.8.4/dist/plyr.css'], contentType: 'text/css' },
     'plyr.js': { cdnUrls: ['https://cdn.bootcdn.net/ajax/libs/plyr/3.8.4/plyr.js', 'https://cdn.jsdelivr.net/npm/plyr@3.8.4/dist/plyr.min.js'], contentType: 'application/javascript' },
     'viewer.css': { cdnUrls: ['https://cdn.bootcdn.net/ajax/libs/viewerjs/1.11.8/viewer.css', 'https://cdn.jsdelivr.net/npm/viewerjs@1.11.8/dist/viewer.min.css'], contentType: 'text/css' },
