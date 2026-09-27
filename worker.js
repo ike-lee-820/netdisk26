@@ -2224,13 +2224,13 @@ function createMdEditorContainer(){
     var css = document.createElement('link');
     css.id = 'wang-editor-css';
     css.rel = 'stylesheet';
-    css.href = 'https://cdn.jsdelivr.net/npm/@wangeditor/editor@5.1.23/dist/css/style.css';
+    css.href = '/asset/wangeditor.css';
     document.head.appendChild(css);
   }
 
   // ============ 加载 JS（jsdelivr 官方） ============
   var js = document.createElement('script');
-  js.src = 'https://cdn.jsdelivr.net/npm/@wangeditor/editor@5.1.23/dist/index.min.js';
+  js.src = '/asset/wangeditor.js';
   js.onload = function(){
     mdEditorLoading = false;
     var E = window.wangEditor;
@@ -2630,8 +2630,8 @@ async function renderPreview(){
   if (VIDEO_MIMES[ext] || AUDIO_MIMES[ext]) {
     preview.innerHTML = '<div class="empty">正在加载播放器...</div>';
     try {
-      await loadCSS('https://cdn.bootcdn.net/ajax/libs/plyr/3.8.4/plyr.css');
-      await loadScript('https://cdn.bootcdn.net/ajax/libs/plyr/3.8.4/plyr.js');
+      await loadCSS('/asset/plyr.css');
+      await loadScript('/asset/plyr.js');
       var isVideo = !!VIDEO_MIMES[ext];
       var mediaType = isVideo ? 'video' : 'audio';
       var mm = isVideo ? VIDEO_MIMES[ext] : AUDIO_MIMES[ext];
@@ -2659,8 +2659,8 @@ async function renderPreview(){
   if (IMAGE_EXTS.indexOf(ext) >= 0) {
     preview.innerHTML = '<div class="empty">正在加载图片...</div>';
     try {
-      await loadCSS('https://cdn.bootcdn.net/ajax/libs/viewerjs/1.11.8/viewer.css');
-      await loadScript('https://cdn.bootcdn.net/ajax/libs/viewerjs/1.11.8/viewer.js');
+      await loadCSS('/asset/viewer.css');
+      await loadScript('/asset/viewer.js');
       preview.innerHTML = '<div style="text-align:center;overflow:auto;max-height:75vh;">'
         + '<img id="preview-img" src="' + url + '" style="max-width:100%;max-height:70vh;cursor:zoom-in;border-radius:8px;display:block;margin:0 auto;" alt="' + escapeHtml(fileNode.name) + '">'
         + '</div>'
@@ -3305,7 +3305,7 @@ function sharePageV3(share, tree, themeCss) {
     showMsg('正在打包 ' + files.length + ' 个文件...');
     var loadZip = window.JSZip ? Promise.resolve() : new Promise(function(resolve, reject){
       var s = document.createElement('script');
-      s.src = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
+      s.src = '/asset/jszip.min.js';
       s.onload = resolve; s.onerror = reject;
       document.head.appendChild(s);
     });
@@ -3827,8 +3827,8 @@ function zipPage(folderName, files) {
   </div>
   <div class="card" style="max-height:50vh;overflow:auto;">${fileListHtml}</div>
 </div>
-<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+<script src="/asset/jszip.min.js"></script>
+<script src="/asset/file-saver.min.js"></script>
 <script>
 const files = ${filesJson};
 const folderName = '${escapeHtml(folderName).replace(/'/g, "\\'")}';
@@ -4012,10 +4012,10 @@ async function handleRequest(request, env, ctx = null) {
         mdContent = item.content || '';
       }
       const html = '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + escapeHtml(item.name) + '</title>'
-        + '<link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/github-markdown-css/5.9.0/github-markdown.css">'
+        + '<link rel="stylesheet" href="/asset/github-markdown.css">'
         + '<style>body{max-width:900px;margin:40px auto;padding:0 20px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.7;color:#24292f;}'
         + '.markdown-body{box-sizing:border-box;min-width:200px;max-width:980px;margin:0 auto;padding:45px;}</style>'
-        + '<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>'
+        + '<script src="/asset/marked.min.js"></script>'
         + '</head><body class="markdown-body"><div id="content">加载中...</div>'
         + '<script>'
         + 'var mdText = ' + JSON.stringify(mdContent) + ';'
@@ -4084,6 +4084,141 @@ async function handleRequest(request, env, ctx = null) {
     });
     return jsonResponse({ results, count: results.length, keywords });
   }
+  // ==================== 资产库（JS/CSS 代理 + 缓存） ====================
+  if (path.startsWith('/asset/')) {
+    const filename = path.slice('/asset/'.length);
+    if (!filename || !/^[a-zA-Z0-9._-]+$/.test(filename)) {
+      return new Response('Invalid asset name', { status: 400 });
+    }
+
+    // ★ 白名单：文件名 → CDN 列表（第一个成功即用）
+    const ASSET_CDN_MAP = {
+      'plyr.css': ['/asset/plyr.css', 'https://cdn.jsdelivr.net/npm/plyr@3.8.4/dist/plyr.css'],
+      'plyr.js': ['/asset/plyr.js', 'https://cdn.jsdelivr.net/npm/plyr@3.8.4/dist/plyr.min.js'],
+      'viewer.css': ['/asset/viewer.css', 'https://cdn.jsdelivr.net/npm/viewerjs@1.11.8/dist/viewer.min.css'],
+      'viewer.js': ['/asset/viewer.js', 'https://cdn.jsdelivr.net/npm/viewerjs@1.11.8/dist/viewer.min.js'],
+      'pdf.min.mjs': ['/asset/pdf.min.mjs', 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/build/pdf.min.mjs'],
+      'pdf.worker.min.mjs': ['/asset/pdf.worker.min.mjs', 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/build/pdf.worker.min.mjs'],
+      'wangeditor.css': ['/asset/wangeditor.css', 'https://unpkg.com/@wangeditor/editor@5.1.23/dist/css/style.css'],
+      'wangeditor.js': ['/asset/wangeditor.js', 'https://unpkg.com/@wangeditor/editor@5.1.23/dist/index.min.js'],
+      'github-markdown.css': ['/asset/github-markdown.css', 'https://cdn.jsdelivr.net/npm/github-markdown-css@5.9.0/github-markdown.css'],
+      'marked.min.js': ['/asset/marked.min.js', 'https://unpkg.com/marked@12.0.2/marked.min.js'],
+      'vue.global.prod.js': ['/asset/vue.global.prod.js', 'https://unpkg.com/vue@3.4.21/dist/vue.global.prod.js'],
+      'jszip.min.js': ['/asset/jszip.min.js', 'https://unpkg.com/jszip@3.10.1/dist/jszip.min.js'],
+      'file-saver.min.js': ['/asset/file-saver.min.js', 'https://unpkg.com/file-saver@2.0.5/dist/FileSaver.min.js'],
+    };
+
+    const cdnUrls = ASSET_CDN_MAP[filename];
+    if (!cdnUrls) return new Response('Asset not in whitelist: ' + filename, { status: 404 });
+
+    // ★ 优先从 GitHub 缓存读
+    const assetKey = 'asset_' + filename;
+    const cached = await d1Get(env, assetKey, null);
+
+    if (cached && cached.uploaded) {
+      try {
+        // Accept: application/vnd.github.raw 直接返回原始内容
+        const ghResp = await fetchWithTimeout(
+          `${GITHUB_API}/repos/${GITHUB_USER}/${ASSETS_REPO}/contents/${encodeURIComponent(filename)}`,
+          {
+            headers: {
+              'Authorization': `token ${env.GITHUB_TOKEN}`,
+              'Accept': 'application/vnd.github.raw',
+              'User-Agent': 'netdisk-worker'
+            }
+          },
+          30000
+        );
+        if (ghResp.ok) {
+          const headers = new Headers();
+          headers.set('Content-Type', cached.contentType || 'application/octet-stream');
+          headers.set('Cache-Control', 'public, max-age=604800, immutable');
+          headers.set('Access-Control-Allow-Origin', '*');
+          headers.set('X-Asset-Source', 'github-cache');
+          return new Response(ghResp.body, { headers });
+        }
+      } catch(e) {
+        console.warn('asset github read failed: ' + filename, e);
+      }
+    }
+
+    // ★ 从 CDN 拉取（多 CDN 容灾）
+    let cdnResp = null;
+    let usedCdn = '';
+    for (const u of cdnUrls) {
+      try {
+        const r = await fetchWithTimeout(u, { headers: { 'User-Agent': 'netdisk-worker' } }, 60000);
+        if (r.ok) { cdnResp = r; usedCdn = u; break; }
+      } catch(e) {
+        console.warn('asset cdn fail: ' + u, e.message);
+      }
+    }
+
+    if (!cdnResp) {
+      return new Response('All CDNs failed for: ' + filename, { status: 502 });
+    }
+
+    const buffer = await cdnResp.arrayBuffer();
+    const contentType = cdnResp.headers.get('content-type') || 'application/octet-stream';
+
+    // ★ 后台异步上传到 GitHub（不阻塞本次响应）
+    (async () => {
+      try {
+        await githubCreateRepo(ASSETS_REPO, env);
+        const base64 = arrayBufferToBase64(buffer);
+        const putResp = await fetchWithTimeout(
+          `${GITHUB_API}/repos/${GITHUB_USER}/${ASSETS_REPO}/contents/${encodeURIComponent(filename)}`,
+          {
+            method: 'PUT',
+            headers: {
+              'Authorization': `token ${env.GITHUB_TOKEN}`,
+              'Accept': 'application/vnd.github+json',
+              'Content-Type': 'application/json',
+              'User-Agent': 'netdisk-worker'
+            },
+            body: JSON.stringify({ message: 'asset: ' + filename, content: base64 })
+          },
+          120000
+        );
+        if (putResp.ok) {
+          await d1Set(env, assetKey, {
+            name: filename,
+            uploaded: true,
+            contentType: contentType,
+            size: buffer.byteLength,
+            sourceCdn: usedCdn,
+            cachedAt: Date.now()
+          });
+          console.log('asset cached: ' + filename + ' (' + buffer.byteLength + ' B)');
+        } else {
+          console.warn('asset upload failed: ' + putResp.status);
+        }
+      } catch(e) {
+        console.error('asset upload error:', e);
+      }
+    })();
+
+    const headers = new Headers();
+    headers.set('Content-Type', contentType);
+    headers.set('Cache-Control', 'public, max-age=604800, immutable');
+    headers.set('Access-Control-Allow-Origin', '*');
+    headers.set('X-Asset-Source', 'cdn-fresh');
+    return new Response(buffer, { headers });
+  }
+
+  // ==================== 资产库列表（仅用于调试） ====================
+  if (path === '/api/asset/list' && request.method === 'GET') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    const rows = await getD1(env).prepare("SELECT value FROM kv_store WHERE key LIKE 'asset_%'").all();
+    const list = [];
+    for (const r of (rows.results || [])) {
+      try { list.push(JSON.parse(r.value)); } catch(e) {}
+    }
+    list.sort((a, b) => a.name.localeCompare(b.name));
+    return jsonResponse(list);
+  }
+
   if (path === '/api/structure') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
