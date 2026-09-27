@@ -1031,7 +1031,44 @@ async function page(title, body, scripts = '', themeCss = '', request = null) {
 }
 
 const HOME_BODY = `
-<div class="appbar"><h1>我的网盘</h1><div style="display:flex;align-items:center;gap:8px;"><span class="material-icons" id="btn-refresh">refresh</span><span class="material-icons" id="btn-settings">settings</span><span class="material-icons" id="btn-logout">logout</span></div></div>
+<div class="appbar">
+  <h1 id="page-title">我的网盘</h1>
+  <div style="display:flex;align-items:center;gap:4px;flex:1;max-width:320px;margin:0 8px;">
+    <span class="material-icons" style="font-size:20px;">search</span>
+    <input id="search-input" type="text" placeholder="搜索文件（空格分隔多关键词）" style="flex:1;padding:6px 10px;border:none;border-radius:20px;background:rgba(255,255,255,.2);color:#fff;font-size:14px;outline:none;" autocomplete="off">
+    <span class="material-icons" id="search-clear" style="font-size:20px;display:none;cursor:pointer;">close</span>
+  </div>
+  <div style="display:flex;align-items:center;gap:8px;">
+    <span class="material-icons" id="btn-go" title="Go 页面" style="cursor:pointer;padding:8px;">rocket_launch</span>
+    <span class="material-icons" id="btn-refresh" title="刷新" style="cursor:pointer;padding:8px;">refresh</span>
+    <span class="material-icons" id="btn-settings" title="设置" style="cursor:pointer;padding:8px;">settings</span>
+    <span class="material-icons" id="btn-logout" title="退出" style="cursor:pointer;padding:8px;">logout</span>
+  </div>
+</div>
+
+<!-- 搜索结果面板 -->
+<div id="search-panel" style="display:none;position:fixed;top:48px;left:0;right:0;bottom:0;background:var(--bg);z-index:15;overflow-y:auto;">
+  <div style="max-width:900px;margin:0 auto;padding:16px 12px 76px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <span id="search-count" style="font-size:14px;color:var(--text-sec);">共 0 条结果</span>
+      <div style="display:flex;gap:8px;">
+        <button id="search-sel-all" class="btn-secondary" style="padding:6px 12px;border:none;border-radius:6px;cursor:pointer;font-size:13px;">全选</button>
+        <button id="search-sel-cancel" class="btn-secondary" style="padding:6px 12px;border:none;border-radius:6px;cursor:pointer;font-size:13px;">取消</button>
+      </div>
+    </div>
+
+    <!-- 批量操作栏 -->
+    <div id="search-batch-bar" style="display:none;align-items:center;gap:8px;margin-bottom:12px;padding:8px 12px;background:#fff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.1);flex-wrap:wrap;">
+      <span id="search-sel-count" style="font-size:14px;flex:1;">已选 0 项</span>
+      <button onclick="searchBatchMove()" style="padding:6px 12px;border:none;border-radius:6px;background:#e0e0e0;cursor:pointer;font-size:13px;">移动</button>
+      <button onclick="searchBatchCopy()" style="padding:6px 12px;border:none;border-radius:6px;background:#e0e0e0;cursor:pointer;font-size:13px;">复制</button>
+      <button onclick="searchBatchShare()" style="padding:6px 12px;border:none;border-radius:6px;background:#e0e0e0;cursor:pointer;font-size:13px;">分享</button>
+      <button onclick="searchBatchDelete()" style="padding:6px 12px;border:none;border-radius:6px;background:#ffebee;color:#c62828;cursor:pointer;font-size:13px;">删除</button>
+    </div>
+
+    <div id="search-results"></div>
+  </div>
+</div>
 <div class="container">
   <div class="breadcrumbs" id="breadcrumbs"><a href="/?path=">首页</a></div>
   <div id="selection-bar" class="selection-bar">
@@ -1150,6 +1187,40 @@ const HOME_BODY = `
 
     <div class="modal-actions" style="margin-top:16px;">
       <button class="btn-primary" onclick="closeShareResultModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+
+<div class="drawer" id="go-drawer" style="width:340px;max-width:90vw;">
+  <div class="drawer-head"><span>Go 页面</span><span class="material-icons" id="close-go" style="cursor:pointer;padding:6px;">close</span></div>
+  <div class="drawer-body" id="go-list">
+    <div class="empty">加载中...</div>
+  </div>
+  <div style="padding:12px;border-top:1px solid var(--divider);">
+    <button class="btn-primary" id="btn-new-go" style="width:100%;padding:10px;border:none;border-radius:8px;cursor:pointer;">+ 新建页面</button>
+  </div>
+</div>
+
+<div class="modal-overlay" id="go-modal">
+  <div class="modal" style="max-width:560px;max-height:88vh;overflow-y:auto;">
+    <h3 id="go-modal-title" style="margin-top:0;">新建 Go 页面</h3>
+
+    <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">名称（英文/数字/_-，不含空格）</label>
+    <input type="text" id="go-name" placeholder="例如 hello" maxlength="64" style="margin-bottom:10px;">
+
+    <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">类型</label>
+    <select id="go-type" style="width:100%;padding:10px;border:1px solid var(--divider);border-radius:8px;font-size:14px;margin-bottom:10px;background:#fff;">
+      <option value="html">HTML（完整网页）</option>
+      <option value="text">纯文本</option>
+    </select>
+
+    <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">内容</label>
+    <textarea id="go-content" placeholder="输入 HTML 或文本..." style="width:100%;min-height:280px;font-family:Consolas,Monaco,monospace;font-size:13px;padding:10px;border:1px solid var(--divider);border-radius:8px;box-sizing:border-box;resize:vertical;"></textarea>
+
+    <div class="modal-actions" style="margin-top:16px;">
+      <button class="btn-secondary" onclick="closeGoModal()">取消</button>
+      <button class="btn-primary" id="go-save-btn">保存</button>
     </div>
   </div>
 </div>
@@ -2077,6 +2148,335 @@ function openModal(title,content,onOk){
 function closeModal(){ document.getElementById('modal').classList.remove('show'); }
 
 bindShareModalEvents();
+
+// ==================== Go 功能 ====================
+var goState = { editingName: null, list: [] };
+
+function openGoDrawer() {
+  document.getElementById('go-drawer').classList.add('show');
+  loadGoList();
+}
+function closeGoDrawer() {
+  document.getElementById('go-drawer').classList.remove('show');
+}
+
+async function loadGoList() {
+  var box = document.getElementById('go-list');
+  try {
+    var items = await api('/api/go/list') || [];
+    goState.list = items;
+    if (items.length === 0) {
+      box.innerHTML = '<div class="empty">还没有 Go 页面<br><span style="font-size:12px;">点下方"新建页面"创建一个</span></div>';
+      return;
+    }
+    var domain = DEFAULT_DOMAIN || location.origin;
+    box.innerHTML = items.map(function(item) {
+      var url = domain + '/go/' + item.name + '.html';
+      var sizeStr = item.size > 1024 ? (item.size / 1024).toFixed(1) + ' KB' : item.size + ' B';
+      return '<div class="go-item" data-name="' + escapeHtml(item.name) + '" style="padding:12px;border:1px solid var(--divider);border-radius:8px;margin-bottom:8px;background:#fff;">'
+        + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">'
+        + '<span class="material-icons" style="font-size:18px;color:var(--primary);">' + (item.type === 'html' ? 'code' : 'description') + '</span>'
+        + '<span style="flex:1;font-weight:500;font-size:14px;word-break:break-all;">' + escapeHtml(item.name) + '</span>'
+        + '</div>'
+        + '<div style="font-size:12px;color:var(--text-sec);margin-bottom:8px;">' + item.type.toUpperCase() + ' · ' + sizeStr + '</div>'
+        + '<div style="font-size:11px;color:var(--text-sec);word-break:break-all;margin-bottom:8px;">' + escapeHtml(url) + '</div>'
+        + '<div style="display:flex;gap:6px;flex-wrap:wrap;">'
+        + '<button class="go-act" data-act="open" data-name="' + escapeHtml(item.name) + '" style="padding:4px 10px;border:1px solid var(--divider);background:#fff;border-radius:6px;cursor:pointer;font-size:12px;">打开</button>'
+        + '<button class="go-act" data-act="copy" data-name="' + escapeHtml(item.name) + '" style="padding:4px 10px;border:1px solid var(--divider);background:#fff;border-radius:6px;cursor:pointer;font-size:12px;">复制链接</button>'
+        + '<button class="go-act" data-act="edit" data-name="' + escapeHtml(item.name) + '" style="padding:4px 10px;border:1px solid var(--divider);background:#fff;border-radius:6px;cursor:pointer;font-size:12px;">编辑</button>'
+        + '<button class="go-act" data-act="del" data-name="' + escapeHtml(item.name) + '" style="padding:4px 10px;border:1px solid #ffcdd2;background:#fff;color:#c62828;border-radius:6px;cursor:pointer;font-size:12px;">删除</button>'
+        + '</div>'
+        + '</div>';
+    }).join('');
+
+    box.querySelectorAll('.go-act').forEach(function(btn) {
+      btn.onclick = function() {
+        var name = btn.getAttribute('data-name');
+        var act = btn.getAttribute('data-act');
+        if (act === 'open') window.open((DEFAULT_DOMAIN || location.origin) + '/go/' + name + '.html', '_blank');
+        else if (act === 'copy') copyText((DEFAULT_DOMAIN || location.origin) + '/go/' + name + '.html').then(function(){ showMsg('链接已复制'); });
+        else if (act === 'edit') openGoEdit(name);
+        else if (act === 'del') deleteGo(name);
+      };
+    });
+  } catch (e) {
+    box.innerHTML = '<div class="empty">加载失败: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+function openGoModal(name, content, type) {
+  document.getElementById('go-modal-title').textContent = name ? '编辑 Go 页面' : '新建 Go 页面';
+  document.getElementById('go-name').value = name || '';
+  document.getElementById('go-name').disabled = false;
+  document.getElementById('go-type').value = type || 'html';
+  document.getElementById('go-content').value = content || '';
+  goState.editingName = name || null;
+  document.getElementById('go-modal').classList.add('show');
+  document.getElementById('go-save-btn').onclick = saveGo;
+}
+
+function closeGoModal() {
+  document.getElementById('go-modal').classList.remove('show');
+  goState.editingName = null;
+}
+
+async function openGoEdit(name) {
+  try {
+    var item = await api('/api/go/get?name=' + encodeURIComponent(name));
+    if (!item) throw new Error('不存在');
+    openGoModal(item.name, item.content, item.type);
+    document.getElementById('go-name').disabled = false; // 允许改名
+  } catch (e) {
+    showMsg('加载失败: ' + e.message);
+  }
+}
+
+async function saveGo() {
+  var name = document.getElementById('go-name').value.trim();
+  var content = document.getElementById('go-content').value;
+  var type = document.getElementById('go-type').value;
+  if (!name) { showMsg('请输入名称'); return; }
+  if (!/^[a-zA-Z0-9_-]+$/.test(name)) { showMsg('名称只能包含字母、数字、下划线、短横线'); return; }
+  try {
+    await api('/api/go/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name, content: content, type: type, originalName: goState.editingName })
+    });
+    showMsg('已保存');
+    closeGoModal();
+    loadGoList();
+  } catch (e) {
+    showMsg('保存失败: ' + e.message);
+  }
+}
+
+async function deleteGo(name) {
+  if (!confirm('确定删除 "' + name + '" ？')) return;
+  try {
+    await api('/api/go/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name })
+    });
+    showMsg('已删除');
+    loadGoList();
+  } catch (e) {
+    showMsg('删除失败: ' + e.message);
+  }
+}
+
+// 绑定事件
+document.getElementById('btn-go').onclick = openGoDrawer;
+document.getElementById('close-go').onclick = closeGoDrawer;
+document.getElementById('btn-new-go').onclick = function() { openGoModal(null, '', 'html'); };
+
+
+// ==================== 搜索功能 ====================
+var searchState = { keywords: '', results: [], selected: new Set(), timer: null };
+
+function debounceSearch() {
+  if (searchState.timer) clearTimeout(searchState.timer);
+  searchState.timer = setTimeout(doSearch, 300);
+}
+
+async function doSearch() {
+  var input = document.getElementById('search-input');
+  var q = input.value.trim();
+  var clearBtn = document.getElementById('search-clear');
+  var panel = document.getElementById('search-panel');
+
+  if (!q) {
+    panel.style.display = 'none';
+    clearBtn.style.display = 'none';
+    return;
+  }
+
+  clearBtn.style.display = 'inline-block';
+  panel.style.display = 'block';
+  document.getElementById('search-results').innerHTML = '<div class="empty">搜索中...</div>';
+
+  try {
+    var data = await api('/api/search?q=' + encodeURIComponent(q));
+    searchState.keywords = q;
+    searchState.results = data.results || [];
+    searchState.selected.clear();
+    renderSearchResults();
+  } catch (e) {
+    document.getElementById('search-results').innerHTML = '<div class="empty">搜索失败: ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+function renderSearchResults() {
+  var box = document.getElementById('search-results');
+  var countEl = document.getElementById('search-count');
+  var results = searchState.results;
+  countEl.textContent = '共 ' + results.length + ' 条结果';
+
+  if (results.length === 0) {
+    box.innerHTML = '<div class="empty"><span class="material-icons" style="font-size:48px;color:#bdbdbd;">search_off</span><p>没有匹配的文件</p></div>';
+    updateSearchBatchBar();
+    return;
+  }
+
+  box.innerHTML = results.map(function(r, idx) {
+    var icon = r.type === 'folder' ? 'folder' : getIcon(r.name);
+    var meta = r.type === 'folder' ? '文件夹' : (formatSize(r.size) + ' · ' + formatTime(r.createdAt));
+    var isSel = searchState.selected.has(idx);
+    return '<div class="file-card search-result-card ' + (isSel ? 'selected' : '') + '" data-idx="' + idx + '" data-path="' + escapeHtml(r.path) + '" data-type="' + r.type + '">'
+      + '<div class="file-main">'
+      + '<input type="checkbox" class="sel-check" style="display:inline-block;" ' + (isSel ? 'checked' : '') + ' data-action="sel">'
+      + '<div class="file-icon"><span class="material-icons">' + icon + '</span></div>'
+      + '<div class="file-name-wrap">'
+      + '<div class="file-name">' + escapeHtml(r.name) + '</div>'
+      + '<div style="font-size:11px;color:var(--text-sec);">' + escapeHtml(r.parentPath || '/') + '</div>'
+      + '</div>'
+      + '</div>'
+      + '<div class="file-meta">' + meta + '</div>'
+      + '</div>';
+  }).join('');
+
+  // 事件绑定
+  box.querySelectorAll('.search-result-card').forEach(function(card) {
+    card.onclick = function(e) {
+      var idx = parseInt(card.getAttribute('data-idx'), 10);
+      if (e.target.getAttribute('data-action') === 'sel' || e.target.classList.contains('sel-check')) {
+        // 复选框点击
+        toggleSearchSelect(idx);
+      } else {
+        // 卡片点击 → 打开
+        var path = card.getAttribute('data-path');
+        var type = card.getAttribute('data-type');
+        if (type === 'folder') {
+          // 关掉搜索面板，跳转到目录
+          closeSearch();
+          openFolder(path);
+        } else {
+          location.href = '/file?path=' + encodeURIComponent(path);
+        }
+      }
+    };
+  });
+
+  updateSearchBatchBar();
+}
+
+function toggleSearchSelect(idx) {
+  if (searchState.selected.has(idx)) searchState.selected.delete(idx);
+  else searchState.selected.add(idx);
+  var card = document.querySelector('.search-result-card[data-idx="' + idx + '"]');
+  if (card) {
+    card.classList.toggle('selected', searchState.selected.has(idx));
+    var chk = card.querySelector('.sel-check');
+    if (chk) chk.checked = searchState.selected.has(idx);
+  }
+  updateSearchBatchBar();
+}
+
+function updateSearchBatchBar() {
+  var bar = document.getElementById('search-batch-bar');
+  var count = searchState.selected.size;
+  if (count > 0) {
+    bar.style.display = 'flex';
+    document.getElementById('search-sel-count').textContent = '已选 ' + count + ' 项';
+  } else {
+    bar.style.display = 'none';
+  }
+}
+
+function searchSelectAll() {
+  searchState.results.forEach(function(_, idx) { searchState.selected.add(idx); });
+  renderSearchResults();
+}
+
+function searchClearSelection() {
+  searchState.selected.clear();
+  renderSearchResults();
+}
+
+function closeSearch() {
+  document.getElementById('search-input').value = '';
+  document.getElementById('search-clear').style.display = 'none';
+  document.getElementById('search-panel').style.display = 'none';
+  searchState.results = [];
+  searchState.selected.clear();
+}
+
+function getSelectedPaths() {
+  var paths = [];
+  searchState.selected.forEach(function(idx) {
+    if (searchState.results[idx]) paths.push(searchState.results[idx].path);
+  });
+  return paths;
+}
+
+async function searchBatchMove() {
+  var paths = getSelectedPaths();
+  if (paths.length === 0) return;
+  var res = await pickTargetFolder({ operation: 'move', sourcePaths: paths });
+  if (!res) return;
+  try {
+    await api('/api/file/move', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths, targetPath: res.target, mode: res.mode })
+    });
+    showMsg('批量移动成功');
+    closeSearch();
+    loadList();
+  } catch (e) { showMsg('移动失败: ' + e.message); }
+}
+
+async function searchBatchCopy() {
+  var paths = getSelectedPaths();
+  if (paths.length === 0) return;
+  var res = await pickTargetFolder({ operation: 'copy', sourcePaths: paths });
+  if (!res) return;
+  try {
+    await api('/api/file/copy', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths, targetPath: res.target, mode: res.mode })
+    });
+    showMsg('批量复制成功');
+    searchClearSelection();
+  } catch (e) { showMsg('复制失败: ' + e.message); }
+}
+
+async function searchBatchShare() {
+  var paths = getSelectedPaths();
+  if (paths.length === 0) return;
+  openShareModal(paths);
+}
+
+async function searchBatchDelete() {
+  var paths = getSelectedPaths();
+  if (paths.length === 0) return;
+  if (!confirm('确定删除选中的 ' + paths.length + ' 项？')) return;
+  try {
+    await api('/api/files/batch', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths })
+    });
+    showMsg('已删除 ' + paths.length + ' 项');
+    // 从结果中移除
+    searchState.results = searchState.results.filter(function(r) { return paths.indexOf(r.path) === -1; });
+    searchState.selected.clear();
+    renderSearchResults();
+    loadList();
+  } catch (e) { showMsg('删除失败: ' + e.message); }
+}
+
+// 绑定搜索事件
+document.getElementById('search-input').addEventListener('input', debounceSearch);
+document.getElementById('search-input').addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') closeSearch();
+});
+document.getElementById('search-clear').onclick = closeSearch;
+document.getElementById('search-sel-all').onclick = searchSelectAll;
+document.getElementById('search-sel-cancel').onclick = searchClearSelection;
+
 loadList();
 
 // ★ 全局实时刷新：每 500ms 刷新任务列表 UI，每 2s 拉服务端
@@ -3396,6 +3796,155 @@ async function handleRequest(request, env, ctx = null) {
     return new Response(JSON.stringify({ ok: true }), {
       headers: { 'Content-Type': 'application/json', 'Set-Cookie': `auth=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0` }
     });
+  }
+
+  // ==================== Go 页面 ====================
+  if (path === '/api/go/list' && request.method === 'GET') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    const rows = await getD1(env).prepare("SELECT value FROM kv_store WHERE key LIKE 'go_%'").all();
+    const items = [];
+    for (const r of (rows.results || [])) {
+      try {
+        const o = JSON.parse(r.value);
+        items.push({ name: o.name, type: o.type, createdAt: o.createdAt, updatedAt: o.updatedAt, size: (o.content || '').length });
+      } catch (e) {}
+    }
+    items.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    return jsonResponse(items);
+  }
+
+  if (path === '/api/go/get' && request.method === 'GET') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    const name = url.searchParams.get('name') || '';
+    if (!name) return errorResponse('缺少 name');
+    const item = await d1Get(env, 'go_' + name, null);
+    if (!item) return errorResponse('不存在', 404);
+    return jsonResponse(item);
+  }
+
+  if (path === '/api/go/save' && request.method === 'POST') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    const body = await request.json();
+    const name = String(body.name || '').trim();
+    const content = String(body.content || '');
+    const type = body.type === 'html' ? 'html' : 'text';
+    const originalName = body.originalName || null;
+    if (!name) return errorResponse('名称不能为空');
+    if (!/^[a-zA-Z0-9_-]+$/.test(name)) return errorResponse('名称只能包含字母、数字、下划线、短横线');
+    if (name.length > 64) return errorResponse('名称太长');
+
+    // 重名检查（除非是自身重命名）
+    if (originalName !== name) {
+      const exist = await d1Get(env, 'go_' + name, null);
+      if (exist) return errorResponse('名称已存在，请换一个');
+    }
+
+    const old = originalName ? await d1Get(env, 'go_' + originalName, null) : null;
+    const item = {
+      name: name,
+      content: content,
+      type: type,
+      createdAt: (old && old.createdAt) || Date.now(),
+      updatedAt: Date.now()
+    };
+    await d1Set(env, 'go_' + name, item);
+    if (originalName && originalName !== name) {
+      await d1Delete(env, 'go_' + originalName);
+    }
+    return jsonResponse({ ok: true, item });
+  }
+
+  if (path === '/api/go/delete' && request.method === 'POST') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    const body = await request.json();
+    const name = String(body.name || '');
+    if (!name) return errorResponse('缺少 name');
+    await d1Delete(env, 'go_' + name);
+    return jsonResponse({ ok: true });
+  }
+
+  // ==================== Go 页面访问 ====================
+  if (path.startsWith('/go/')) {
+    let name = path.slice(4);   // 去掉 /go/
+    if (name.endsWith('.html')) name = name.slice(0, -5);
+    if (!name) return errorResponse('缺少名称', 404);
+    const item = await d1Get(env, 'go_' + name, null);
+    if (!item) return new Response('页面不存在', { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
+
+    if (item.type === 'html') {
+      // HTML 直接返回
+      return new Response(item.content, {
+        headers: {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'public, max-age=60'
+        }
+      });
+    } else {
+      // 文本包装为 HTML
+      const html = '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + escapeHtml(item.name) + '</title>'
+        + '<style>body{font-family:system-ui,sans-serif;max-width:800px;margin:40px auto;padding:0 16px;line-height:1.7;color:#212121;}pre{background:#f5f5f5;padding:16px;border-radius:8px;overflow:auto;}</style>'
+        + '</head><body><pre>' + escapeHtml(item.content) + '</pre></body></html>';
+      return new Response(html, {
+        headers: {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'public, max-age=60'
+        }
+      });
+    }
+  }
+
+  // ==================== 文件搜索 ====================
+  if (path === '/api/search' && request.method === 'GET') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    const q = (url.searchParams.get('q') || '').trim();
+    if (!q) return jsonResponse({ results: [], count: 0 });
+    // 多关键词：空格 / 逗号分隔
+    const keywords = q.split(/[\s,，]+/).filter(Boolean).map(k => k.toLowerCase());
+    if (keywords.length === 0) return jsonResponse({ results: [], count: 0 });
+
+    const structure = await getStructure(env);
+    const allPaths = collectPaths(structure);
+    const results = [];
+    const MAX_RESULTS = 500;
+
+    for (const p of allPaths) {
+      const node = getNode(structure, p);
+      if (!node) continue;
+      const nameLower = (node.name || '').toLowerCase();
+      const pathLower = p.toLowerCase();
+      // 所有关键词都要命中（AND 逻辑）
+      let allMatch = true;
+      for (const kw of keywords) {
+        if (pathLower.indexOf(kw) === -1) { allMatch = false; break; }
+      }
+      if (!allMatch) continue;
+
+      const parts = p.split('/');
+      const parentPath = parts.slice(0, -1).join('/');
+      results.push({
+        path: p,
+        name: node.name,
+        type: node.type,
+        size: node.size || 0,
+        createdAt: node.createdAt || 0,
+        parentPath: parentPath,
+        ssid: node.ssid || null
+      });
+      if (results.length >= MAX_RESULTS) break;
+    }
+
+    // 排序：文件夹优先 + 名称
+    results.sort((a, b) => {
+      if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+      return a.name.localeCompare(b.name, 'zh-CN');
+    });
+
+    return jsonResponse({ results, count: results.length, keywords });
   }
 
   if (path === '/api/structure') {
