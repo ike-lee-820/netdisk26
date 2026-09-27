@@ -886,7 +886,7 @@ body { margin:0; font-family:system-ui,sans-serif; background:var(--bg); color:v
 .fab-menu { position:fixed; bottom:64px; left:50%; transform:translateX(-50%); background:var(--surface); border-radius:10px; box-shadow:0 4px 12px rgba(0,0,0,.2); display:none; flex-direction:column; min-width:160px; z-index:30; }
 .fab-menu.show { display:flex; }
 .fab-menu button { padding:10px 14px; border:none; background:none; text-align:left; cursor:pointer; font-size:13px; display:flex; align-items:center; gap:8px; }
-.drawer { position:fixed; top:0; right:-300px; width:300px; max-width:85vw; bottom:0; background:var(--surface); box-shadow:-2px 0 8px rgba(0,0,0,.2); z-index:40; transition:right .3s; display:flex; flex-direction:column; }
+.drawer { position:fixed; top:0; right:-400px; width:300px; max-width:85vw; bottom:0; background:var(--surface); box-shadow:-2px 0 8px rgba(0,0,0,.2); z-index:40; transition:right .3s; display:flex; flex-direction:column; }
 .drawer.show { right:0; }
 .drawer-head { height:48px; background:var(--primary); color:#fff; display:flex; align-items:center; padding:0 12px; font-weight:500; font-size:15px; }
 .drawer-body { flex:1; overflow-y:auto; padding:8px; }
@@ -1064,7 +1064,7 @@ const HOME_BODY = `
     </div>
   </div>
 </div>
-<div class="drawer" id="go-drawer" style="width:340px;max-width:90vw;">
+<div class="drawer" id="go-drawer">
   <div class="drawer-head"><span>Go 页面</span><span class="material-icons" id="close-go" style="cursor:pointer;padding:6px;">close</span></div>
   <div class="drawer-body" id="go-list">
     <div class="empty">加载中...</div>
