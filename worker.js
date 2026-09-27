@@ -3535,9 +3535,8 @@ function shareManagePage(themeCss) {
 }
 
 function assetsPage(themeCss) {
-  const html = `<!DOCTYPE html><html><head>` + COMMON_HEAD + (themeCss || '') + `
+  const html = '<!DOCTYPE html><html><head>' + COMMON_HEAD + (themeCss || '') + `
   <style>
-    /* 全新的 Material Design 风格 CSS */
     .stat-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 16px; }
     .stat-card { background: #fff; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; align-items: center; gap: 4px; box-shadow: 0 2px 8px rgba(0,0,0,.06); }
     .stat-card .material-icons { font-size: 28px; color: var(--primary); }
@@ -3567,7 +3566,6 @@ function assetsPage(themeCss) {
     .asset-actions .danger { border-color: #ffcdd2; color: #c62828; }
     .asset-actions .danger:hover { background: #ffebee; }
     .asset-actions button:disabled { opacity: 0.5; cursor: not-allowed; background: #f5f5f5; border-color: var(--divider); color: var(--text-sec); }
-    /* 弹窗样式优化 */
     .modal-overlay { background: rgba(0,0,0,.6); }
     .modal { border-radius: 16px; padding: 24px; box-shadow: 0 8px 32px rgba(0,0,0,.2); }
     .modal h3 { margin-top: 0; font-size: 18px; color: var(--text); }
@@ -3643,6 +3641,8 @@ function assetsPage(themeCss) {
   <div class="snackbar" id="snackbar"></div>
 
   <script>
+  var Q = String.fromCharCode(39); // 单引号
+  var NL = String.fromCharCode(10); // 换行符
   var assetState = { list: [], editingName: null };
   function showMsg(msg){ var s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(function(){s.classList.remove('show');},2500); }
   function escapeHtml(t){ return String(t).replace(/[&<>"']/g, function(m){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]; }); }
@@ -3693,27 +3693,27 @@ function assetsPage(themeCss) {
         var url = location.origin + '/asset/' + a.name;
         var statusBadge = a.uploaded ? '<span class="badge ok">✓ 已缓存</span>' : '<span class="badge wait">⏳ 未缓存</span>';
         var typeBadge = a.isBuiltin ? '<span class="badge builtin">内置</span>' : (a.sourceType === 'manual' ? '<span class="badge manual">手动</span>' : '');
-        var cdnList = (a.cdnUrls || []).join('\n');
+        var cdnList = (a.cdnUrls || []).join(NL);
         html += '<div class="asset-card">';
         html += '<div class="asset-header"><div class="asset-title">' + escapeHtml(a.name) + ' ' + statusBadge + typeBadge + '</div></div>';
         html += '<div class="asset-meta">' + formatSize(a.size || 0) + ' · ' + escapeHtml(a.contentType || 'unknown') + (a.cachedAt ? ' · ' + new Date(a.cachedAt).toLocaleString() : '') + '</div>';
         html += '<div class="asset-url">' + escapeHtml(url) + '</div>';
-        if (cdnList) { html += '<div class="asset-cdn">' + escapeHtml(cdnList).replace(/\n/g, '<br>') + '</div>'; }
+        if (cdnList) { html += '<div class="asset-cdn">' + escapeHtml(cdnList).split(NL).join('<br>') + '</div>'; }
         html += '<div class="asset-actions">';
-        html += `<button onclick="copyUrl('${escapeHtml(a.name)}')"><span class="material-icons" style="font-size:16px;">copy</span> 复制</button>`;
-        html += `<a href="${escapeHtml(url)}" target="_blank"><span class="material-icons" style="font-size:16px;">open_in_new</span> 打开</a>`;
+        html += '<button onclick="copyUrl(' + Q + escapeHtml(a.name) + Q + ')"><span class="material-icons" style="font-size:16px;">copy</span> 复制</button>';
+        html += '<a href="' + escapeHtml(url) + '" target="_blank"><span class="material-icons" style="font-size:16px;">open_in_new</span> 打开</a>';
         if (!a.uploaded || a.sourceType === 'cdn') {
-          html += `<button class="warn" onclick="cacheAsset('${escapeHtml(a.name)}')"><span class="material-icons" style="font-size:16px;">cloud_download</span> ${a.uploaded ? '重新缓存' : '缓存'}</button>`;
+          html += '<button class="warn" onclick="cacheAsset(' + Q + escapeHtml(a.name) + Q + ')"><span class="material-icons" style="font-size:16px;">cloud_download</span> ' + (a.uploaded ? '重新缓存' : '缓存') + '</button>';
         }
         if (a.isBuiltin) {
           html += '<button disabled title="内置资产不可修改"><span class="material-icons" style="font-size:16px;">lock</span> 内置</button>';
         } else {
-          html += `<button onclick="editAsset('${escapeHtml(a.name)}')"><span class="material-icons" style="font-size:16px;">edit</span> 改链接</button>`;
+          html += '<button onclick="editAsset(' + Q + escapeHtml(a.name) + Q + ')"><span class="material-icons" style="font-size:16px;">edit</span> 改链接</button>';
         }
         if (a.isBuiltin) {
           html += '<button disabled title="内置资产不可删除"><span class="material-icons" style="font-size:16px;">block</span> 内置</button>';
         } else {
-          html += `<button class="danger" onclick="deleteAsset('${escapeHtml(a.name)}')"><span class="material-icons" style="font-size:16px;">delete</span> 删除</button>`;
+          html += '<button class="danger" onclick="deleteAsset(' + Q + escapeHtml(a.name) + Q + ')"><span class="material-icons" style="font-size:16px;">delete</span> 删除</button>';
         }
         html += '</div></div>';
       }
@@ -3748,7 +3748,7 @@ function assetsPage(themeCss) {
   }
 
   async function deleteAsset(name){
-    if (!confirm('确定删除 "' + name + '"？\n\n这会同时从 GitHub 和 D1 中删除。')) return;
+    if (!confirm('确定删除 "' + name + '"？' + NL + NL + '这会同时从 GitHub 和 D1 中删除。')) return;
     try {
       await api('/api/asset/delete', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name: name }) });
       showMsg('已删除');
@@ -3762,7 +3762,7 @@ function assetsPage(themeCss) {
     if (a.isBuiltin) { showMsg('内置资产不允许修改链接'); return; }
     assetState.editingName = name;
     document.getElementById('edit-name').value = name;
-    document.getElementById('edit-urls').value = (a.cdnUrls || []).join('\n');
+    document.getElementById('edit-urls').value = (a.cdnUrls || []).join(NL);
     document.getElementById('edit-modal').classList.add('show');
   }
 
@@ -3771,7 +3771,7 @@ function assetsPage(themeCss) {
   document.getElementById('edit-confirm').onclick = async function(){
     var name = assetState.editingName;
     if (!name) return;
-    var urls = document.getElementById('edit-urls').value.split('\n').map(function(s){ return s.trim(); }).filter(Boolean);
+    var urls = document.getElementById('edit-urls').value.split(NL).map(function(s){ return s.trim(); }).filter(Boolean);
     try {
       await api('/api/asset/update', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name: name, cdnUrls: urls }) });
       showMsg('已保存');
@@ -3785,7 +3785,7 @@ function assetsPage(themeCss) {
   
   document.getElementById('add-confirm').onclick = async function(){
     var name = document.getElementById('add-name').value.trim();
-    var urls = document.getElementById('add-urls').value.split('\n').map(function(s){ return s.trim(); }).filter(Boolean);
+    var urls = document.getElementById('add-urls').value.split(NL).map(function(s){ return s.trim(); }).filter(Boolean);
     if (!name) { showMsg('请输入文件名'); return; }
     if (!/^[a-zA-Z0-9._-]+$/.test(name)) { showMsg('文件名只能包含字母、数字、._-'); return; }
     if (urls.length === 0) { showMsg('请输入至少一个 CDN URL'); return; }
