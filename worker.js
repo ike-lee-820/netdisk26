@@ -3703,7 +3703,11 @@ function assetsPage(themeCss) {
             html += '<button class="warn" onclick="cacheAsset(&#39;' + escapeHtml(a.name) + '&#39;)">' + (a.uploaded ? '重新缓存' : '缓存') + '</button>';
           }
           html += '<button onclick="editAsset(&#39;' + escapeHtml(a.name) + '&#39;)">改链接</button>';
-          html += '<button class="danger" onclick="deleteAsset(&#39;' + escapeHtml(a.name) + '&#39;)">删除</button>';
+          if (a.isBuiltin) {
+            html += '<button class="danger" disabled style="opacity:0.5;cursor:not-allowed;" title="内置资产不可删除">内置</button>';
+          } else {
+            html += '<button class="danger" onclick="deleteAsset(&#39;' + escapeHtml(a.name) + '&#39;)">删除</button>';
+          }
           html += '</div></div>';html += '</div></div>';
         }
         box.innerHTML = html;
@@ -4426,16 +4430,35 @@ async function handleRequest(request, env, ctx = null) {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
     await ensureD1(env);
+    
+    // 强制同步默认资产到资产库
+    for (const [name, def] of Object.entries(DEFAULT_ASSETS)) {
+      const existing = await d1Get(env, 'asset_' + name, null);
+      if (!existing) {
+        await d1Set(env, 'asset_' + name, {
+          name: name, cdnUrls: def.cdnUrls, contentType: def.contentType,
+          size: 0, uploaded: false, sourceType: 'cdn', createdAt: Date.now()
+        });
+      } else if (existing.sourceType !== 'manual') {
+        existing.cdnUrls = def.cdnUrls;
+        existing.contentType = def.contentType;
+        await d1Set(env, 'asset_' + name, existing);
+      }
+    }
+    
     const rows = await getD1(env).prepare("SELECT value FROM kv_store WHERE key LIKE 'asset_%'").all();
     const list = [];
     for (const r of (rows.results || [])) {
-      try { list.push(JSON.parse(r.value)); } catch(e) {}
+      try { 
+        const item = JSON.parse(r.value);
+        item.isBuiltin = !!DEFAULT_ASSETS[item.name];
+        list.push(item); 
+      } catch(e) {}
     }
     list.sort(function(a, b){ return (a.name || '').localeCompare(b.name || ''); });
     return jsonResponse(list);
   }
 
-  // ==================== 手动上传 ====================
   if (path === '/api/asset/upload' && request.method === 'POST') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
@@ -4577,15 +4600,17 @@ async function handleRequest(request, env, ctx = null) {
     const body = await request.json();
     const name = String(body.name || '');
     if (!name) return errorResponse('缺少 name');
-
-    // 删除 GitHub 文件
+    
+    // 内置资产保护
+    if (DEFAULT_ASSETS[name]) {
+      return errorResponse('内置资产不允许删除', 403);
+    }
+    
     try { await githubDeleteFile(ASSETS_REPO, name, env); } catch(e) { console.warn('gh delete fail', e); }
-    // 删除 D1 记录
     await d1Delete(env, 'asset_' + name);
     return jsonResponse({ ok: true });
   }
 
-  // ==================== 资产代理 ====================
   if (path.startsWith('/asset/')) {
     const filename = path.slice('/asset/'.length);
     if (!filename || !/^[a-zA-Z0-9._-]+$/.test(filename)) {
