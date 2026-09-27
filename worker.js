@@ -3689,13 +3689,13 @@ function assetsPage(themeCss) {
         var url = location.origin + '/asset/' + a.name;
         var statusBadge = a.uploaded ? '<span class="badge ok">✓ 已缓存</span>' : '<span class="badge wait">⏳ 未缓存</span>';
         var typeBadge = a.sourceType === 'manual' ? ' <span class="badge manual">手动</span>' : '';
-        var cdnList = (a.cdnUrls || []).join('\n');
+        var cdnList = (a.cdnUrls || []).join('\\n');
         html += '<div class="asset-card">';
         html += '<div class="asset-name">' + escapeHtml(a.name) + ' ' + statusBadge + typeBadge + '</div>';
         html += '<div class="asset-meta">' + formatSize(a.size || 0) + ' · ' + escapeHtml(a.contentType || 'unknown') + (a.cachedAt ? ' · ' + new Date(a.cachedAt).toLocaleString() : '') + '</div>';
         html += '<div class="asset-url">' + escapeHtml(url) + '</div>';
         if (cdnList) {
-          html += '<div class="asset-cdn">' + escapeHtml(cdnList).replace(/\n/g, '<br>') + '</div>';
+          html += '<div class="asset-cdn">' + escapeHtml(cdnList).replace(/\\n/g, '<br>') + '</div>';
         }
         html += '<div class="asset-actions">';
         html += '<button onclick="copyUrl(\'' + escapeHtml(a.name) + '\')">复制链接</button>';
@@ -3763,7 +3763,7 @@ function assetsPage(themeCss) {
     if (!a) return;
     assetState.editingName = name;
     document.getElementById('edit-name').value = name;
-    document.getElementById('edit-urls').value = (a.cdnUrls || []).join('\n');
+    document.getElementById('edit-urls').value = (a.cdnUrls || []).join('\\n');
     document.getElementById('edit-modal').classList.add('show');
   }
   function closeEditModal(){
