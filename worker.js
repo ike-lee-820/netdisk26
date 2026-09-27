@@ -2979,6 +2979,13 @@ async function settingsPage(settings = {}, request = null) {
     <input type="range" id="card-opacity" min="0.2" max="1" step="0.05" value="${cardOpacity}" style="width:100%;margin-bottom:16px;">
   </div>
   <div class="card">
+    <h3 style="margin-top:0;">资产库</h3>
+    <p style="font-size:13px; color:var(--text-sec); margin:0 0 12px 0;">管理 JS/CSS 等静态资源，支持手动上传、CDN 缓存、编辑链接。</p>
+    <button class="btn-secondary" onclick="location.href='/assets'" style="width:100%; padding:12px; border:none; border-radius:8px; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:8px;">
+      <span class="material-icons">inventory_2</span> 打开资产库
+    </button>
+  </div>
+  <div class="card">
     <h3 style="margin-top:0;">危险操作</h3>
     <button class="btn-secondary" onclick="clearAllData()" style="width:100%;padding:12px;border-radius:8px;border:none;cursor:pointer;color:var(--danger);">一键清空网盘</button>
   </div>
