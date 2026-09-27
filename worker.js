@@ -2,7 +2,7 @@
  * Cloudflare Worker 直链网盘 - 纯客户端直传版
  */
 
-const GITHUB_USER = 'ikecode26';
+const GITHUB_USER = 'ocdcloud2026';
 const GITHUB_API = 'https://api.github.com';
 const ASSETS_REPO = 'netdisk-assets';
 const CHUNK_SIZE = 5 * 1024 * 1024;
