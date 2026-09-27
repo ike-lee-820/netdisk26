@@ -3523,6 +3523,25 @@ function searchPage(themeCss) {
     <button id="batch-delete" style="background:#ffebee; color:#c62828;">删除</button>
   </div>
   <div class="snackbar" id="snackbar"></div>
+  <div class="modal-overlay" id="tree-modal">
+    <div class="modal">
+      <div class="target-tree-header">
+        <span style="font-weight:500; font-size:16px;">选择目标文件夹</span>
+        <button id="tree-new-folder">+ 新建文件夹</button>
+      </div>
+      <div id="target-tree" class="target-tree-wrap"></div>
+      <label style="display:block; margin-bottom:6px; font-size:13px; color:var(--text-sec);">冲突处理</label>
+      <select id="target-conflict" class="modal-select">
+        <option value="overwrite" selected>覆盖重复文件</option>
+        <option value="rename">保留重复文件并重命名</option>
+        <option value="skip">跳过重复文件</option>
+      </select>
+      <div class="modal-actions" style="margin-top:16px;">
+        <button class="btn-secondary" id="tree-cancel">取消</button>
+        <button class="btn-primary" id="tree-ok">确定</button>
+      </div>
+    </div>
+  </div>
   <script>
   var state = { results: [], selected: new Set(), timer: null };
 
