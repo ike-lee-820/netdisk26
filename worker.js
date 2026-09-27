@@ -3912,7 +3912,13 @@ async function handleRequest(request, env, ctx = null) {
     if (item.type === 'link') {
       const target = (item.content || '').trim();
       if (!target) return new Response('链接为空', { status: 500 });
-      return Response.redirect(target, 302);
+      return new Response(null, {
+        status: 302,
+        headers: {
+          'Location': target,
+          'Cache-Control': 'no-store'
+        }
+      });
     }
     // ============ File（网盘文件）============
     if (item.type === 'file') {
@@ -3923,7 +3929,13 @@ async function handleRequest(request, env, ctx = null) {
       if (!node || node.type !== 'file') {
         return new Response('文件不存在: ' + escapeHtml(filePath), { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
       }
-      return Response.redirect('/direct/' + node.ssid + '/' + encodeURIComponent(node.name), 302);
+      return new Response(null, {
+        status: 302,
+        headers: {
+          'Location': '/direct/' + node.ssid + '/' + encodeURIComponent(node.name),
+          'Cache-Control': 'no-store'
+        }
+      });
     }
     // ============ Markdown（统一渲染器） ============
     if (item.type === 'markdown-file' || item.type === 'markdown-link' || item.type === 'markdown-edit') {
