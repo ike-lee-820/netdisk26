@@ -848,7 +848,7 @@ async function handleWebDAV(request, env, reqPath) {
 const COMMON_HEAD = `
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<link href="/asset/material-icons.css" rel="stylesheet">
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
 <style>
 :root { --primary:#1976d2; --surface:#fff; --bg:#f5f5f5; --divider:#e0e0e0; --text:#212121; --text-sec:#757575; --danger:#d32f2f; --success:#388e3c; }
 * { box-sizing:border-box; }
@@ -3081,7 +3081,7 @@ function generateThemeCss(settings = {}) {
   const fontCss = (settings.fontCss || '').replace(/["'`<>]/g, '');
   let fontCssFamily = (settings.fontCssFamily || '').replace(/["'`]/g, '').trim();
   if (fontCssFamily && !/^[a-zA-Z0-9_-]+$/.test(fontCssFamily)) fontCssFamily = '"' + fontCssFamily + '"';
-  const SOURCE_HAN_SERIF_CSS = '/asset/Font_Source_Han_Serif.css';
+  const SOURCE_HAN_SERIF_CSS = 'https://v6.gh-proxy.com/github.com/ike-lee-820/font/raw/main/siyuansongti/Font_Source_Han_Serif.css';
   const isCustomFontFile = fontFamily && (fontFamily.startsWith('http') || fontFamily.startsWith('/'));
   const isCustomCss = Boolean(fontCss && fontCssFamily);
   let link = '';
@@ -3705,16 +3705,8 @@ function assetsPage(themeCss) {
         if (!a.uploaded || a.sourceType === 'cdn') {
           html += '<button class="warn" onclick="cacheAsset(' + Q + escapeHtml(a.name) + Q + ')"><span class="material-icons" style="font-size:16px;">cloud_download</span> ' + (a.uploaded ? '重新缓存' : '缓存') + '</button>';
         }
-        if (a.isBuiltin) {
-          html += '<button disabled title="内置资产不可修改"><span class="material-icons" style="font-size:16px;">lock</span> 内置</button>';
-        } else {
-          html += '<button onclick="editAsset(' + Q + escapeHtml(a.name) + Q + ')"><span class="material-icons" style="font-size:16px;">edit</span> 改链接</button>';
-        }
-        if (a.isBuiltin) {
-          html += '<button disabled title="内置资产不可删除"><span class="material-icons" style="font-size:16px;">block</span> 内置</button>';
-        } else {
-          html += '<button class="danger" onclick="deleteAsset(' + Q + escapeHtml(a.name) + Q + ')"><span class="material-icons" style="font-size:16px;">delete</span> 删除</button>';
-        }
+        html += '<button onclick="editAsset(' + Q + escapeHtml(a.name) + Q + ')"><span class="material-icons" style="font-size:16px;">edit</span> 改链接</button>';
+        html += '<button class="danger" onclick="deleteAsset(' + Q + escapeHtml(a.name) + Q + ')"><span class="material-icons" style="font-size:16px;">delete</span> 删除</button>';
         html += '</div></div>';
       }
       box.innerHTML = html;
@@ -4396,8 +4388,6 @@ async function handleRequest(request, env, ctx = null) {
 
   // ==================== 资产库：默认数据 ====================
   const DEFAULT_ASSETS = {
-    'material-icons.css': { cdnUrls: ['https://fonts.googleapis.com/icon?family=Material+Icons'], contentType: 'text/css' },
-    'Font_Source_Han_Serif.css': { cdnUrls: ['https://v6.gh-proxy.com/github.com/ike-lee-820/font/raw/main/siyuansongti/Font_Source_Han_Serif.css'], contentType: 'text/css' },
     'plyr.css': { cdnUrls: ['https://cdn.bootcdn.net/ajax/libs/plyr/3.8.4/plyr.css', 'https://cdn.jsdelivr.net/npm/plyr@3.8.4/dist/plyr.css'], contentType: 'text/css' },
     'plyr.js': { cdnUrls: ['https://cdn.bootcdn.net/ajax/libs/plyr/3.8.4/plyr.js', 'https://cdn.jsdelivr.net/npm/plyr@3.8.4/dist/plyr.min.js'], contentType: 'application/javascript' },
     'viewer.css': { cdnUrls: ['https://cdn.bootcdn.net/ajax/libs/viewerjs/1.11.8/viewer.css', 'https://cdn.jsdelivr.net/npm/viewerjs@1.11.8/dist/viewer.min.css'], contentType: 'text/css' },
@@ -4589,12 +4579,6 @@ async function handleRequest(request, env, ctx = null) {
     const cdnUrls = Array.isArray(body.cdnUrls) ? body.cdnUrls.filter(Boolean) : [];
     const sourceType = body.sourceType || 'cdn';
     if (!name) return errorResponse('缺少 name');
-    
-    // ★ 拦截内置资产的修改
-    if (DEFAULT_ASSETS[name]) {
-      return errorResponse('内置资产不允许修改链接或删除', 403);
-    }
-    
     if (!/^[a-zA-Z0-9._-]+$/.test(name)) return errorResponse('文件名只能包含字母、数字、._-');
     const existing = await d1Get(env, 'asset_' + name, null) || { name: name, size: 0, uploaded: false, sourceType: sourceType, createdAt: Date.now() };
     existing.cdnUrls = cdnUrls;
@@ -4610,12 +4594,6 @@ async function handleRequest(request, env, ctx = null) {
     const body = await request.json();
     const name = String(body.name || '');
     if (!name) return errorResponse('缺少 name');
-    
-    // ★ 拦截内置资产的删除
-    if (DEFAULT_ASSETS[name]) {
-      return errorResponse('内置资产不允许删除', 403);
-    }
-    
     try { await githubDeleteFile(ASSETS_REPO, name, env); } catch(e) { console.warn('gh delete fail', e); }
     await d1Delete(env, 'asset_' + name);
     return jsonResponse({ ok: true });
