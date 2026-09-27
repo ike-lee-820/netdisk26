@@ -3698,6 +3698,10 @@ function assetsPage(themeCss) {
           html += '<div class="asset-cdn">' + escapeHtml(cdnList).replace(/\\n/g, '<br>') + '</div>';
         }
         html += '<div class="asset-actions">';
+        html += '<div class="asset-url">' + escapeHtml(url) + '</div>';
+        if (cdnList) {
+          html += '<div class="asset-cdn">' + escapeHtml(cdnList).replace(/\\n/g, '<br>') + '</div>';
+        }
         html += '<button onclick="copyUrl(\'' + escapeHtml(a.name) + '\')">复制链接</button>';
         html += '<a href="' + escapeHtml(url) + '" target="_blank">打开</a>';
         if (!a.uploaded || a.sourceType === 'cdn') {
