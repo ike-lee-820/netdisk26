@@ -1,28 +1,23 @@
 /**
  * Cloudflare Worker 直链网盘 - 纯客户端直传版
  */
-
 const GITHUB_USER = 'ocdcloud2026';
 const GITHUB_API = 'https://api.github.com';
 const ASSETS_REPO = 'netdisk-assets';
 const CHUNK_SIZE = 5 * 1024 * 1024;
 const GH_PROXY = 'https://v6.gh-proxy.com/';
-
 let d1Initialized = false;
-
 function ssid() {
   const arr = new Uint8Array(16);
   crypto.getRandomValues(arr);
   return Array.from(arr, b => b.toString(36)).join('').replace(/[^a-z0-9]/g, '') + Date.now().toString(36) + Date.now().toString(36);
 }
-
 function getKV(sid, env) {
   const kvs = [env.FILE_KV_1, env.FILE_KV_2, env.FILE_KV_3, env.FILE_KV_4, env.FILE_KV_5];
   let sum = 0;
   for (let i = 0; i < sid.length; i++) sum += sid.charCodeAt(i);
   return kvs[sum % kvs.length];
 }
-
 function arrayBufferToBase64(buffer) {
   if (typeof Buffer !== 'undefined') return Buffer.from(buffer).toString('base64');
   const bytes = new Uint8Array(buffer);
@@ -31,21 +26,18 @@ function arrayBufferToBase64(buffer) {
   for (let i = 0; i < bytes.byteLength; i += cs) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + cs));
   return btoa(binary);
 }
-
 function formatSize(bytes) {
   if (bytes === 0) return '0 B';
   const k = 1024, sizes = ['B', 'KB', 'MB', 'GB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
-
 function formatSpeed(bps) {
   if (bps === 0) return '0 B/s';
   if (bps < 1024) return bps.toFixed(0) + ' B/s';
   if (bps < 1024 * 1024) return (bps / 1024).toFixed(1) + ' KB/s';
   return (bps / 1024 / 1024).toFixed(1) + ' MB/s';
 }
-
 function getMime(name) {
   const ext = name.split('.').pop().toLowerCase();
   const map = {
@@ -59,15 +51,12 @@ function getMime(name) {
   };
   return map[ext] || 'application/octet-stream';
 }
-
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
 }
-
 function errorResponse(msg, status = 400) {
   return jsonResponse({ error: msg }, status);
 }
-
 function checkPassword(request, env) {
   const password = env.CLOUD_PASSWORD;
   if (!password) return true;
@@ -86,48 +75,40 @@ function checkPassword(request, env) {
   } catch (_) {}
   return false;
 }
-
 function requirePassword(request, env) {
   if (!checkPassword(request, env)) return errorResponse('需要密码访问', 401);
   return null;
 }
-
 function getD1(env) {
   if (!env.NDK) throw new Error('D1 数据库 NDK 未绑定');
   return env.NDK;
 }
-
 async function ensureD1(env) {
   if (d1Initialized) return;
   await getD1(env).exec('CREATE TABLE IF NOT EXISTS kv_store (key TEXT PRIMARY KEY, value TEXT NOT NULL);');
   d1Initialized = true;
 }
-
 async function d1Get(env, key, defaultValue = undefined) {
   await ensureD1(env);
   const row = await getD1(env).prepare('SELECT value FROM kv_store WHERE key = ?').bind(key).first();
   if (!row || !row.value) return defaultValue;
   try { return JSON.parse(row.value); } catch (e) { return defaultValue; }
 }
-
 async function d1Set(env, key, value) {
   await ensureD1(env);
   await getD1(env).prepare('INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)')
     .bind(key, JSON.stringify(value)).run();
 }
-
 async function d1Delete(env, key) {
   await ensureD1(env);
   await getD1(env).prepare('DELETE FROM kv_store WHERE key = ?').bind(key).run();
 }
-
 async function getStructure(env) {
   return await d1Get(env, 'file_structure', { type: 'root', name: '', children: {}, createdAt: Date.now() });
 }
 async function saveStructure(env, structure) { await d1Set(env, 'file_structure', structure); }
 async function getSettings(env) { return await d1Get(env, 'app_settings', {}); }
 async function saveSettings(env, settings) { await d1Set(env, 'app_settings', settings); }
-
 function getNode(structure, path) {
   const parts = path.split('/').filter(Boolean);
   if (parts.length === 0) return structure;
@@ -138,7 +119,6 @@ function getNode(structure, path) {
   }
   return node;
 }
-
 function setNode(structure, path, node) {
   const parts = path.split('/').filter(Boolean);
   let parent = structure;
@@ -149,7 +129,6 @@ function setNode(structure, path, node) {
   }
   parent.children[parts[parts.length - 1]] = node;
 }
-
 function deleteNode(structure, path) {
   const parts = path.split('/').filter(Boolean);
   let parent = structure;
@@ -161,7 +140,6 @@ function deleteNode(structure, path) {
   if (parent.children[parts[parts.length - 1]]) { delete parent.children[parts[parts.length - 1]]; return true; }
   return false;
 }
-
 function renameNode(structure, path, newName) {
   const parts = path.split('/').filter(Boolean);
   let parent = structure;
@@ -178,7 +156,6 @@ function renameNode(structure, path, newName) {
   parent.children[newName] = node;
   return node;
 }
-
 function collectPaths(node, base = '') {
   let list = [];
   if (!node.children) return list;
@@ -189,21 +166,18 @@ function collectPaths(node, base = '') {
   }
   return list;
 }
-
 function cloneNode(node) {
   if (node.type === 'file') return { ...node, createdAt: Date.now() };
   const copy = { ...node, children: {} };
   for (const [name, child] of Object.entries(node.children)) copy.children[name] = cloneNode(child);
   return copy;
 }
-
 function isDescendantOrSelf(parentPath, childPath) {
   const p = parentPath.replace(/^\/|\/$/g, '');
   const c = childPath.replace(/^\/|\/$/g, '');
   if (!p) return true;
   return c === p || c.startsWith(p + '/');
 }
-
 function uniqueName(children, name) {
   if (!children[name]) return name;
   const dot = name.lastIndexOf('.');
@@ -213,7 +187,6 @@ function uniqueName(children, name) {
   while (children[base + ' (' + i + ')' + ext]) i++;
   return base + ' (' + i + ')' + ext;
 }
-
 function removeChild(structure, childPath) {
   const parts = childPath.split('/').filter(Boolean);
   const name = parts.pop();
@@ -221,7 +194,6 @@ function removeChild(structure, childPath) {
   const parent = parentPath ? getNode(structure, parentPath) : structure;
   if (parent && parent.children && parent.children[name]) delete parent.children[name];
 }
-
 function copyMissingChildren(sourceNode, targetNode) {
   for (const [childName, child] of Object.entries(sourceNode.children || {})) {
     if (!targetNode.children[childName]) targetNode.children[childName] = cloneNode(child);
@@ -229,7 +201,6 @@ function copyMissingChildren(sourceNode, targetNode) {
   }
   return { ok: true };
 }
-
 function moveNode(structure, path, targetPath, mode = 'overwrite') {
   const parts = path.split('/').filter(Boolean);
   const name = parts[parts.length - 1];
@@ -253,7 +224,6 @@ function moveNode(structure, path, targetPath, mode = 'overwrite') {
   targetNode.children[name] = node;
   return { ok: true };
 }
-
 function copyNode(structure, path, targetPath, mode = 'overwrite') {
   const parts = path.split('/').filter(Boolean);
   const name = parts[parts.length - 1];
@@ -280,9 +250,7 @@ function copyNode(structure, path, targetPath, mode = 'overwrite') {
   targetNode.children[name] = cloneNode(node);
   return { ok: true };
 }
-
 // ==================== GitHub API ====================
-
 async function fetchWithTimeout(url, options = {}, timeoutMs = 30000) {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
@@ -292,7 +260,6 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 30000) {
     clearTimeout(id);
   }
 }
-
 async function githubCreateRepo(sid, env) {
   const headers = {
     'Authorization': `token ${env.GITHUB_TOKEN}`,
@@ -324,7 +291,6 @@ async function githubCreateRepo(sid, env) {
   }
   return data;
 }
-
 async function githubVerifyChunkExists(sid, index, env) {
   try {
     const resp = await fetchWithTimeout(`${GITHUB_API}/repos/${GITHUB_USER}/${sid}/contents/chunk_${index}`, {
@@ -333,7 +299,6 @@ async function githubVerifyChunkExists(sid, index, env) {
     return resp.ok;
   } catch (e) { return false; }
 }
-
 async function githubDeleteRepo(sid, env) {
   const resp = await fetchWithTimeout(`${GITHUB_API}/repos/${GITHUB_USER}/${sid}`, {
     method: 'DELETE',
@@ -343,7 +308,6 @@ async function githubDeleteRepo(sid, env) {
   const txt = await resp.text();
   throw new Error(`删除仓库失败: ${resp.status} ${txt}`);
 }
-
 async function githubDeleteFile(sid, path, env) {
   try {
     const infoResp = await fetchWithTimeout(`${GITHUB_API}/repos/${GITHUB_USER}/${sid}/contents/${encodeURIComponent(path)}`, {
@@ -365,7 +329,6 @@ async function githubDeleteFile(sid, path, env) {
     }, 20000);
   } catch (e) {}
 }
-
 async function githubGetDownloadUrl(sid, path, env) {
   const resp = await fetchWithTimeout(`${GITHUB_API}/repos/${GITHUB_USER}/${sid}/contents/${encodeURIComponent(path)}`, {
     headers: { 'Authorization': `token ${env.GITHUB_TOKEN}`, 'Accept': 'application/vnd.github+json', 'User-Agent': 'netdisk-worker' }
@@ -374,7 +337,6 @@ async function githubGetDownloadUrl(sid, path, env) {
   const data = await resp.json();
   return data.download_url;
 }
-
 async function githubFetchFile(sid, path, env, extraHeaders) {
   const url = await githubGetDownloadUrl(sid, path, env);
   const proxiedUrl = url.startsWith(GH_PROXY) ? url : GH_PROXY + url;
@@ -395,8 +357,6 @@ async function githubFetchFile(sid, path, env, extraHeaders) {
   }
   throw new Error(lastErr);
 }
-
-
 async function githubStreamChunks(fileNode, writable, env) {
   const writer = writable.getWriter();
   try {
@@ -412,7 +372,6 @@ async function githubStreamChunks(fileNode, writable, env) {
   } catch (e) { await writer.abort(e); throw e; }
   finally { try { await writer.close(); } catch (e) {} }
 }
-
 // 分享状态检查：过期/次数
 function shareStatus(share) {
   if (!share) return { ok: false, reason: '分享不存在', code: 404 };
@@ -422,7 +381,6 @@ function shareStatus(share) {
   }
   return { ok: true };
 }
-
 // 检查分享状态，若失效则立即删除，返回 {ok, reason}
 async function shareStatusWithCleanup(env, share) {
   if (!share) return { ok: false, reason: '分享不存在或已被删除' };
@@ -436,9 +394,7 @@ async function shareStatusWithCleanup(env, share) {
   }
   return { ok: true };
 }
-
 // ==================== 分享存储 ====================
-
 async function getShare(env, id) {
   return await d1Get(env, 'share_' + id, null);
 }
@@ -448,7 +404,6 @@ async function saveShare(env, share) {
 async function deleteShare(env, id) {
   await d1Delete(env, 'share_' + id);
 }
-
 async function listShares(env) {
   await ensureD1(env);
   const rows = await getD1(env).prepare("SELECT value FROM kv_store WHERE key LIKE 'share_%'").all();
@@ -459,7 +414,6 @@ async function listShares(env) {
   shares.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   return shares;
 }
-
 function buildShareTree(mainStructure, paths) {
   const root = { type: 'root', name: '', children: {}, createdAt: Date.now() };
   for (const p of paths) {
@@ -471,7 +425,6 @@ function buildShareTree(mainStructure, paths) {
   }
   return root;
 }
-
 function countShareFiles(node) {
   let c = 0;
   if (!node.children) return c;
@@ -481,7 +434,6 @@ function countShareFiles(node) {
   }
   return c;
 }
-
 // 收集分享树里的所有文件（用于打包下载）
 function collectShareFiles(node, base = '') {
   const result = [];
@@ -496,9 +448,7 @@ function collectShareFiles(node, base = '') {
   }
   return result;
 }
-
 // ==================== 任务系统 ====================
-
 async function getTasks(env) {
   await ensureD1(env);
   const rows = await getD1(env).prepare("SELECT value FROM kv_store WHERE key LIKE 'task_%'").all();
@@ -509,7 +459,6 @@ async function getTasks(env) {
   tasks.sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
   return tasks.slice(0, 300);
 }
-
 async function addTask(env, task) {
   await ensureD1(env);
   task.startedAt = task.startedAt || Date.now();
@@ -519,7 +468,6 @@ async function addTask(env, task) {
     .bind('task_' + task.id, JSON.stringify(task)).run();
   return task;
 }
-
 async function updateTask(env, id, updates) {
   await ensureD1(env);
   const row = await getD1(env).prepare('SELECT value FROM kv_store WHERE key = ?').bind('task_' + id).first();
@@ -530,14 +478,11 @@ async function updateTask(env, id, updates) {
   await getD1(env).prepare('INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)')
     .bind('task_' + id, JSON.stringify(task)).run();
 }
-
 async function cancelTask(env, id) { await updateTask(env, id, { status: 'cancelled', message: '已取消' }); }
-
 async function deleteTask(env, id) {
   await ensureD1(env);
   await getD1(env).prepare('DELETE FROM kv_store WHERE key = ?').bind('task_' + id).run();
 }
-
 async function uploadBackgroundImage(buffer, ext, env) {
   await githubCreateRepo(ASSETS_REPO, env);
   const fileName = 'bg_' + Date.now() + '.' + ext;
@@ -554,7 +499,6 @@ async function uploadBackgroundImage(buffer, ext, env) {
   }, 120000);
   return await githubGetDownloadUrl(ASSETS_REPO, fileName, env);
 }
-
 async function uploadFontFile(buffer, ext, env) {
   await githubCreateRepo(ASSETS_REPO, env);
   const fileName = 'font_' + Date.now() + '.' + ext;
@@ -571,9 +515,7 @@ async function uploadFontFile(buffer, ext, env) {
   }, 120000);
   return await githubGetDownloadUrl(ASSETS_REPO, fileName, env);
 }
-
 // ==================== 存储核心 ====================
-
 async function deleteFileStorage(node, env) {
   if (node.storage === 'kv') {
     try { await getKV(node.ssid, env).delete(node.ssid); } catch (e) {}
@@ -592,7 +534,6 @@ async function deleteFileStorage(node, env) {
     await Promise.all(tasks);
   }
 }
-
 async function deleteFileStoragesConcurrently(nodes, env, concurrency = 32) {
   let cursor = 0;
   const arr = nodes.slice();
@@ -607,7 +548,6 @@ async function deleteFileStoragesConcurrently(nodes, env, concurrency = 32) {
   for (let i = 0; i < Math.min(concurrency, arr.length); i++) runners.push(worker());
   await Promise.all(runners);
 }
-
 function handleBufferRange(buffer, rangeHeader, baseHeaders) {
   const size = buffer.byteLength;
   const headers = new Headers(baseHeaders);
@@ -630,7 +570,6 @@ function handleBufferRange(buffer, rangeHeader, baseHeaders) {
   headers.set('Content-Length', String(end - start + 1));
   return new Response(slice, { status: 206, headers });
 }
-
 async function buildDownloadResponse(request, node, filename, env, inline) {
   if (inline === undefined) inline = false;
   const disp = inline ? 'inline' : 'attachment';
@@ -643,7 +582,6 @@ async function buildDownloadResponse(request, node, filename, env, inline) {
     'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Accept-Ranges'
   };
   const rangeHeader = request ? request.headers.get('Range') : null;
-
   try {
     // ============ KV：内存切片 ============
     if (node.storage === 'kv') {
@@ -651,7 +589,6 @@ async function buildDownloadResponse(request, node, filename, env, inline) {
       if (!data) throw new Error('KV 数据丢失');
       return handleBufferRange(data, rangeHeader, baseHeaders);
     }
-
     // ============ 单分片：直接转发 GitHub ============
     if (node.chunks === 1) {
       const extra = rangeHeader ? { 'Range': rangeHeader } : null;
@@ -663,12 +600,10 @@ async function buildDownloadResponse(request, node, filename, env, inline) {
       if (cr) outHeaders.set('Content-Range', cr);
       return new Response(resp.body, { status: resp.status, headers: outHeaders });
     }
-
     // ============ 多分片 ============
     const fileSize = node.size;
     const chunkCount = node.chunks;
     const chunkSize = CHUNK_SIZE;
-
     // ---- 无 Range：流式拼接 ----
     if (!rangeHeader) {
       const { readable, writable } = new TransformStream();
@@ -677,7 +612,6 @@ async function buildDownloadResponse(request, node, filename, env, inline) {
       outHeaders.set('Content-Length', String(fileSize));
       return new Response(readable, { status: 200, headers: outHeaders });
     }
-
     // ---- 有 Range：解析并映射到分片 ----
     const m = rangeHeader.match(/^bytes=(\d+)-(\d*)$/);
     if (!m) {
@@ -688,15 +622,12 @@ async function buildDownloadResponse(request, node, filename, env, inline) {
     if (isNaN(start) || isNaN(end) || start < 0 || end >= fileSize || start > end) {
       return new Response('Range 越界', { status: 416, headers: { 'Content-Range': 'bytes */' + fileSize } });
     }
-
     const startChunk = Math.floor(start / chunkSize);
     const endChunk = Math.floor(end / chunkSize);
     const totalLen = end - start + 1;
-
     const outHeaders = new Headers(baseHeaders);
     outHeaders.set('Content-Range', 'bytes ' + start + '-' + end + '/' + fileSize);
     outHeaders.set('Content-Length', String(totalLen));
-
     const { readable, writable } = new TransformStream();
     (async function() {
       const writer = writable.getWriter();
@@ -730,18 +661,13 @@ async function buildDownloadResponse(request, node, filename, env, inline) {
       }
       try { await writer.close(); } catch (_) {}
     })();
-
     return new Response(readable, { status: 206, headers: outHeaders });
   } catch (e) {
     console.error('buildDownloadResponse error', e);
     return errorResponse('文件下载失败: ' + e.message, 500);
   }
 }
-
-
-
 // ==================== 分享下载辅助 ====================
-
 async function buildShareFileResponse(request, node, env, inline = false) {
   const disp = inline ? 'inline' : 'attachment';
   const headers = {
@@ -777,8 +703,6 @@ async function buildShareFileResponse(request, node, env, inline = false) {
     return errorResponse('下载失败: ' + e.message, 500);
   }
 }
-
-
 async function buildShareZipResponse(files, env) {
   if (files.length === 0) return errorResponse('分享内容为空', 404);
   // 用流式 zip：简化版，先并发拉取所有文件到内存（小文件场景）
@@ -795,9 +719,7 @@ async function buildShareZipResponse(files, env) {
     files: files.map(f => ({ path: f.path, name: f.name, size: f.node.size }))
   }, 400);
 }
-
 // ==================== WebDAV ====================
-
 function checkBasicAuth(request, env) {
   const password = env.CLOUD_PASSWORD;
   if (!password) return true;
@@ -809,7 +731,6 @@ function checkBasicAuth(request, env) {
     return creds.split(':').slice(1).join(':') === password;
   } catch (e) { return false; }
 }
-
 function davUnauthorized() {
   return new Response('Unauthorized', { status: 401, headers: { 'WWW-Authenticate': 'Basic realm="netdisk"' } });
 }
@@ -819,7 +740,6 @@ function davXmlResponse(xml, status = 207) {
 function toDavDate(ts) { return new Date(ts).toUTCString(); }
 function davHref(path) { return '/webdav' + encodeURI(path).replace(/%2F/g, '/'); }
 function escapeXml(text) { return String(text).replace(/[<>&'"]/g, m => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[m])); }
-
 function davPropResponse(path, node) {
   const name = path ? path.split('/').filter(Boolean).pop() : '';
   const isFolder = !node || node.type === 'folder' || node.type === 'root';
@@ -831,7 +751,6 @@ function davPropResponse(path, node) {
   props += `<D:getlastmodified>${lastMod}</D:getlastmodified>`;
   return `<D:response><D:href>${href}</D:href><D:propstat><D:prop>${props}</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response>`;
 }
-
 async function handleWebDAV(request, env, reqPath) {
   if (!checkBasicAuth(request, env)) return davUnauthorized();
   const davPath = decodeURIComponent(reqPath.slice('/webdav'.length) || '/');
@@ -925,9 +844,7 @@ async function handleWebDAV(request, env, reqPath) {
   if (method === 'UNLOCK') return new Response(null, { status: 204 });
   return new Response('Method Not Allowed', { status: 405 });
 }
-
 // ==================== HTML 模板 ====================
-
 const COMMON_HEAD = `
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -996,17 +913,14 @@ body { margin:0; font-family:system-ui,sans-serif; background:var(--bg); color:v
 .login-box { max-width:360px; margin:80px auto; }
 </style>
 `;
-
 async function hashStr(s) {
   const buf = new TextEncoder().encode(s);
   const hash = await crypto.subtle.digest('SHA-1', buf);
   return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
-
 async function page(title, body, scripts = '', themeCss = '', request = null) {
   const html = `<!DOCTYPE html><html><head>${COMMON_HEAD}${themeCss}<title>${escapeHtml(title)}</title></head><body>${body}${scripts}</body></html>`;
   const etag = '"' + (await hashStr(html)) + '"';
-
   // ETag 匹配 → 304 Not Modified，不传输内容
   if (request) {
     const clientEtag = request.headers.get('If-None-Match');
@@ -1020,7 +934,6 @@ async function page(title, body, scripts = '', themeCss = '', request = null) {
       });
     }
   }
-
   return new Response(html, {
     headers: {
       'Content-Type': 'text/html; charset=utf-8',
@@ -1029,7 +942,6 @@ async function page(title, body, scripts = '', themeCss = '', request = null) {
     }
   });
 }
-
 const HOME_BODY = `
 <div class="appbar">
   <h1 id="page-title">__SITE_TITLE__</h1>
@@ -1095,11 +1007,9 @@ const HOME_BODY = `
     <div class="modal-actions"><button class="btn-secondary" id="modal-cancel">取消</button><button class="btn-primary" id="modal-ok">确定</button></div>
   </div>
 </div>
-
 <div class="modal-overlay" id="share-modal">
   <div class="modal" style="max-width:480px;max-height:88vh;overflow-y:auto;">
     <h3 style="margin-top:0;">创建分享</h3>
-
     <div style="margin-bottom:12px;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
         <span style="font-size:13px;font-weight:500;color:var(--text-sec);">已选内容 <span id="share-count" style="color:var(--primary);">0</span> 项</span>
@@ -1107,16 +1017,12 @@ const HOME_BODY = `
       </div>
       <div id="share-paths-list" style="max-height:180px;overflow-y:auto;border:1px solid var(--divider);border-radius:8px;padding:4px;background:#fafafa;"></div>
     </div>
-
     <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">提取码（可留空）</label>
     <input type="text" id="share-pwd" placeholder="留空则无需提取码" maxlength="32" style="margin-bottom:10px;">
-
     <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">备注（可留空）</label>
     <textarea id="share-note" placeholder="显示在分享页面的说明" style="min-height:60px;margin-bottom:10px;resize:vertical;"></textarea>
-
     <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">限制访问次数（留空/0/负数 = 无限次）</label>
     <input type="number" id="share-maxviews" placeholder="例如 10" style="margin-bottom:10px;">
-
     <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">有效期</label>
     <select id="share-expire-preset" style="width:100%;padding:10px;border:1px solid var(--divider);border-radius:8px;font-size:14px;margin-bottom:8px;background:#fff;">
       <option value="">永久有效</option>
@@ -1132,24 +1038,20 @@ const HOME_BODY = `
       <option value="custom">自定义...</option>
     </select>
     <input type="datetime-local" id="share-expire-custom" style="display:none;margin-bottom:10px;">
-
     <div class="modal-actions" style="margin-top:16px;">
       <button class="btn-secondary" onclick="closeShareModal()">取消</button>
       <button class="btn-primary" onclick="submitShare()">生成</button>
     </div>
   </div>
 </div>
-
 <div class="modal-overlay" id="share-result-modal">
   <div class="modal" style="max-width:520px;">
     <h3 style="margin-top:0;">✅ 分享创建成功</h3>
-
     <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">分享链接</label>
     <div style="display:flex;gap:6px;margin-bottom:12px;">
       <input type="text" id="result-url" readonly style="flex:1;margin-bottom:0;font-size:13px;">
       <button class="btn-primary" onclick="copyResult('result-url')" style="padding:0 14px;border:none;border-radius:8px;cursor:pointer;white-space:nowrap;">复制</button>
     </div>
-
     <div id="result-pwd-row" style="display:none;">
       <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">带提取码的分享链接</label>
       <div style="display:flex;gap:6px;margin-bottom:12px;">
@@ -1157,14 +1059,11 @@ const HOME_BODY = `
         <button class="btn-primary" onclick="copyResult('result-url-pwd')" style="padding:0 14px;border:none;border-radius:8px;cursor:pointer;white-space:nowrap;">复制</button>
       </div>
     </div>
-
     <div class="modal-actions" style="margin-top:16px;">
       <button class="btn-primary" onclick="closeShareResultModal()">关闭</button>
     </div>
   </div>
 </div>
-
-
 <div class="drawer" id="go-drawer" style="width:340px;max-width:90vw;">
   <div class="drawer-head"><span>Go 页面</span><span class="material-icons" id="close-go" style="cursor:pointer;padding:6px;">close</span></div>
   <div class="drawer-body" id="go-list">
@@ -1174,14 +1073,11 @@ const HOME_BODY = `
     <button class="btn-primary" id="btn-new-go" style="width:100%;padding:10px;border:none;border-radius:8px;cursor:pointer;">+ 新建页面</button>
   </div>
 </div>
-
 <div class="modal-overlay" id="go-modal">
   <div class="modal" style="max-width:560px;max-height:88vh;overflow-y:auto;">
     <h3 id="go-modal-title" style="margin-top:0;">新建 Go 页面</h3>
-
     <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">名称（英文/数字/_-，不含空格）</label>
     <input type="text" id="go-name" placeholder="例如 hello" maxlength="64" style="margin-bottom:10px;">
-
     <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">类型</label>
     <select id="go-type" onchange="onGoTypeChange()" style="width:100%;padding:10px;border:1px solid var(--divider);border-radius:8px;font-size:14px;margin-bottom:10px;background:#fff;">
       <option value="html">HTML（完整网页）</option>
@@ -1199,17 +1095,14 @@ const HOME_BODY = `
     <div id="go-link-hint" style="display:none;margin-bottom:10px;font-size:12px;color:var(--text-sec);">
       在下方输入完整 URL（如 https://example.com）
     </div>
-
     <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">内容</label>
     <textarea id="go-content" placeholder="输入 HTML 或文本..." style="width:100%;min-height:280px;font-family:Consolas,Monaco,monospace;font-size:13px;padding:10px;border:1px solid var(--divider);border-radius:8px;box-sizing:border-box;resize:vertical;"></textarea>
-
     <div class="modal-actions" style="margin-top:16px;">
       <button class="btn-secondary" onclick="closeGoModal()">取消</button>
       <button class="btn-primary" id="go-save-btn">保存</button>
     </div>
   </div>
 </div>
-
 <div class="modal-overlay" id="go-file-modal">
   <div class="modal" style="max-width:440px;">
     <div class="target-tree-header">
@@ -1222,12 +1115,10 @@ const HOME_BODY = `
     </div>
   </div>
 </div>
-
 <div class="snackbar" id="snackbar"></div>
 <input type="file" id="file-input" style="display:none" multiple>
 <input type="file" id="folder-input" style="display:none" webkitdirectory directory multiple>
 `;
-
 const HOME_SCRIPT = `
 <script>
 const params = new URLSearchParams(location.search);
@@ -1235,15 +1126,12 @@ let currentPath = params.get('path') || '';
 let currentSort = localStorage.getItem('netdisk-sort') || 'name-asc';
 let selectionMode = false;
 let selectedPaths = new Set();
-
 // ==================== 上传配置 ====================
 const DEFAULT_DOMAIN = 'https://cloud.myocd.de5.net';
-
 const TASK_CREATE_CONCURRENCY = 64;   // 任务创建并发
 const FILE_UPLOAD_CONCURRENCY = 5;   // 文件上传并发（同时上传多少个文件）
 const CHUNK_UPLOAD_CONCURRENCY = 1;  // 单文件分片并发
 const CLIENT_CHUNK_SIZE = 5 * 1024 * 1024;   // 20MB 分片
-
 function showMsg(msg){ const s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(()=>s.classList.remove('show'),2500); }
 function escapeHtml(t){ return t.replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 function formatSize(b){ if(!b)return '0 B'; const k=1024, s=['B','KB','MB','GB']; const i=Math.floor(Math.log(b)/Math.log(k)); return (b/Math.pow(k,i)).toFixed(2)+' '+s[i]; }
@@ -1285,7 +1173,6 @@ function getIcon(name){
   if(['txt','md','json','js','css','html'].includes(ext)) return 'description';
   return 'insert_drive_file';
 }
-
 async function loadList(){
   const data=await api('/api/structure?path='+encodeURIComponent(currentPath));
   if(!data) return;
@@ -1323,7 +1210,6 @@ async function loadList(){
   }).join('');
   updateSelectionUI();
 }
-
 document.getElementById('file-list').addEventListener('click', e=>{
   const btn = e.target.closest('[data-action]');
   if(!btn) return;
@@ -1344,7 +1230,6 @@ document.getElementById('file-list').addEventListener('click', e=>{
   else if(action==='rename') renameItem(p);
   else if(action==='delete') deleteItem(p);
 });
-
 function toggleSelectionMode(){
   selectionMode = !selectionMode;
   selectedPaths.clear();
@@ -1365,7 +1250,6 @@ function updateSelectionUI(){
 }
 function selectAll(){ document.querySelectorAll('.file-card').forEach(c=>selectedPaths.add(c.dataset.path)); updateSelectionUI(); }
 function clearSelection(){ selectedPaths.clear(); selectionMode = false; document.getElementById('btn-select-mode').classList.remove('active'); document.getElementById('file-list').classList.remove('selection-mode'); updateSelectionUI(); }
-
 let targetPickState = null;
 function isInvalidTargetPath(path, sourcePaths){
   const p = path.replace(/^\/|\/$/g, '');
@@ -1396,7 +1280,6 @@ function renderTargetTree(){
 function selectTargetPath(path){ if(!targetPickState || isInvalidTargetPath(path, targetPickState.sourcePaths)) return; targetPickState.selectedPath = path; renderTargetTree(); }
 function toggleTargetExpand(path){ if(!targetPickState) return; if(targetPickState.expanded.has(path)) targetPickState.expanded.delete(path); else targetPickState.expanded.add(path); renderTargetTree(); }
 async function refreshTargetTree(){ if(!targetPickState) return; try { targetPickState.structure = await api('/api/structure?path='); } catch(e){} renderTargetTree(); }
-
 async function pickTargetFolder(opts = {}){
   const sourcePaths = opts.sourcePaths || [];
   const structure = await api('/api/structure?path=');
@@ -1449,7 +1332,6 @@ async function pickTargetFolder(opts = {}){
     };
   });
 }
-
 async function moveItem(p){
   try {
     const res = await pickTargetFolder({operation:'move', sourcePaths:[p]});
@@ -1496,7 +1378,6 @@ async function batchDelete(){
   } catch(e) { showMsg('批量删除失败: ' + (e.message || e)); }
   loadList();
 }
-
 function renderBreadcrumbs(){
   const parts=currentPath.split('/').filter(Boolean);
   let html='<a href="/?path=">首页</a>';
@@ -1513,7 +1394,6 @@ async function downloadFile(p){
 }
 // ==================== 分享悬浮窗逻辑 ====================
 let shareModalPaths = [];
-
 function openShareModal(paths){
   shareModalPaths = paths.slice();
   renderSharePathsList();
@@ -1525,11 +1405,9 @@ function openShareModal(paths){
   document.getElementById('share-expire-custom').style.display = 'none';
   document.getElementById('share-modal').classList.add('show');
 }
-
 function closeShareModal(){
   document.getElementById('share-modal').classList.remove('show');
 }
-
 function renderSharePathsList(){
   const el = document.getElementById('share-paths-list');
   document.getElementById('share-count').textContent = shareModalPaths.length;
@@ -1555,13 +1433,11 @@ function renderSharePathsList(){
     };
   });
 }
-
 function shareAddMore(){
   closeShareModal();
   if (!selectionMode) toggleSelectionMode();
   showMsg('请选择更多文件/文件夹后再次点击分享');
 }
-
 // 有效期下拉切换
 function bindShareModalEvents(){
   const sel = document.getElementById('share-expire-preset');
@@ -1571,7 +1447,6 @@ function bindShareModalEvents(){
     };
   }
 }
-
 async function submitShare(){
   if (shareModalPaths.length === 0) { showMsg('请至少选择一个文件或文件夹'); return; }
   const pwd = document.getElementById('share-pwd').value.trim();
@@ -1593,7 +1468,6 @@ async function submitShare(){
   } else if (preset) {
     expiresAt = Date.now() + parseInt(preset, 10) * 24 * 3600 * 1000;
   }
-
   try {
     const res = await api('/api/share/create', {
       method: 'POST',
@@ -1607,7 +1481,6 @@ async function submitShare(){
       })
     });
     if (!res || !res.id) throw new Error('创建分享失败');
-
     const url = DEFAULT_DOMAIN + '/s/' + res.id;
     document.getElementById('result-url').value = url;
     if (pwd) {
@@ -1622,7 +1495,6 @@ async function submitShare(){
     showMsg('分享失败: ' + (e.message || e));
   }
 }
-
 function copyResult(id){
   const el = document.getElementById(id);
   if (!el) return;
@@ -1638,11 +1510,9 @@ function copyResult(id){
     if (ok) showMsg('已复制'); else showMsg('复制失败，请手动复制');
   }
 }
-
 function closeShareResultModal(){
   document.getElementById('share-result-modal').classList.remove('show');
 }
-
 async function shareFile(p){ openShareModal([p]); }
 async function batchShare(){
   if (selectedPaths.size === 0) { showMsg('请先选择文件或文件夹'); return; }
@@ -1671,7 +1541,6 @@ async function deleteItem(p){
   catch(e) { showMsg('删除失败: ' + e.message); }
   loadList();
 }
-
 function newText(){
   document.getElementById('new-menu').classList.remove('show');
   const content=\`<h3>新建文本文件</h3><input id="new-text-name" placeholder="文件名"><textarea id="new-text-body" placeholder="内容"></textarea>\`;
@@ -1695,7 +1564,6 @@ function newFolder(){
     closeModal(); loadList();
   });
 }
-
 // ==================== 上传核心 ====================
 function genTaskId(){ return 'task_'+Date.now()+'_'+Math.random().toString(36).slice(2,9); }
 const cancelledUploads = new Set();
@@ -1703,7 +1571,6 @@ const abortControllers = new Map();
 let localTasks = new Map();
 function addLocalTask(t){ localTasks.set(t.id, t); }
 function removeLocalTask(id){ localTasks.delete(id); }
-
 async function runWithConcurrency(items, concurrency, worker){
   let cursor = 0;
   const total = items.length;
@@ -1720,12 +1587,10 @@ async function runWithConcurrency(items, concurrency, worker){
   }
   await Promise.all(runners);
 }
-
 function selectFile(){ document.getElementById('file-input').click(); }
 function selectFolder(){ document.getElementById('folder-input').click(); }
 document.getElementById('file-input').addEventListener('change', e=>uploadFiles(e.target.files));
 document.getElementById('folder-input').addEventListener('change', e=>uploadFiles(e.target.files));
-
 async function uploadFiles(files){
   const fileArr = Array.from(files);
   if(fileArr.length === 0) return;
@@ -1747,7 +1612,6 @@ async function uploadFiles(files){
   });
   loadList();
 }
-
 // 上传单个文件：客户端直传 GitHub
 async function uploadOne(file, dir, externalTaskId){
   // 允许所有文件后缀上传
@@ -1756,12 +1620,10 @@ async function uploadOne(file, dir, externalTaskId){
   cancelledUploads.delete(taskId);
   const abortCtrl = new AbortController();
   abortControllers.set(taskId, abortCtrl);
-
   const baseTask = { id: taskId, name: file.name, status: 'uploading', message: '初始化...', progress: 0, size: file.size, createdAt: Date.now(), updatedAt: Date.now() };
   if(!localTasks.has(taskId)) addLocalTask(baseTask);
   else { const t = localTasks.get(taskId); t.status = 'uploading'; t.message = '初始化...'; t.progress = 0; t.updatedAt = Date.now(); }
   debouncedLoadTasks();
-
   try {
     // 1. 请求上传参数
     // ★ 用文件指纹请求断点续传
@@ -1772,28 +1634,23 @@ async function uploadOne(file, dir, externalTaskId){
       body: JSON.stringify({ fingerprint, path, filename: file.name, size: file.size, taskId })
     });
     if (!start) throw new Error('初始化失败');
-
     const chunkSize = start.chunkSize;
     const total = start.chunks;
     const uploadId = start.uploadId;
     const token = start.token;
     const repo = start.repo;
     const githubUser = start.githubUser;
-
     // 2. 并发上传分片
     const chunkIndexes = [];
     for (let i = 0; i < total; i++) chunkIndexes.push(i);
-
     // 每个分片实时字节
     const chunkBytes = new Array(total).fill(0);
     const chunkDone = new Array(total).fill(false);
     // 记录每个分片的 sha（用于验证）
     const chunkSha = new Array(total).fill(null);
-
     let uploadedBytes = 0;
     let completedChunks = 0;
     let lastBytes = 0, lastTime = Date.now(), smoothSpeed = 0;
-
     // 500ms 汇总速度 + 进度
     const progressTimer = setInterval(() => {
       if (cancelledUploads.has(taskId)) return;
@@ -1821,14 +1678,12 @@ async function uploadOne(file, dir, externalTaskId){
       }
       debouncedLoadTasks();
     }, 500);
-
     // 3. 单分片上传函数（带 5 次重试）
     async function uploadChunk(i) {
   if (cancelledUploads.has(taskId) || abortCtrl.signal.aborted) throw new Error('已取消');
   const begin = i * chunkSize;
   const end = Math.min(begin + chunkSize, file.size);
   const blob = file.slice(begin, end);
-
   // 计算 base64
   const base64 = await new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -1846,13 +1701,11 @@ async function uploadOne(file, dir, externalTaskId){
     reader.onerror = () => reject(new Error('FileReader error'));
     reader.readAsArrayBuffer(blob);
   });
-
   // 重试 5 次，指数退避
   let retries = 0;
   const MAX_RETRIES = 5;
   let sha = null;
   let lastErr = null;
-
   while (retries < MAX_RETRIES) {
     if (cancelledUploads.has(taskId) || abortCtrl.signal.aborted) throw new Error('已取消');
     try {
@@ -1893,13 +1746,11 @@ async function uploadOne(file, dir, externalTaskId){
     }
   }
   if (!sha) throw new Error('分片 ' + (i + 1) + ' 未获得 sha: ' + (lastErr || '未知错误'));
-
   // ★ 本地累加进度（单线程，单调递增）
   chunkSha[i] = sha;
   chunkDone[i] = true;
   uploadedBytes += blob.size;
   completedChunks++;
-
   // ★ 本地算速度（滑动窗口，最近 5 秒）
   const now = Date.now();
   if (!window.__speedWindow) window.__speedWindow = [];
@@ -1917,7 +1768,6 @@ async function uploadOne(file, dir, externalTaskId){
     const el = Math.max(0.1, (now - t0) / 1000);
     localSpeed = uploadedBytes / el;
   }
-
   // ★ 本地更新任务显示（速度本地算，进度用已完成分片数）
   const taskProg = Math.min(95, Math.floor((completedChunks / total) * 95));
   const t = localTasks.get(taskId);
@@ -1933,7 +1783,6 @@ async function uploadOne(file, dir, externalTaskId){
     t.updatedAt = now;
   }
   if (typeof renderTaskList === 'function') renderTaskList();
-
   // 通知服务端（只报分片号，服务端算进度）
   api('/api/upload/chunk', {
     method: 'POST',
@@ -1941,17 +1790,13 @@ async function uploadOne(file, dir, externalTaskId){
     body: JSON.stringify({ uploadId, index: i, sha, total, taskId })
   }).catch(() => {});
 }
-
     // 4. 16 线程并发上传分片
     await runWithConcurrency(chunkIndexes, CHUNK_UPLOAD_CONCURRENCY, async (i)=>{
       if (cancelledUploads.has(taskId)) return;
       await uploadChunk(i);
     });
-
     clearInterval(progressTimer);
-
     if (cancelledUploads.has(taskId)) throw new Error('已取消');
-
     // 5. 校验：全部分片都成功
     const missing = [];
     for (let i = 0; i < total; i++) {
@@ -1960,12 +1805,10 @@ async function uploadOne(file, dir, externalTaskId){
     if (missing.length > 0) {
       throw new Error('有 ' + missing.length + ' 个分片未上传成功: ' + missing.slice(0, 5).join(',') + (missing.length > 5 ? '...' : ''));
     }
-
     // 6. 通知服务端完成（服务端会二次验证 GitHub 上的分片）
     const t = localTasks.get(taskId);
     if(t){ t.message = '注册中...'; t.progress = 99; t.updatedAt = Date.now(); }
     debouncedLoadTasks();
-
     console.log('[upload] 准备 finish', { uploadId, path, filename: file.name, size: file.size, chunks: total, taskId });
     let finishResp;
     try {
@@ -1982,7 +1825,6 @@ async function uploadOne(file, dir, externalTaskId){
     if (!finishResp || !finishResp.ok) {
       throw new Error((finishResp && finishResp.error) || '注册失败');
     }
-
     // 7. 完成
     const tt = localTasks.get(taskId);
     if(tt){ tt.status = 'done'; tt.message = '完成 (' + completedChunks + '/' + total + ' 分片)'; tt.progress = 100; tt.updatedAt = Date.now(); }
@@ -2003,7 +1845,6 @@ async function uploadOne(file, dir, externalTaskId){
     throw e;
   }
 }
-
 // ==================== 任务列表 ====================
 let taskTimer=null;
 function debounce(fn, ms){
@@ -2013,7 +1854,6 @@ function debounce(fn, ms){
     timer = setTimeout(() => { try { fn.apply(this, args); } catch(e){ console.error(e); } }, ms);
   };
 }
-
 function renderTaskList(){
   const map = new Map();
   for (const t of localTasks.values()) map.set(t.id, t);
@@ -2049,14 +1889,11 @@ function renderTaskList(){
     </div>\`;
   }).join('');
 }
-
 let serverTasksCache = [];
-
 async function loadTasks(){
   try {
     serverTasksCache = await api('/api/tasks') || [];
   } catch (e) { console.error('获取任务失败', e); }
-
   // 服务端只提供分片数，速度/字节由本地计算
   for (const st of serverTasksCache) {
     const local = localTasks.get(st.id);
@@ -2078,7 +1915,6 @@ async function loadTasks(){
   renderTaskList();
 }
 const debouncedLoadTasks = debounce(loadTasks, 400);
-
 async function cancelTask(id, el){
   cancelledUploads.add(id);
   const ctrl = abortControllers.get(id);
@@ -2113,7 +1949,6 @@ async function clearDoneTasks(){
     showMsg('已清除 ' + ids.length + ' 个任务');
   } catch (e) { showMsg('清除失败: ' + e.message); loadTasks(); }
 }
-
 document.getElementById('btn-tasks').onclick=()=>{ document.getElementById('task-drawer').classList.add('show'); loadTasks(); };
 document.getElementById('close-tasks').onclick=()=>{ document.getElementById('task-drawer').classList.remove('show'); if(taskTimer)clearInterval(taskTimer); };
 document.getElementById('btn-refresh-tasks').onclick=()=>{ loadTasks(); };
@@ -2133,7 +1968,6 @@ document.getElementById('btn-upload').onclick=()=>{ document.getElementById('new
 document.addEventListener('click',e=>{ if(!e.target.closest('#btn-new')&&!e.target.closest('#new-menu')) document.getElementById('new-menu').classList.remove('show'); if(!e.target.closest('#btn-upload')&&!e.target.closest('#upload-menu')) document.getElementById('upload-menu').classList.remove('show'); });
 document.getElementById('btn-logout').onclick=async()=>{ await api('/api/logout'); location.href='/login'; };
 document.getElementById('btn-shares').onclick=()=>{ location.href='/shares'; };
-
 function openModal(title,content,onOk){
   const titleEl=document.getElementById('modal-title');
   titleEl.textContent=title;
@@ -2144,12 +1978,9 @@ function openModal(title,content,onOk){
   document.getElementById('modal').classList.add('show');
 }
 function closeModal(){ document.getElementById('modal').classList.remove('show'); }
-
 bindShareModalEvents();
-
 // ==================== Go 功能 ====================
 var goState = { editingName: null, list: [] };
-
 function openGoDrawer() {
   document.getElementById('go-drawer').classList.add('show');
   loadGoList();
@@ -2157,7 +1988,6 @@ function openGoDrawer() {
 function closeGoDrawer() {
   document.getElementById('go-drawer').classList.remove('show');
 }
-
 async function loadGoList() {
   var box = document.getElementById('go-list');
   try {
@@ -2186,7 +2016,6 @@ async function loadGoList() {
         + '</div>'
         + '</div>';
     }).join('');
-
     box.querySelectorAll('.go-act').forEach(function(btn) {
       btn.onclick = function() {
         var name = btn.getAttribute('data-name');
@@ -2201,7 +2030,6 @@ async function loadGoList() {
     box.innerHTML = '<div class="empty">加载失败: ' + escapeHtml(e.message) + '</div>';
   }
 }
-
 function openGoModal(name, content, type) {
   document.getElementById('go-modal-title').textContent = name ? '编辑 Go 页面' : '新建 Go 页面';
   document.getElementById('go-name').value = name || '';
@@ -2238,12 +2066,10 @@ function openGoModal(name, content, type) {
     }, 800);
   }
 }
-
 function closeGoModal() {
   document.getElementById('go-modal').classList.remove('show');
   goState.editingName = null;
 }
-
 async function openGoEdit(name) {
   try {
     var item = await api('/api/go/get?name=' + encodeURIComponent(name));
@@ -2254,12 +2080,10 @@ async function openGoEdit(name) {
     showMsg('加载失败: ' + e.message);
   }
 }
-
 async function saveGo() {
   var name = document.getElementById('go-name').value.trim();
   var content = document.getElementById('go-content').value;
   var type = document.getElementById('go-type').value;
-
   // markdown-edit 优先从 wangEditor 取内容
   if (type === 'markdown-edit' && mdEditorInstance) {
     try {
@@ -2289,7 +2113,6 @@ async function saveGo() {
     showMsg('保存失败: ' + e.message);
   }
 }
-
 async function deleteGo(name) {
   if (!confirm('确定删除 "' + name + '" ？')) return;
   try {
@@ -2304,20 +2127,13 @@ async function deleteGo(name) {
     showMsg('删除失败: ' + e.message);
   }
 }
-
 // 绑定事件
 document.getElementById('btn-search').onclick = function(){ location.href = '/search'; };
 document.getElementById('btn-go').onclick = openGoDrawer;
 document.getElementById('close-go').onclick = closeGoDrawer;
 document.getElementById('btn-new-go').onclick = function() { openGoModal(null, '', 'html'); };
-
-
-
-
-
 // ==================== Go 类型切换 & 文件选择 ====================
 var goFileTreeState = { structure: null, expanded: { '': true }, selectedPath: '' };
-
 function onGoTypeChange(){
   var t = document.getElementById('go-type').value;
   // 隐藏所有
@@ -2327,7 +2143,6 @@ function onGoTypeChange(){
   if (mdEditorWrap) mdEditorWrap.style.display = 'none';
   var contentArea = document.getElementById('go-content');
   if (contentArea) contentArea.style.display = 'block';
-
   if (t === 'file' || t === 'markdown-file') {
     document.getElementById('go-file-picker').style.display = 'block';
     if (contentArea) contentArea.style.display = 'none';
@@ -2343,7 +2158,6 @@ function onGoTypeChange(){
     }
   }
 }
-
 var mdEditorInstance = null;
 function createMdEditorContainer(){
   var wrap = document.createElement('div');
@@ -2353,20 +2167,17 @@ function createMdEditorContainer(){
     + '<div id="md-editor-container" style="height:320px;overflow-y:auto;"></div>';
   var contentArea = document.getElementById('go-content');
   contentArea.parentNode.insertBefore(wrap, contentArea.nextSibling);
-
   // 加载 wangEditor + Markdown 插件
   var css = document.createElement('link');
   css.rel = 'stylesheet';
   css.href = 'https://cdn.bootcdn.net/ajax/libs/wangEditor/10.0.13/wangEditor.css';
   document.head.appendChild(css);
-
   var js = document.createElement('script');
   js.src = 'https://cdn.bootcdn.net/ajax/libs/wangEditor/10.0.13/wangEditor.js';
   js.onload = function(){
   };
   document.head.appendChild(js);
 }
-
 async function openGoFilePicker(){
   try {
     var st = await api('/api/structure?path=');
@@ -2379,7 +2190,6 @@ async function openGoFilePicker(){
     showMsg('加载失败: ' + e.message);
   }
 }
-
 function renderGoFileTree(){
   var el = document.getElementById('go-file-tree');
   if (!el || !goFileTreeState.structure) return;
@@ -2410,7 +2220,6 @@ function renderGoFileTree(){
     }
   };
 }
-
 function buildGoTreeRow(node, basePath, level){
   var path = basePath;
   var isRoot = (path === '');
@@ -2448,20 +2257,16 @@ function buildGoTreeRow(node, basePath, level){
   }
   return html;
 }
-
 document.getElementById('go-file-cancel').onclick = function(){
   document.getElementById('go-file-modal').classList.remove('show');
 };
 document.getElementById('go-file-refresh').onclick = function(){ openGoFilePicker(); };
-
 loadList();
-
 // ★ 全局实时刷新：每 500ms 刷新任务列表 UI，每 2s 拉服务端
 setInterval(() => { if (typeof renderTaskList === 'function') renderTaskList(); }, 300);
 setInterval(() => { loadTasks(); }, 800);
 </script>
 `;
-
 async function loginPage(request) {
   return await page('登录', `
 <div class="container login-box">
@@ -2483,7 +2288,6 @@ async function login(){
 </script>
 `);
 }
-
 function fileBody(node, filePath) {
   const meta = formatSize(node.size) + ' · ' + new Date(node.createdAt).toLocaleString();
   const downloadUrl = '/download/' + node.ssid + '/' + encodeURIComponent(node.name);
@@ -2514,14 +2318,12 @@ function fileBody(node, filePath) {
 <div class="snackbar" id="snackbar"></div>
 `;
 }
-
 const FILE_SCRIPT = `
 <script>
 var params = new URLSearchParams(location.search);
 var DEFAULT_DOMAIN = 'https://cloud.myocd.de5.net';
 var path = params.get('path') || '';
 var fileNode = null;
-
 function showMsg(msg){
   var s = document.getElementById('snackbar');
   if (!s) return;
@@ -2566,7 +2368,6 @@ async function api(url, opts){
   }
   return r.json().catch(function(){ return null; });
 }
-
 var libCache = {};
 function loadScript(src){
   if (libCache[src]) return libCache[src];
@@ -2593,14 +2394,12 @@ function loadCSS(href){
   });
   return libCache[href];
 }
-
 function getExt(name){ return name.split('.').pop().toLowerCase(); }
 var TEXT_EXTS = ['txt','md','json','js','css','html','xml','log','yml','yaml','ini','conf','sh','py','java','c','cpp','go','rs','sql','ts','tsx','jsx','vue','php','rb','swift','kt','bat','ps1'];
 var CODE_EXTS = ['json','js','css','html','xml','log','yml','yaml','ini','conf','sh','py','java','c','cpp','go','rs','sql','ts','tsx','jsx','vue','php','rb','swift','kt','bat','ps1'];
 var VIDEO_MIMES = {mp4:'video/mp4', webm:'video/webm', mkv:'video/x-matroska', a3v8:'video/mp4', mov:'video/quicktime'};
 var AUDIO_MIMES = {mp3:'audio/mpeg', wav:'audio/wav', ogg:'audio/ogg', flac:'audio/flac', m4a:'audio/mp4'};
 var IMAGE_EXTS = ['jpg','jpeg','png','gif','webp','svg','bmp','ico'];
-
 function getMime(name){
   var ext = getExt(name);
   var m = {
@@ -2611,7 +2410,6 @@ function getMime(name){
   };
   return m[ext] || 'application/octet-stream';
 }
-
 async function load(){
   var preview = document.getElementById('preview');
   try {
@@ -2629,7 +2427,6 @@ async function load(){
     preview.innerHTML = '<div class="empty">加载失败: ' + escapeHtml(e.message) + '</div>';
   }
 }
-
 function setupTitleMarquee(){
   setTimeout(function(){
     var t = document.getElementById('title');
@@ -2649,7 +2446,6 @@ function setupTitleMarquee(){
     }
   }, 150);
 }
-
 function downloadBox(msg, downloadUrl){
   return '<div class="empty" style="padding:40px 20px;">'
     + '<span class="material-icons" style="font-size:56px;color:#bdbdbd;">download</span>'
@@ -2657,14 +2453,12 @@ function downloadBox(msg, downloadUrl){
     + '<a class="btn-primary" href="' + downloadUrl + '" style="display:inline-block;padding:10px 24px;border-radius:8px;text-decoration:none;margin-top:8px;">下载文件</a>'
     + '</div>';
 }
-
 async function renderPreview(){
   var preview = document.getElementById('preview');
   var ext = getExt(fileNode.name);
   var mime = getMime(fileNode.name);
   var url = '/direct/' + fileNode.ssid + '/' + encodeURIComponent(fileNode.name);
   var downloadUrl = '/download/' + fileNode.ssid + '/' + encodeURIComponent(fileNode.name);
-
   if (ext === 'pdf') {
     preview.innerHTML = '<div class="empty">正在加载 PDF...</div>';
     try {
@@ -2704,7 +2498,6 @@ async function renderPreview(){
       return;
     }
   }
-
   if (ext === 'docx' || ext === 'xlsx' || ext === 'pptx' || ext === 'doc' || ext === 'xls' || ext === 'ppt') {
     // ★ 使用微软 Office Online Viewer
     var absoluteUrl = location.origin + url;
@@ -2717,8 +2510,6 @@ async function renderPreview(){
       + '</p>';
     return;
   }
-
-
   if (VIDEO_MIMES[ext] || AUDIO_MIMES[ext]) {
     preview.innerHTML = '<div class="empty">正在加载播放器...</div>';
     try {
@@ -2748,7 +2539,6 @@ async function renderPreview(){
       return;
     }
   }
-
   if (IMAGE_EXTS.indexOf(ext) >= 0) {
     preview.innerHTML = '<div class="empty">正在加载图片...</div>';
     try {
@@ -2771,7 +2561,6 @@ async function renderPreview(){
       return;
     }
   }
-
   if (TEXT_EXTS.indexOf(ext) >= 0) {
     preview.innerHTML = '<div class="empty">正在加载...</div>';
     try {
@@ -2789,27 +2578,19 @@ async function renderPreview(){
       return;
     }
   }
-
   if (ext === 'zip' || ext === 'rar' || ext === '7z' || ext === 'tar' || ext === 'gz') {
     preview.innerHTML = downloadBox('压缩包无法在线预览', downloadUrl);
     return;
   }
-
   preview.innerHTML = downloadBox('暂不支持预览此文件类型', downloadUrl);
 }
-
-
-
 // ==================== 多线程分片下载 ====================
 var __dlState = null;
-
 async function multiThreadDownload(){
   if (!fileNode) { showMsg('文件未加载'); return; }
   if (__dlState) { showMsg('已有下载任务在进行'); return; }
-
   var ssid = fileNode.ssid;
   var fileName = fileNode.name;
-
   // 1. 获取分片元数据
   var meta;
   try {
@@ -2818,16 +2599,13 @@ async function multiThreadDownload(){
     showMsg('获取下载信息失败: ' + e.message);
     return;
   }
-
   var totalChunks = meta.chunks || 1;
   var chunkSize = meta.chunkSize || (5 * 1024 * 1024);
-
   // 2. 单分片直接跳转
   if (totalChunks === 1) {
     location.href = '/direct/' + ssid + '/' + encodeURIComponent(fileName);
     return;
   }
-
   // 3. 创建下载状态
   __dlState = {
     cancelled: false,
@@ -2840,7 +2618,6 @@ async function multiThreadDownload(){
     lastTime: Date.now(),
     smoothSpeed: 0
   };
-
   // 4. 创建进度 UI
   var ui = document.createElement('div');
   ui.id = 'dl-progress-ui';
@@ -2862,7 +2639,6 @@ async function multiThreadDownload(){
     + '<button id="dl-cancel" class="btn-secondary" style="flex:1;padding:8px;border:none;border-radius:6px;cursor:pointer;font-size:13px;color:var(--danger);">取消</button>'
     + '</div>';
   document.body.appendChild(ui);
-
   function updateUI(){
     var st = __dlState;
     if (!st) return;
@@ -2879,9 +2655,7 @@ async function multiThreadDownload(){
     document.getElementById('dl-status').textContent = st.completed + '/' + totalChunks + ' 分片 (' + pct + '%)';
     document.getElementById('dl-speed').textContent = formatSpeed(st.smoothSpeed || 0);
   }
-
   var uiTimer = setInterval(updateUI, 500);
-
   document.getElementById('dl-close').onclick = function(){
     if (confirm('关闭下载窗口将中止下载，确定？')) {
       __dlState.cancelled = true;
@@ -2904,12 +2678,10 @@ async function multiThreadDownload(){
     st.paused = !st.paused;
     this.textContent = st.paused ? '继续' : '暂停';
   };
-
   // 5. 并发下载分片
   var CONCURRENCY = 8;
   var cursor = 0;
   var failedChunks = [];
-
   async function downloadChunk(i){
     while (__dlState && __dlState.paused) {
       await new Promise(function(r){ setTimeout(r, 200); });
@@ -2937,7 +2709,6 @@ async function multiThreadDownload(){
       }
     }
   }
-
   async function worker(){
     while (true) {
       if (!__dlState || __dlState.cancelled) return;
@@ -2946,7 +2717,6 @@ async function multiThreadDownload(){
       await downloadChunk(i);
     }
   }
-
   try {
     var workers = [];
     for (var w = 0; w < Math.min(CONCURRENCY, totalChunks); w++) {
@@ -2954,14 +2724,11 @@ async function multiThreadDownload(){
     }
     await Promise.all(workers);
     clearInterval(uiTimer);
-
     if (failedChunks.length > 0) {
       document.getElementById('dl-status').textContent = '部分分片失败：' + failedChunks.join(',');
       throw new Error('有 ' + failedChunks.length + ' 个分片失败');
     }
-
     if (!__dlState || __dlState.cancelled) return;
-
     // 6. 合并
     document.getElementById('dl-status').textContent = '合并中...';
     var finalBlob = new Blob(__dlState.chunks, { type: 'application/octet-stream' });
@@ -2973,7 +2740,6 @@ async function multiThreadDownload(){
     a.click();
     document.body.removeChild(a);
     setTimeout(function(){ URL.revokeObjectURL(blobUrl); }, 30000);
-
     // 7. 完成
     document.getElementById('dl-bar').style.width = '100%';
     document.getElementById('dl-status').textContent = '完成 · ' + formatSize(__dlState.totalBytes);
@@ -2991,8 +2757,6 @@ async function multiThreadDownload(){
     }
   }
 }
-
-
 async function saveText(){
   var ta = document.getElementById('code-editor');
   if (!ta) { showMsg('编辑器未加载'); return; }
@@ -3005,7 +2769,6 @@ async function saveText(){
     showMsg('已保存');
   } catch(e) { showMsg('保存失败: ' + e.message); }
 }
-
 async function shareFile(){
   if (!fileNode) return;
   var note = prompt('分享备注（可留空）：', '');
@@ -3042,11 +2805,9 @@ async function deleteFile(){
   await api('/api/file?path=' + encodeURIComponent(path), { method:'DELETE' });
   location.href = '/?path=' + encodeURIComponent(path.split('/').slice(0,-1).join('/'));
 }
-
 load();
 </script>
 `;
-
 async function settingsPage(settings = {}, request = null) {
   const primary = settings.primary || '#1976d2';
   const bg = settings.bg || '';
@@ -3188,7 +2949,6 @@ async function clearAllData(){
 </script>
 `, settings.themeCss || '', request);
 }
-
 function generateThemeCss(settings = {}) {
   const primary = settings.primary || '#1976d2';
   const bg = (settings.bg || '').replace(/["'`<>]/g, '');
@@ -3221,8 +2981,6 @@ function generateThemeCss(settings = {}) {
   css += '</style>';
   return link + css;
 }
-
-
 function sharePageV3(share, tree, themeCss) {
   const shareIdJson = JSON.stringify(share.id);
   const hasPassword = Boolean(share.password);
@@ -3231,7 +2989,6 @@ function sharePageV3(share, tree, themeCss) {
   const initialTree = hasPassword ? 'null' : treeJson;
   const initialNote = hasPassword ? "''" : JSON.stringify(share.note || '');
   const pwFlag = hasPassword ? 'true' : 'false';
-
   const html = `<!DOCTYPE html><html><head>` +
     COMMON_HEAD + themeCss + `
   <style>
@@ -3292,11 +3049,9 @@ function sharePageV3(share, tree, themeCss) {
   var CREATED_AT = ${createdAt};
   var SHARE_DATA = { note: ${initialNote}, tree: ${initialTree}, createdAt: CREATED_AT };
   var PASSWORD = '';
-
   function escapeHtml(t){ return String(t).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
   function formatSize(b){ if(!b)return '0 B'; var k=1024, s=['B','KB','MB','GB']; var i=Math.floor(Math.log(b)/Math.log(k)); return (b/Math.pow(k,i)).toFixed(2)+' '+s[i]; }
   function showMsg(msg){ var s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(function(){s.classList.remove('show');},2500); }
-
   function getIcon(name){
     var ext=name.split('.').pop().toLowerCase();
     if(['mp4','webm','mkv','a3v8'].indexOf(ext)>=0) return 'movie';
@@ -3311,7 +3066,6 @@ function sharePageV3(share, tree, themeCss) {
     var map={mp4:'video/mp4',webm:'video/webm',mkv:'video/x-matroska',a3v8:'video/mp4',mp3:'audio/mpeg',wav:'audio/wav',ogg:'audio/ogg',flac:'audio/flac',m4a:'audio/mp4',txt:'text/plain',md:'text/markdown',json:'application/json',js:'application/javascript',css:'text/css',html:'text/html',xml:'application/xml',zip:'application/zip',rar:'application/vnd.rar','7z':'application/x-7z-compressed',tar:'application/x-tar',gz:'application/gzip',pdf:'application/pdf',jpg:'image/jpeg',jpeg:'image/jpeg',png:'image/png',gif:'image/gif',webp:'image/webp'};
     return map[ext]||'application/octet-stream';
   }
-
   function verifyPwd(){
     var pw = document.getElementById('pwd-input').value;
     fetch('/api/share/' + SHARE_ID + '/verify', {
@@ -3335,10 +3089,8 @@ function sharePageV3(share, tree, themeCss) {
       document.getElementById('pwd-err').textContent = '网络错误';
     });
   }
-
   function downloadUrl(relPath){ return '/api/share/' + SHARE_ID + '/download?p=' + encodeURIComponent(relPath) + (PASSWORD ? '&pw=' + encodeURIComponent(PASSWORD) : ''); }
   function directUrl(relPath){ return '/api/share/' + SHARE_ID + '/direct?p=' + encodeURIComponent(relPath) + (PASSWORD ? '&pw=' + encodeURIComponent(PASSWORD) : ''); }
-
   function renderTree(node, basePath, level){
     var html = '';
     var entries = Object.entries(node.children || {}).sort(function(a,b){
@@ -3372,7 +3124,6 @@ function sharePageV3(share, tree, themeCss) {
     }
     return html;
   }
-
   function renderAll(){
     document.getElementById('note-text').textContent = (SHARE_DATA && SHARE_DATA.note) || '（无备注）';
     document.getElementById('note-meta').textContent = '分享于 ' + new Date(CREATED_AT).toLocaleString();
@@ -3391,12 +3142,10 @@ function sharePageV3(share, tree, themeCss) {
       links[j].onclick = (function(rel, name){ return function(){ showPreview(rel, name); }; })(links[j].getAttribute('data-rel'), links[j].getAttribute('data-name'));
     }
   }
-
   function backToList(){
     document.getElementById('preview-area').style.display = 'none';
     document.getElementById('list-area').style.display = 'block';
   }
-
   function showPreview(relPath, name){
     document.getElementById('list-area').style.display = 'none';
     document.getElementById('preview-area').style.display = 'block';
@@ -3423,7 +3172,6 @@ function sharePageV3(share, tree, themeCss) {
       content.innerHTML = '<div class="empty">无法预览此文件类型<br><a class="btn-primary" href="' + downloadUrl(relPath) + '" style="display:inline-block;padding:10px 20px;border-radius:8px;text-decoration:none;margin-top:12px;">下载文件</a></div>';
     }
   }
-
   function downloadAll(){
     if (!SHARE_DATA || !SHARE_DATA.tree) { showMsg('数据未加载'); return; }
     var files = [];
@@ -3435,10 +3183,8 @@ function sharePageV3(share, tree, themeCss) {
         else if (child.type === 'file') files.push({ path: p, name: k, size: child.size });
       }
     })(SHARE_DATA.tree, '');
-
     if (files.length === 0) { showMsg('没有文件'); return; }
     if (files.length === 1) { location.href = downloadUrl(files[0].path); return; }
-
     showMsg('正在打包 ' + files.length + ' 个文件...');
     var loadZip = window.JSZip ? Promise.resolve() : new Promise(function(resolve, reject){
       var s = document.createElement('script');
@@ -3473,7 +3219,6 @@ function sharePageV3(share, tree, themeCss) {
       showMsg('打包失败: ' + e.message);
     });
   }
-
   // URL 带 ?pw=xxx 时自动填充并验证
   (function(){
     var m = location.search.match(/[?&]pw=([^&]+)/);
@@ -3484,18 +3229,15 @@ function sharePageV3(share, tree, themeCss) {
       setTimeout(verifyPwd, 50);
     }
   })();
-
   if (!HAS_PASSWORD) {
     renderAll();
   }
   </script>
   </body></html>`;
-
   return new Response(html, {
     headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store, no-cache, must-revalidate' }
   });
 }
-
 function shareExpiredPage(reason, themeCss) {
   const reasonJson = JSON.stringify(reason || '分享已失效');
   const html = `<!DOCTYPE html><html><head>` + COMMON_HEAD + (themeCss || '') + `
@@ -3523,7 +3265,6 @@ function shareExpiredPage(reason, themeCss) {
     headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }
   });
 }
-
 function shareManagePage(themeCss) {
   const html = `<!DOCTYPE html><html><head>` + COMMON_HEAD + themeCss + `
   <style>
@@ -3546,7 +3287,6 @@ function shareManagePage(themeCss) {
   var DEFAULT_DOMAIN = 'https://cloud.myocd.de5.net';
   function escapeHtml(t){ return String(t).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
   function showMsg(msg){ var s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(function(){s.classList.remove('show');},2500); }
-
   function loadShares(){
     var el = document.getElementById('share-list');
     el.innerHTML = '<div class="empty">加载中...</div>';
@@ -3589,7 +3329,6 @@ function shareManagePage(themeCss) {
       el.innerHTML = '<div class="empty">加载失败: ' + escapeHtml(e.message) + '</div>';
     });
   }
-
   function copyUrl(id){
     var url = DEFAULT_DOMAIN + '/s/' + id;
     if (navigator.clipboard) {
@@ -3624,8 +3363,6 @@ function shareManagePage(themeCss) {
       if (r.ok) { showMsg('已删除'); loadShares(); } else showMsg('删除失败');
     });
   }
-
-
   function editExpire(id, currentExpire){
     var now = Date.now();
     var defaultValue = '';
@@ -3649,7 +3386,6 @@ function shareManagePage(themeCss) {
       if (r.ok) { showMsg('有效期已更新'); loadShares(); } else showMsg('更新失败');
     });
   }
-
   function editMaxViews(id, currentMax){
     var input = prompt('输入新的访问次数限制（留空或 0 表示无限次）：', currentMax || '');
     if (input === null) return;
@@ -3666,7 +3402,6 @@ function shareManagePage(themeCss) {
       if (r.ok) { showMsg('访问次数已更新'); loadShares(); } else showMsg('更新失败');
     });
   }
-
   loadShares();
   </script>
   </body></html>`;
@@ -3674,7 +3409,6 @@ function shareManagePage(themeCss) {
     headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }
   });
 }
-
 function searchPage(themeCss) {
   const html = `<!DOCTYPE html><html><head>` + COMMON_HEAD + (themeCss || '') + `
   <style>
@@ -3746,7 +3480,6 @@ function searchPage(themeCss) {
   </div>
   <script>
   var state = { results: [], selected: new Set(), timer: null };
-
   function showMsg(msg){ var s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(function(){s.classList.remove('show');},2500); }
   function escapeHtml(t){ return String(t).replace(/[&<>"']/g, function(m){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]; }); }
   function formatSize(b){ if(!b)return '0 B'; var k=1024, s=['B','KB','MB','GB']; var i=Math.floor(Math.log(b)/Math.log(k)); return (b/Math.pow(k,i)).toFixed(2)+' '+s[i]; }
@@ -3764,7 +3497,6 @@ function searchPage(themeCss) {
     if (history.length > 1) history.back();
     else location.href = '/';
   }
-
   async function doSearch(){
     var q = document.getElementById('q').value.trim();
     var clearBtn = document.getElementById('clear-btn');
@@ -3779,7 +3511,6 @@ function searchPage(themeCss) {
     }
     clearBtn.style.display = 'inline-block';
     document.getElementById('results').innerHTML = '<div class="empty">搜索中...</div>';
-
     try {
       var r = await fetch('/api/search?q=' + encodeURIComponent(q));
       if (r.status === 401) { location.href = '/login'; return; }
@@ -3791,19 +3522,16 @@ function searchPage(themeCss) {
       document.getElementById('results').innerHTML = '<div class="empty">搜索失败: ' + escapeHtml(e.message) + '</div>';
     }
   }
-
   function renderResults(){
     var box = document.getElementById('results');
     var info = document.getElementById('count-info');
     var results = state.results;
     info.textContent = '共 ' + results.length + ' 条结果';
-
     if (results.length === 0) {
       box.innerHTML = '<div class="empty"><span class="material-icons" style="font-size:48px;color:#bdbdbd;">search_off</span><p>没有匹配的文件</p></div>';
       updateBatchBar();
       return;
     }
-
     box.innerHTML = results.map(function(r, idx){
       var isSel = state.selected.has(idx);
       var icon = r.type === 'folder' ? 'folder' : getIcon(r.name);
@@ -3819,7 +3547,6 @@ function searchPage(themeCss) {
         + '<div style="font-size:11px; color:var(--text-sec); white-space:nowrap; flex-shrink:0;">' + meta + '</div>'
         + '</div>';
     }).join('');
-
     box.querySelectorAll('.search-result-row').forEach(function(row){
       var idx = parseInt(row.getAttribute('data-idx'), 10);
       row.onclick = function(e){
@@ -3837,13 +3564,11 @@ function searchPage(themeCss) {
     });
     updateBatchBar();
   }
-
   function toggleSelect(idx){
     if (state.selected.has(idx)) state.selected.delete(idx);
     else state.selected.add(idx);
     renderResults();
   }
-
   function updateBatchBar(){
     var bar = document.getElementById('batch-bar');
     var n = state.selected.size;
@@ -3854,7 +3579,6 @@ function searchPage(themeCss) {
       bar.classList.remove('show');
     }
   }
-
   function getSelectedPaths(){
     var paths = [];
     state.selected.forEach(function(idx){
@@ -3862,7 +3586,6 @@ function searchPage(themeCss) {
     });
     return paths;
   }
-
   // 批量操作
   document.getElementById('batch-all').onclick = function(){
     state.results.forEach(function(_, idx){ state.selected.add(idx); });
@@ -3905,7 +3628,6 @@ function searchPage(themeCss) {
       } else showMsg('创建分享失败');
     }).catch(function(e){ showMsg('失败: ' + e.message); });
   };
-
   // 移动/复制（简化：弹出目标路径输入）
   async function pickAndMove(operation){
     var paths = getSelectedPaths();
@@ -3929,7 +3651,6 @@ function searchPage(themeCss) {
   }
   document.getElementById('batch-move').onclick = function(){ pickAndMove('move'); };
   document.getElementById('batch-copy').onclick = function(){ pickAndMove('copy'); };
-
   // 输入事件
   document.getElementById('q').addEventListener('input', function(){
     if (state.timer) clearTimeout(state.timer);
@@ -3942,7 +3663,6 @@ function searchPage(themeCss) {
     document.getElementById('q').value = '';
     doSearch();
   };
-
   // 自动聚焦
   setTimeout(function(){ document.getElementById('q').focus(); }, 100);
   </script>
@@ -3951,7 +3671,6 @@ function searchPage(themeCss) {
     headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' }
   });
 }
-
 function sharePage(node) {
   return page('分享', `
 <div class="appbar"><h1>文件分享</h1></div>
@@ -3967,7 +3686,6 @@ function sharePage(node) {
 </div>
 `);
 }
-
 function zipPage(folderName, files) {
   const filesJson = JSON.stringify(files).replace(/</g, '\u003c');
   const fileListHtml = files.map(f => 
@@ -4021,17 +3739,13 @@ async function startZip(){
 </script>
 `, '');
 }
-
 function escapeHtml(text) {
   return text.replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
 }
-
 // ==================== 路由处理 ====================
-
 async function handleRequest(request, env, ctx = null) {
   const url = new URL(request.url);
   const path = decodeURIComponent(url.pathname);
-
   if (path === '/api/login') {
     const body = await request.json();
     if (body.password === env.CLOUD_PASSWORD) {
@@ -4041,13 +3755,11 @@ async function handleRequest(request, env, ctx = null) {
     }
     return errorResponse('密码错误', 401);
   }
-
   if (path === '/api/logout') {
     return new Response(JSON.stringify({ ok: true }), {
       headers: { 'Content-Type': 'application/json', 'Set-Cookie': `auth=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0` }
     });
   }
-
   // ==================== Go 页面 ====================
   if (path === '/api/go/list' && request.method === 'GET') {
     const forbid = requirePassword(request, env);
@@ -4063,7 +3775,6 @@ async function handleRequest(request, env, ctx = null) {
     items.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     return jsonResponse(items);
   }
-
   if (path === '/api/go/get' && request.method === 'GET') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
@@ -4073,7 +3784,6 @@ async function handleRequest(request, env, ctx = null) {
     if (!item) return errorResponse('不存在', 404);
     return jsonResponse(item);
   }
-
   if (path === '/api/go/save' && request.method === 'POST') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
@@ -4085,13 +3795,11 @@ async function handleRequest(request, env, ctx = null) {
     if (!name) return errorResponse('名称不能为空');
     if (!/^[a-zA-Z0-9_-]+$/.test(name)) return errorResponse('名称只能包含字母、数字、下划线、短横线');
     if (name.length > 64) return errorResponse('名称太长');
-
     // 重名检查（除非是自身重命名）
     if (originalName !== name) {
       const exist = await d1Get(env, 'go_' + name, null);
       if (exist) return errorResponse('名称已存在，请换一个');
     }
-
     const old = originalName ? await d1Get(env, 'go_' + originalName, null) : null;
     const item = {
       name: name,
@@ -4106,7 +3814,6 @@ async function handleRequest(request, env, ctx = null) {
     }
     return jsonResponse({ ok: true, item });
   }
-
   if (path === '/api/go/delete' && request.method === 'POST') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
@@ -4116,7 +3823,6 @@ async function handleRequest(request, env, ctx = null) {
     await d1Delete(env, 'go_' + name);
     return jsonResponse({ ok: true });
   }
-
   // ==================== Go 页面访问 ====================
   if (path.startsWith('/go/')) {
     let name = path.slice(4);   // 去掉 /go/
@@ -4124,7 +3830,6 @@ async function handleRequest(request, env, ctx = null) {
     if (!name) return errorResponse('缺少名称', 404);
     const item = await d1Get(env, 'go_' + name, null);
     if (!item) return new Response('页面不存在', { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
-
     // ============ HTML ============
     if (item.type === 'html') {
       return new Response(item.content, {
@@ -4134,14 +3839,12 @@ async function handleRequest(request, env, ctx = null) {
         }
       });
     }
-
     // ============ Link（302 跳转）============
     if (item.type === 'link') {
       const target = (item.content || '').trim();
       if (!target) return new Response('链接为空', { status: 500 });
       return Response.redirect(target, 302);
     }
-
     // ============ File（网盘文件）============
     if (item.type === 'file') {
       const filePath = (item.content || '').trim();
@@ -4153,11 +3856,9 @@ async function handleRequest(request, env, ctx = null) {
       }
       return Response.redirect('/direct/' + node.ssid + '/' + encodeURIComponent(node.name), 302);
     }
-
     // ============ Markdown（统一渲染器） ============
     if (item.type === 'markdown-file' || item.type === 'markdown-link' || item.type === 'markdown-edit') {
       let mdContent = '';
-
       if (item.type === 'markdown-file') {
         // 从网盘读取文件
         const filePath = (item.content || '').trim();
@@ -4181,7 +3882,6 @@ async function handleRequest(request, env, ctx = null) {
         // markdown-edit：直接使用存储的内容
         mdContent = item.content || '';
       }
-
       const html = '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + escapeHtml(item.name) + '</title>'
         + '<link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/github-markdown-css/5.9.0/github-markdown.css">'
         + '<style>body{max-width:900px;margin:40px auto;padding:0 20px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.7;color:#24292f;}'
@@ -4200,7 +3900,6 @@ async function handleRequest(request, env, ctx = null) {
         }
       });
     }
-
     // ============ Text（默认）============
     const html = '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + escapeHtml(item.name) + '</title>'
       + '<style>body{font-family:system-ui,sans-serif;max-width:800px;margin:40px auto;padding:0 16px;line-height:1.7;color:#212121;}pre{background:#f5f5f5;padding:16px;border-radius:8px;overflow:auto;white-space:pre-wrap;word-break:break-word;}</style>'
@@ -4212,7 +3911,6 @@ async function handleRequest(request, env, ctx = null) {
       }
     });
   }
-
   // ==================== 文件搜索 ====================
   if (path === '/api/search' && request.method === 'GET') {
     const forbid = requirePassword(request, env);
@@ -4222,12 +3920,10 @@ async function handleRequest(request, env, ctx = null) {
     // 多关键词：空格 / 逗号分隔
     const keywords = q.split(/[\s,，]+/).filter(Boolean).map(k => k.toLowerCase());
     if (keywords.length === 0) return jsonResponse({ results: [], count: 0 });
-
     const structure = await getStructure(env);
     const allPaths = collectPaths(structure);
     const results = [];
     const MAX_RESULTS = 500;
-
     for (const p of allPaths) {
       const node = getNode(structure, p);
       if (!node) continue;
@@ -4239,7 +3935,6 @@ async function handleRequest(request, env, ctx = null) {
         if (pathLower.indexOf(kw) === -1) { allMatch = false; break; }
       }
       if (!allMatch) continue;
-
       const parts = p.split('/');
       const parentPath = parts.slice(0, -1).join('/');
       results.push({
@@ -4253,16 +3948,13 @@ async function handleRequest(request, env, ctx = null) {
       });
       if (results.length >= MAX_RESULTS) break;
     }
-
     // 排序：文件夹优先 + 名称
     results.sort((a, b) => {
       if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
       return a.name.localeCompare(b.name, 'zh-CN');
     });
-
     return jsonResponse({ results, count: results.length, keywords });
   }
-
   if (path === '/api/structure') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
@@ -4272,7 +3964,6 @@ async function handleRequest(request, env, ctx = null) {
     if (!node) return errorResponse('路径不存在', 404);
     return jsonResponse(node);
   }
-
   if (path === '/api/folder' && request.method === 'POST') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
@@ -4287,7 +3978,6 @@ async function handleRequest(request, env, ctx = null) {
     await saveStructure(env, structure);
     return jsonResponse({ ok: true });
   }
-
   if (path === '/api/text' && request.method === 'POST') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
@@ -4315,9 +4005,7 @@ async function handleRequest(request, env, ctx = null) {
     }
     return jsonResponse({ ok: true, taskId });
   }
-
   // ==================== 上传 API（只支持客户端直传）====================
-
   // ==================== 上传断点续传 ====================
   if (path === '/api/upload/resume' && request.method === 'POST') {
     const forbid = requirePassword(request, env);
@@ -4330,13 +4018,11 @@ async function handleRequest(request, env, ctx = null) {
     const taskId = body.taskId || ssid();
     if (!fingerprint || !filename || size == null) return errorResponse('缺少参数');
     const chunks = Math.max(1, Math.ceil(size / CHUNK_SIZE));
-
     // 用文件名+大小+修改时间生成稳定指纹
     const fpKey = 'fp_' + fingerprint.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
     const existing = await d1Get(env, fpKey, null);
     let uploadId;
     let uploadedIndexes = [];
-
     if (existing && existing.uploadId) {
       uploadId = existing.uploadId;
       // 检查 GitHub 上哪些分片已存在
@@ -4349,16 +4035,13 @@ async function handleRequest(request, env, ctx = null) {
       await githubCreateRepo(uploadId, env);
       await d1Set(env, fpKey, { uploadId, filename, size, createdAt: Date.now() });
     }
-
     await addTask(env, { id: taskId, name: filename, status: 'uploading', message: '准备中...', progress: uploadedIndexes.length > 0 ? Math.floor((uploadedIndexes.length / chunks) * 95) : 0, size, chunkMap: {}, createdAt: Date.now(), updatedAt: Date.now() });
-
     return jsonResponse({
       uploadId, taskId, chunks, chunkSize: CHUNK_SIZE,
       uploadedIndexes, githubUser: GITHUB_USER,
       repo: uploadId, token: env.GITHUB_TOKEN
     });
   }
-
   // ==================== 分片下载（多线程） ====================
   if (path === '/api/download/chunk' && request.method === 'GET') {
     const forbid = requirePassword(request, env);
@@ -4377,7 +4060,6 @@ async function handleRequest(request, env, ctx = null) {
       return errorResponse('分片下载失败: ' + e.message, 500);
     }
   }
-
   // ==================== 下载分片元数据 ====================
   if (path === '/api/download/meta' && request.method === 'GET') {
     const sid = url.searchParams.get('ssid');
@@ -4399,7 +4081,6 @@ async function handleRequest(request, env, ctx = null) {
       storage: node.storage
     });
   }
-
   // ==================== 下载单个分片（前端多线程用）====================
   if (path === '/api/download/chunk' && request.method === 'GET') {
     const forbid = requirePassword(request, env);
@@ -4420,7 +4101,6 @@ async function handleRequest(request, env, ctx = null) {
       return errorResponse('分片下载失败: ' + e.message, 500);
     }
   }
-
   if (path === '/api/upload/start' && request.method === 'POST') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
@@ -4435,7 +4115,6 @@ async function handleRequest(request, env, ctx = null) {
     await addTask(env, { id: taskId, name: filename, status: 'uploading', message: '等待上传...', progress: 0, size, speedWindow: [], chunkMap: {}, createdAt: Date.now(), updatedAt: Date.now() });
     return jsonResponse({ uploadId, taskId, chunks, chunkSize: CHUNK_SIZE, githubUser: GITHUB_USER, repo: uploadId, token: env.GITHUB_TOKEN });
   }
-
   if (path === '/api/upload/chunk' && request.method === 'POST') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
@@ -4448,15 +4127,12 @@ async function handleRequest(request, env, ctx = null) {
       try {
         const task = JSON.parse(row.value);
         const total = body.total || 1;
-
         // 记录已完成的分片（Set 去重）
         if (!task.chunkMap) task.chunkMap = {};
         task.chunkMap[index] = 1;
         const doneCount = Object.keys(task.chunkMap).length;
-
         // ★ 进度 = 已完成分片 / 总片数（单线程不会乱序）
         const prog = Math.min(95, Math.floor((doneCount / total) * 95));
-
         await updateTask(env, taskId, {
           message: '分片 ' + doneCount + '/' + total + ' 完成',
           progress: prog,
@@ -4470,14 +4146,12 @@ async function handleRequest(request, env, ctx = null) {
     }
     return jsonResponse({ ok: true, index, sha });
   }
-
   if (path === '/api/upload/finish' && request.method === 'POST') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
     const body = await request.json();
     const filePath = body.path, uploadId = body.uploadId, filename = body.filename, size = body.size, chunks = body.chunks, taskId = body.taskId;
     if (!filePath || !uploadId || !filename || !size || !chunks) return errorResponse('缺少参数');
-
     // ★ 关键：验证 GitHub 上所有分片都存在
     await updateTask(env, taskId, { message: '验证分片完整性...', progress: 95 });
     const missing = [];
@@ -4488,7 +4162,6 @@ async function handleRequest(request, env, ctx = null) {
     if (missing.length > 0) {
       return errorResponse('分片缺失 ' + missing.length + ' 个: ' + missing.slice(0, 5).join(',') + (missing.length > 5 ? '...' : ''), 400);
     }
-
     const structure = await getStructure(env);
     const oldNode = getNode(structure, filePath);
     if (oldNode && oldNode.type === 'file') { try { await deleteFileStorage(oldNode, env); } catch (e) {} }
@@ -4497,9 +4170,7 @@ async function handleRequest(request, env, ctx = null) {
     await updateTask(env, taskId, { status: 'done', message: '完成', progress: 100 });
     return jsonResponse({ ok: true });
   }
-
   // ==================== 其他 API ====================
-
   if (path === '/api/file' && request.method === 'GET') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
@@ -4509,7 +4180,6 @@ async function handleRequest(request, env, ctx = null) {
     if (!node || node.type !== 'file') return errorResponse('文件不存在', 404);
     return jsonResponse(node);
   }
-
   if (path === '/api/file' && request.method === 'DELETE') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
@@ -4531,7 +4201,6 @@ async function handleRequest(request, env, ctx = null) {
     if (ctx && ctx.waitUntil) ctx.waitUntil(bgTask); else bgTask.catch(() => {});
     return jsonResponse({ ok: true });
   }
-
   if (path === '/api/file/rename' && request.method === 'PUT') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
@@ -4541,7 +4210,6 @@ async function handleRequest(request, env, ctx = null) {
     await saveStructure(env, structure);
     return jsonResponse({ ok: true });
   }
-
   if (path === '/api/file/move' && request.method === 'PUT') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
@@ -4557,7 +4225,6 @@ async function handleRequest(request, env, ctx = null) {
     if (errors.length) return errorResponse(errors.join('; '), 400);
     return jsonResponse({ ok: true });
   }
-
   if (path === '/api/file/copy' && request.method === 'PUT') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
@@ -4573,7 +4240,6 @@ async function handleRequest(request, env, ctx = null) {
     if (errors.length) return errorResponse(errors.join('; '), 400);
     return jsonResponse({ ok: true });
   }
-
   if (path === '/api/files/batch' && request.method === 'DELETE') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
@@ -4598,7 +4264,6 @@ async function handleRequest(request, env, ctx = null) {
     if (ctx && ctx.waitUntil) ctx.waitUntil(bgTask); else bgTask.catch(() => {});
     return jsonResponse({ ok: true });
   }
-
   if (path === '/api/file/content' && request.method === 'PUT') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
@@ -4617,13 +4282,11 @@ async function handleRequest(request, env, ctx = null) {
     await saveStructure(env, structure);
     return jsonResponse({ ok: true });
   }
-
   if (path === '/api/tasks' && request.method === 'GET') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
     return jsonResponse(await getTasks(env));
   }
-
   if (path === '/api/tasks/batch' && request.method === 'DELETE') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
@@ -4632,7 +4295,6 @@ async function handleRequest(request, env, ctx = null) {
     for (const id of ids) { try { await deleteTask(env, id); } catch (e) {} }
     return jsonResponse({ ok: true, deleted: ids.length });
   }
-
   if (path.startsWith('/api/tasks/') && request.method === 'DELETE') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
@@ -4641,9 +4303,7 @@ async function handleRequest(request, env, ctx = null) {
     else await deleteTask(env, id);
     return jsonResponse({ ok: true });
   }
-
   // ==================== 分享 API ====================
-
   // 创建分享
   if (path === '/api/share/create' && request.method === 'POST') {
     const forbid = requirePassword(request, env);
@@ -4667,7 +4327,6 @@ async function handleRequest(request, env, ctx = null) {
     await saveShare(env, { id, paths, note, password: pwd, maxViews, expiresAt, views: 0, createdAt: Date.now() });
     return jsonResponse({ ok: true, id, url: '/s/' + id });
   }
-
   // 列出所有分享
   if (path === '/api/shares/list' && request.method === 'GET') {
     const forbid = requirePassword(request, env);
@@ -4691,7 +4350,6 @@ async function handleRequest(request, env, ctx = null) {
     });
     return jsonResponse(result);
   }
-
   // 更新分享
   if (path.startsWith('/api/shares/') && request.method === 'PUT') {
     const forbid = requirePassword(request, env);
@@ -4720,7 +4378,6 @@ async function handleRequest(request, env, ctx = null) {
     await saveShare(env, share);
     return jsonResponse({ ok: true });
   }
-
   // 删除分享
   if (path.startsWith('/api/shares/') && request.method === 'DELETE') {
     const forbid = requirePassword(request, env);
@@ -4729,7 +4386,6 @@ async function handleRequest(request, env, ctx = null) {
     await deleteShare(env, id);
     return jsonResponse({ ok: true });
   }
-
   // 获取分享元信息（不返回文件树，如果设置了密码）
   if (/^\/api\/share\/[^/]+$/.test(path) && request.method === 'GET') {
     const shareId = path.slice('/api/share/'.length);
@@ -4749,7 +4405,6 @@ async function handleRequest(request, env, ctx = null) {
       maxViews: share.maxViews || 0, expiresAt: share.expiresAt || 0, views: share.views
     });
   }
-
   // 验证提取码
   if (path.startsWith('/api/share/') && path.endsWith('/verify') && request.method === 'POST') {
     const shareId = path.slice('/api/share/'.length).replace('/verify', '');
@@ -4770,7 +4425,6 @@ async function handleRequest(request, env, ctx = null) {
       maxViews: share.maxViews || 0, expiresAt: share.expiresAt || 0, views: share.views
     });
   }
-
   // 分享内文件下载
   if (path.startsWith('/api/share/') && path.endsWith('/download') && request.method === 'GET') {
     const shareId = path.slice('/api/share/'.length).replace('/download', '');
@@ -4788,7 +4442,6 @@ async function handleRequest(request, env, ctx = null) {
     if (!node || node.type !== 'file') return errorResponse('文件不存在', 404);
     return await buildShareFileResponse(request, node, env);
   }
-
   // 分享内单文件预览
   if (path.startsWith('/api/share/') && path.endsWith('/direct') && request.method === 'GET') {
     const shareId = path.slice('/api/share/'.length).replace('/direct', '');
@@ -4806,7 +4459,6 @@ async function handleRequest(request, env, ctx = null) {
     if (!node || node.type !== 'file') return errorResponse('文件不存在', 404);
     return await buildShareFileResponse(request, node, env, true);
   }
-
   // 分享内打包下载
   if (path.startsWith('/api/share/') && path.endsWith('/zip') && request.method === 'GET') {
     const shareId = path.slice('/api/share/'.length).replace('/zip', '');
@@ -4822,7 +4474,6 @@ async function handleRequest(request, env, ctx = null) {
     const files = collectShareFiles(tree);
     return await buildShareZipResponse(files, env);
   }
-
   // ==================== 设置 API ====================
   if (path === '/api/settings' && request.method === 'PUT') {
     const forbid = requirePassword(request, env);
@@ -4840,13 +4491,11 @@ async function handleRequest(request, env, ctx = null) {
     await saveSettings(env, settings);
     return jsonResponse({ ok: true });
   }
-
   if (path === '/api/settings' && request.method === 'GET') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
     return jsonResponse(await getSettings(env));
   }
-
   // 页面路由
   if (path === '/login') return await loginPage(request);
   if (path === '/search') {
@@ -4893,9 +4542,7 @@ async function handleRequest(request, env, ctx = null) {
     const folderName = zipPath ? zipPath.split('/').pop() : 'root';
     return zipPage(folderName, files);
   }
-
   if (path === '/webdav' || path.startsWith('/webdav/')) return handleWebDAV(request, env, path);
-
   if (path.startsWith('/download/')) {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
@@ -4912,7 +4559,6 @@ async function handleRequest(request, env, ctx = null) {
     if (!node) return errorResponse('文件不存在', 404);
     return buildDownloadResponse(request, node, filename || node.name, env, false);
   }
-
   if (path.startsWith('/direct/')) {
     const parts = path.slice('/direct/'.length).split('/');
     const id = parts[0];
@@ -4927,7 +4573,6 @@ async function handleRequest(request, env, ctx = null) {
     if (!node) return errorResponse('文件不存在', 404);
     return buildDownloadResponse(request, node, filename || node.name, env, true);
   }
-
   if (path.startsWith('/s/')) {
     const shareId = path.slice('/s/'.length).split('/')[0];
     if (!shareId) return shareExpiredPage('分享不存在', generateThemeCss(await getSettings(env)));
@@ -4948,22 +4593,18 @@ async function handleRequest(request, env, ctx = null) {
     const themeCss = generateThemeCss(settings);
     return shareManagePage(themeCss);
   }
-
   return errorResponse('Not Found', 404);
 }
-
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Password, X-Requested-With'
 };
-
 function withCors(response) {
   const headers = new Headers(response.headers);
   for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v);
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
-
 export default {
   async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS_HEADERS });
