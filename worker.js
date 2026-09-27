@@ -1103,7 +1103,7 @@ const HOME_BODY = `
     </div>
   </div>
 </div>
-<div class="modal-overlay" id="go-file-modal">
+<div class="modal-overlay" id="go-file-modal" style="z-index:300 !important;">
   <div class="modal" style="max-width:440px;">
     <div class="target-tree-header">
       <span style="font-weight:500; font-size:16px;">选择网盘文件</span>
@@ -2084,6 +2084,8 @@ function openGoModal(name, content, type) {
 }
 function closeGoModal() {
   document.getElementById('go-modal').classList.remove('show');
+  var fm = document.getElementById('go-file-modal');
+  if (fm) fm.classList.remove('show');
   goState.editingName = null;
 }
 async function openGoEdit(name) {
@@ -2325,6 +2327,7 @@ function buildGoTreeRow(node, basePath, level){
 }
 document.getElementById('go-file-cancel').onclick = function(){
   document.getElementById('go-file-modal').classList.remove('show');
+  // 不关闭 go-modal，用户可继续编辑
 };
 document.getElementById('go-file-refresh').onclick = function(){ openGoFilePicker(); };
 loadList();
