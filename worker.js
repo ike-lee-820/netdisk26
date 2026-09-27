@@ -3537,28 +3537,42 @@ function shareManagePage(themeCss) {
 function assetsPage(themeCss) {
   const html = `<!DOCTYPE html><html><head>` + COMMON_HEAD + (themeCss || '') + `
   <style>
-    .asset-card { background:#fff; border-radius:8px; padding:12px; margin-bottom:10px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
-    .asset-name { font-family:monospace; font-size:14px; font-weight:500; color:var(--primary); word-break:break-all; margin-bottom:6px; }
-    .asset-meta { font-size:12px; color:var(--text-sec); margin-bottom:6px; }
-    .asset-url { font-size:11px; font-family:monospace; color:var(--text-sec); word-break:break-all; background:#f5f5f5; padding:6px 8px; border-radius:4px; margin-bottom:6px; user-select:all; }
-    .asset-cdn { font-size:11px; font-family:monospace; color:#1565c0; word-break:break-all; background:#e3f2fd; padding:6px 8px; border-radius:4px; margin-bottom:8px; }
-    .asset-actions { display:flex; gap:6px; flex-wrap:wrap; }
-    .asset-actions button, .asset-actions a { padding:5px 12px; border:1px solid var(--divider); background:#fff; border-radius:6px; cursor:pointer; font-size:12px; text-decoration:none; color:var(--text); }
-    .asset-actions button:hover, .asset-actions a:hover { background:#f5f5f5; }
-    .asset-actions button.danger { border-color:#ffcdd2; color:#c62828; }
-    .asset-actions button.warn { border-color:#ffe0b2; color:#e65100; }
-    .stat-bar { display:flex; gap:16px; padding:12px; background:#fff; border-radius:8px; margin-bottom:12px; box-shadow:0 1px 3px rgba(0,0,0,.08); font-size:13px; }
-    .stat-bar .stat { flex:1; text-align:center; }
-    .stat-bar .stat b { display:block; font-size:20px; color:var(--primary); }
-    .stat-bar .stat span { color:var(--text-sec); font-size:12px; }
-    .top-btns { display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; }
-    .top-btns button { padding:8px 14px; border:none; border-radius:8px; cursor:pointer; font-size:13px; }
-    .top-btns .primary { background:var(--primary); color:#fff; }
-    .top-btns .secondary { background:#e0e0e0; color:var(--text); }
-    .badge { display:inline-block; padding:2px 6px; border-radius:4px; font-size:11px; font-weight:500; }
-    .badge.ok { background:#e8f5e9; color:#2e7d32; }
-    .badge.wait { background:#fff3e0; color:#e65100; }
-    .badge.manual { background:#e3f2fd; color:#1565c0; }
+    /* 全新的 Material Design 风格 CSS */
+    .stat-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 16px; }
+    .stat-card { background: #fff; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; align-items: center; gap: 4px; box-shadow: 0 2px 8px rgba(0,0,0,.06); }
+    .stat-card .material-icons { font-size: 28px; color: var(--primary); }
+    .stat-card .num { font-size: 20px; font-weight: 600; color: var(--text); }
+    .stat-card .label { font-size: 12px; color: var(--text-sec); }
+    .toolbar { display: flex; gap: 8px; margin-bottom: 16px; overflow-x: auto; padding-bottom: 4px; }
+    .toolbar button { display: flex; align-items: center; gap: 4px; padding: 8px 16px; border: none; border-radius: 20px; font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap; transition: all .2s; }
+    .toolbar .primary { background: var(--primary); color: #fff; box-shadow: 0 2px 6px rgba(25,118,210,.4); }
+    .toolbar .secondary { background: #fff; color: var(--text); border: 1px solid var(--divider); }
+    .toolbar .secondary:hover { background: #f5f5f5; }
+    .asset-card { background: #fff; border-radius: 12px; padding: 16px; margin-bottom: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.06); }
+    .asset-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 8px; }
+    .asset-title { font-size: 15px; font-weight: 500; color: var(--text); word-break: break-all; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 500; }
+    .badge.ok { background: #e8f5e9; color: #2e7d32; }
+    .badge.wait { background: #fff3e0; color: #e65100; }
+    .badge.builtin { background: #f3e5f5; color: #7b1fa2; }
+    .badge.manual { background: #e3f2fd; color: #1565c0; }
+    .asset-meta { font-size: 12px; color: var(--text-sec); margin-bottom: 8px; }
+    .asset-url { font-size: 12px; font-family: monospace; color: var(--text-sec); word-break: break-all; background: #f8f9fa; padding: 6px 10px; border-radius: 6px; margin-bottom: 6px; }
+    .asset-cdn { font-size: 12px; font-family: monospace; color: #1565c0; word-break: break-all; background: #e3f2fd; padding: 6px 10px; border-radius: 6px; margin-bottom: 8px; }
+    .asset-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    .asset-actions button, .asset-actions a { display: inline-flex; align-items: center; gap: 4px; padding: 6px 12px; border-radius: 16px; font-size: 12px; font-weight: 500; cursor: pointer; text-decoration: none; border: 1px solid var(--divider); background: #fff; color: var(--text); transition: background .2s; }
+    .asset-actions button:hover, .asset-actions a:hover { background: #f5f5f5; }
+    .asset-actions .warn { border-color: #ffe0b2; color: #e65100; }
+    .asset-actions .warn:hover { background: #fff3e0; }
+    .asset-actions .danger { border-color: #ffcdd2; color: #c62828; }
+    .asset-actions .danger:hover { background: #ffebee; }
+    .asset-actions button:disabled { opacity: 0.5; cursor: not-allowed; background: #f5f5f5; border-color: var(--divider); color: var(--text-sec); }
+    /* 弹窗样式优化 */
+    .modal-overlay { background: rgba(0,0,0,.6); }
+    .modal { border-radius: 16px; padding: 24px; box-shadow: 0 8px 32px rgba(0,0,0,.2); }
+    .modal h3 { margin-top: 0; font-size: 18px; color: var(--text); }
+    .modal input, .modal textarea { border-radius: 8px; border: 1px solid var(--divider); font-size: 14px; padding: 10px 12px; }
+    .modal input:focus, .modal textarea:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 2px rgba(25,118,210,.2); }
   </style>
   </head><body>
   <div class="appbar">
@@ -3567,70 +3581,61 @@ function assetsPage(themeCss) {
     <span class="material-icons" id="btn-refresh" style="cursor:pointer;padding:6px;">refresh</span>
   </div>
   <div class="container">
-    <div class="stat-bar">
-      <div class="stat"><b id="stat-total">-</b><span>总数</span></div>
-      <div class="stat"><b id="stat-cached">-</b><span>已缓存</span></div>
-      <div class="stat"><b id="stat-manual">-</b><span>手动</span></div>
-      <div class="stat"><b id="stat-size">-</b><span>总大小</span></div>
+    <div class="stat-grid">
+      <div class="stat-card"><span class="material-icons">folder</span><span class="num" id="stat-total">-</span><span class="label">总资产</span></div>
+      <div class="stat-card"><span class="material-icons">check_circle</span><span class="num" id="stat-cached">-</span><span class="label">已缓存</span></div>
+      <div class="stat-card"><span class="material-icons">cloud_download</span><span class="num" id="stat-manual">-</span><span class="label">手动上传</span></div>
+      <div class="stat-card"><span class="material-icons">storage</span><span class="num" id="stat-size">-</span><span class="label">总大小</span></div>
     </div>
-
-    <div class="top-btns">
-      <button class="primary" onclick="openUploadModal()">
-        <span class="material-icons" style="font-size:16px;vertical-align:middle;">upload_file</span> 手动上传
-      </button>
-      <button class="secondary" onclick="openAddModal()">
-        <span class="material-icons" style="font-size:16px;vertical-align:middle;">add_link</span> 添加 CDN 链接
-      </button>
-      <button class="secondary" onclick="cacheAll()">
-        <span class="material-icons" style="font-size:16px;vertical-align:middle;">cloud_download</span> 全部缓存
-      </button>
+    
+    <div class="toolbar">
+      <button class="primary" onclick="openUploadModal()"><span class="material-icons" style="font-size:18px;">upload_file</span> 上传</button>
+      <button class="secondary" onclick="openAddModal()"><span class="material-icons" style="font-size:18px;">add_link</span> 添加CDN</button>
+      <button class="secondary" onclick="cacheAll()"><span class="material-icons" style="font-size:18px;">cloud_download</span> 全部缓存</button>
     </div>
-
+    
     <div id="asset-list"><div class="empty">加载中...</div></div>
   </div>
-
-  <!-- 上传弹窗 -->
+  
   <div class="modal-overlay" id="upload-modal">
     <div class="modal" style="max-width:480px;">
-      <h3 style="margin-top:0;">手动上传资源</h3>
+      <h3>手动上传资源</h3>
       <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">文件名（英文/数字/._-）</label>
-      <input type="text" id="up-name" placeholder="例如 my-lib.js" style="margin-bottom:10px;">
+      <input type="text" id="up-name" placeholder="例如 my-lib.js" style="width:100%;">
       <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">文件内容</label>
-      <input type="file" id="up-file" style="margin-bottom:10px;">
-      <div class="modal-actions" style="display:flex;justify-content:flex-end;gap:8px;">
+      <input type="file" id="up-file" style="width:100%;">
+      <div class="modal-actions" style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">
         <button class="btn-secondary" onclick="closeUploadModal()" style="padding:8px 16px;border:none;border-radius:8px;cursor:pointer;">取消</button>
-        <button class="btn-primary" id="up-confirm" style="padding:8px 16px;border:none;border-radius:8px;cursor:pointer;background:var(--primary);color:#fff;">上传</button>
+        <button class="btn-primary" id="up-confirm" style="padding:8px 16px;border:none;border-radius:8px;cursor:pointer;">上传</button>
       </div>
       <p id="up-status" style="font-size:12px;color:var(--text-sec);margin-top:8px;"></p>
     </div>
   </div>
 
-  <!-- 添加 CDN 弹窗 -->
   <div class="modal-overlay" id="add-modal">
     <div class="modal" style="max-width:520px;">
-      <h3 style="margin-top:0;">添加 CDN 链接</h3>
+      <h3>添加 CDN 链接</h3>
       <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">文件名（作为 /asset/ 路径）</label>
-      <input type="text" id="add-name" placeholder="例如 tailwind.css" style="margin-bottom:10px;">
+      <input type="text" id="add-name" placeholder="例如 tailwind.css" style="width:100%;">
       <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">CDN URL（多个用换行分隔，会依次尝试）</label>
-      <textarea id="add-urls" placeholder="https://cdn.example.com/lib.js" style="width:100%;min-height:120px;font-family:monospace;font-size:12px;padding:8px;border:1px solid var(--divider);border-radius:6px;box-sizing:border-box;margin-bottom:10px;"></textarea>
-      <div class="modal-actions" style="display:flex;justify-content:flex-end;gap:8px;">
+      <textarea id="add-urls" placeholder="https://cdn.example.com/lib.js" style="width:100%;min-height:120px;"></textarea>
+      <div class="modal-actions" style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">
         <button class="btn-secondary" onclick="closeAddModal()" style="padding:8px 16px;border:none;border-radius:8px;cursor:pointer;">取消</button>
-        <button class="btn-primary" id="add-confirm" style="padding:8px 16px;border:none;border-radius:8px;cursor:pointer;background:var(--primary);color:#fff;">添加</button>
+        <button class="btn-primary" id="add-confirm" style="padding:8px 16px;border:none;border-radius:8px;cursor:pointer;">添加</button>
       </div>
     </div>
   </div>
 
-  <!-- 编辑链接弹窗 -->
   <div class="modal-overlay" id="edit-modal">
     <div class="modal" style="max-width:520px;">
-      <h3 style="margin-top:0;">编辑 CDN 链接</h3>
+      <h3>编辑 CDN 链接</h3>
       <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">文件名</label>
-      <input type="text" id="edit-name" disabled style="margin-bottom:10px;background:#f5f5f5;">
+      <input type="text" id="edit-name" disabled style="width:100%;background:#f5f5f5;">
       <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">CDN URL（每行一个，按顺序尝试）</label>
-      <textarea id="edit-urls" style="width:100%;min-height:120px;font-family:monospace;font-size:12px;padding:8px;border:1px solid var(--divider);border-radius:6px;box-sizing:border-box;margin-bottom:10px;"></textarea>
-      <div class="modal-actions" style="display:flex;justify-content:flex-end;gap:8px;">
+      <textarea id="edit-urls" style="width:100%;min-height:120px;"></textarea>
+      <div class="modal-actions" style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">
         <button class="btn-secondary" onclick="closeEditModal()" style="padding:8px 16px;border:none;border-radius:8px;cursor:pointer;">取消</button>
-        <button class="btn-primary" id="edit-confirm" style="padding:8px 16px;border:none;border-radius:8px;cursor:pointer;background:var(--primary);color:#fff;">保存</button>
+        <button class="btn-primary" id="edit-confirm" style="padding:8px 16px;border:none;border-radius:8px;cursor:pointer;">保存</button>
       </div>
     </div>
   </div>
@@ -3639,7 +3644,6 @@ function assetsPage(themeCss) {
 
   <script>
   var assetState = { list: [], editingName: null };
-
   function showMsg(msg){ var s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(function(){s.classList.remove('show');},2500); }
   function escapeHtml(t){ return String(t).replace(/[&<>"']/g, function(m){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]; }); }
   function formatSize(b){ if(!b) return '0 B'; var k=1024,s=['B','KB','MB','GB']; var i=Math.floor(Math.log(b)/Math.log(k)); return (b/Math.pow(k,i)).toFixed(2)+' '+s[i]; }
@@ -3659,72 +3663,73 @@ function assetsPage(themeCss) {
   }
 
   async function loadAssets(){
-      var box = document.getElementById('asset-list');
-      box.innerHTML = '<div class="empty">加载中...</div>';
-      try {
-        var assets = await api('/api/asset/list') || [];
-        assetState.list = assets;
-        var total = assets.length;
-        var cached = 0;
-        var manual = 0;
-        var totalSize = 0;
-        for (var i = 0; i < assets.length; i++) {
-          if (assets[i].uploaded) cached++;
-          if (assets[i].sourceType === 'manual') manual++;
-          totalSize += Number(assets[i].size || 0);
-        }
-        document.getElementById('stat-total').textContent = total;
-        document.getElementById('stat-cached').textContent = cached;
-        document.getElementById('stat-manual').textContent = manual;
-        document.getElementById('stat-size').textContent = formatSize(totalSize);
-
-        if (assets.length === 0) {
-          box.innerHTML = '<div class="empty">还没有资产<br><span style="font-size:12px;">点上方"手动上传"或"添加 CDN 链接"</span></div>';
-          return;
-        }
-
-        var html = '';
-        for (var j = 0; j < assets.length; j++) {
-          var a = assets[j];
-          var url = location.origin + '/asset/' + a.name;
-          var statusBadge = a.uploaded ? '<span class="badge ok">✓ 已缓存</span>' : '<span class="badge wait">⏳ 未缓存</span>';
-          var typeBadge = a.sourceType === 'manual' ? ' <span class="badge manual">手动</span>' : '';
-          var cdnList = (a.cdnUrls || []).join('\\n');
-          html += '<div class="asset-card">';
-          html += '<div class="asset-name">' + escapeHtml(a.name) + ' ' + statusBadge + typeBadge + '</div>';
-          html += '<div class="asset-meta">' + formatSize(a.size || 0) + ' · ' + escapeHtml(a.contentType || 'unknown') + (a.cachedAt ? ' · ' + new Date(a.cachedAt).toLocaleString() : '') + '</div>';
-          html += '<div class="asset-url">' + escapeHtml(url) + '</div>';
-          if (cdnList) {
-            html += '<div class="asset-cdn">' + escapeHtml(cdnList).replace(/\\n/g, '<br>') + '</div>';
-          }
-          html += '<button onclick="copyUrl(&#39;' + escapeHtml(a.name) + '&#39;)">复制链接</button>';
-          html += '<a href="' + escapeHtml(url) + '" target="_blank">打开</a>';
-          if (!a.uploaded || a.sourceType === 'cdn') {
-            html += '<button class="warn" onclick="cacheAsset(&#39;' + escapeHtml(a.name) + '&#39;)">' + (a.uploaded ? '重新缓存' : '缓存') + '</button>';
-          }
-          html += '<button onclick="editAsset(&#39;' + escapeHtml(a.name) + '&#39;)">改链接</button>';
-          if (a.isBuiltin) {
-            html += '<button class="danger" disabled style="opacity:0.5;cursor:not-allowed;" title="内置资产不可删除">内置</button>';
-          } else {
-            html += '<button class="danger" onclick="deleteAsset(&#39;' + escapeHtml(a.name) + '&#39;)">删除</button>';
-          }
-          html += '</div></div>';html += '</div></div>';
-        }
-        box.innerHTML = html;
-      } catch(e) {
-        box.innerHTML = '<div class="empty">加载失败: ' + escapeHtml(e.message) + '</div>';
+    var box = document.getElementById('asset-list');
+    box.innerHTML = '<div class="empty">加载中...</div>';
+    try {
+      var assets = await api('/api/asset/list') || [];
+      assetState.list = assets;
+      var total = assets.length;
+      var cached = 0;
+      var manual = 0;
+      var totalSize = 0;
+      for (var i = 0; i < assets.length; i++) {
+        if (assets[i].uploaded) cached++;
+        if (assets[i].sourceType === 'manual') manual++;
+        totalSize += Number(assets[i].size || 0);
       }
+      document.getElementById('stat-total').textContent = total;
+      document.getElementById('stat-cached').textContent = cached;
+      document.getElementById('stat-manual').textContent = manual;
+      document.getElementById('stat-size').textContent = formatSize(totalSize);
+
+      if (assets.length === 0) {
+        box.innerHTML = '<div class="empty">还没有资产<br><span style="font-size:12px;">点上方"上传"或"添加CDN"</span></div>';
+        return;
+      }
+
+      var html = '';
+      for (var j = 0; j < assets.length; j++) {
+        var a = assets[j];
+        var url = location.origin + '/asset/' + a.name;
+        var statusBadge = a.uploaded ? '<span class="badge ok">✓ 已缓存</span>' : '<span class="badge wait">⏳ 未缓存</span>';
+        var typeBadge = a.isBuiltin ? '<span class="badge builtin">内置</span>' : (a.sourceType === 'manual' ? '<span class="badge manual">手动</span>' : '');
+        var cdnList = (a.cdnUrls || []).join('\n');
+        html += '<div class="asset-card">';
+        html += '<div class="asset-header"><div class="asset-title">' + escapeHtml(a.name) + ' ' + statusBadge + typeBadge + '</div></div>';
+        html += '<div class="asset-meta">' + formatSize(a.size || 0) + ' · ' + escapeHtml(a.contentType || 'unknown') + (a.cachedAt ? ' · ' + new Date(a.cachedAt).toLocaleString() : '') + '</div>';
+        html += '<div class="asset-url">' + escapeHtml(url) + '</div>';
+        if (cdnList) { html += '<div class="asset-cdn">' + escapeHtml(cdnList).replace(/\n/g, '<br>') + '</div>'; }
+        html += '<div class="asset-actions">';
+        html += `<button onclick="copyUrl('${escapeHtml(a.name)}')"><span class="material-icons" style="font-size:16px;">copy</span> 复制</button>`;
+        html += `<a href="${escapeHtml(url)}" target="_blank"><span class="material-icons" style="font-size:16px;">open_in_new</span> 打开</a>`;
+        if (!a.uploaded || a.sourceType === 'cdn') {
+          html += `<button class="warn" onclick="cacheAsset('${escapeHtml(a.name)}')"><span class="material-icons" style="font-size:16px;">cloud_download</span> ${a.uploaded ? '重新缓存' : '缓存'}</button>`;
+        }
+        if (a.isBuiltin) {
+          html += '<button disabled title="内置资产不可修改"><span class="material-icons" style="font-size:16px;">lock</span> 内置</button>';
+        } else {
+          html += `<button onclick="editAsset('${escapeHtml(a.name)}')"><span class="material-icons" style="font-size:16px;">edit</span> 改链接</button>`;
+        }
+        if (a.isBuiltin) {
+          html += '<button disabled title="内置资产不可删除"><span class="material-icons" style="font-size:16px;">block</span> 内置</button>';
+        } else {
+          html += `<button class="danger" onclick="deleteAsset('${escapeHtml(a.name)}')"><span class="material-icons" style="font-size:16px;">delete</span> 删除</button>`;
+        }
+        html += '</div></div>';
+      }
+      box.innerHTML = html;
+    } catch(e) {
+      box.innerHTML = '<div class="empty">加载失败: ' + escapeHtml(e.message) + '</div>';
     }
-    function copyUrl(name){ copyText(location.origin + '/asset/' + name); }
+  }
+
+  function copyUrl(name){ copyText(location.origin + '/asset/' + name); }
 
   async function cacheAsset(name){
     if (!confirm('从 CDN 拉取 "' + name + '" 并缓存到 GitHub？')) return;
     showMsg('缓存中...');
     try {
-      await api('/api/asset/cache', {
-        method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ name: name })
-      });
+      await api('/api/asset/cache', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name: name }) });
       showMsg('缓存成功');
       loadAssets();
     } catch(e){ showMsg('失败: ' + e.message); }
@@ -3736,60 +3741,70 @@ function assetsPage(themeCss) {
     if (!confirm('缓存 ' + pending.length + ' 个未缓存资产？')) return;
     for (var i = 0; i < pending.length; i++) {
       showMsg('缓存 ' + (i+1) + '/' + pending.length + ': ' + pending[i].name);
-      try {
-        await api('/api/asset/cache', {
-          method: 'POST', headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({ name: pending[i].name })
-        });
-      } catch(e) { console.warn('缓存失败: ' + pending[i].name, e); }
+      try { await api('/api/asset/cache', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name: pending[i].name }) }); } catch(e) { console.warn(e); }
     }
     showMsg('全部完成');
     loadAssets();
   }
 
   async function deleteAsset(name){
-    if (!confirm('确定删除 "' + name + '"？\\n\\n这会同时从 GitHub 和 D1 中删除。')) return;
+    if (!confirm('确定删除 "' + name + '"？\n\n这会同时从 GitHub 和 D1 中删除。')) return;
     try {
-      await api('/api/asset/delete', {
-        method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ name: name })
-      });
+      await api('/api/asset/delete', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name: name }) });
       showMsg('已删除');
       loadAssets();
     } catch(e){ showMsg('失败: ' + e.message); }
   }
 
-  function openAddModal(){
-      document.getElementById('add-name').value = '';
-      document.getElementById('add-urls').value = '';
-      document.getElementById('add-modal').classList.add('show');
-    }
-    function closeAddModal(){
-      document.getElementById('add-modal').classList.remove('show');
-    }
-    document.getElementById('add-confirm').onclick = async function(){
-      var name = document.getElementById('add-name').value.trim();
-      var urls = document.getElementById('add-urls').value.split('\\n').map(function(s){ return s.trim(); }).filter(Boolean);
-      if (!name) { showMsg('请输入文件名'); return; }
-      if (!/^[a-zA-Z0-9._-]+$/.test(name)) { showMsg('文件名只能包含字母、数字、._-'); return; }
-      if (urls.length === 0) { showMsg('请输入至少一个 CDN URL'); return; }
-      try {
-        await api('/api/asset/update', {
-          method: 'POST', headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({ name: name, cdnUrls: urls, sourceType: 'cdn' })
-        });
-        showMsg('已添加');
-        closeAddModal();
-        loadAssets();
-      } catch(e){ showMsg('失败: ' + e.message); }
-    };
+  function editAsset(name){
+    var a = assetState.list.find(function(x){ return x.name === name; });
+    if (!a) return;
+    if (a.isBuiltin) { showMsg('内置资产不允许修改链接'); return; }
+    assetState.editingName = name;
+    document.getElementById('edit-name').value = name;
+    document.getElementById('edit-urls').value = (a.cdnUrls || []).join('\n');
+    document.getElementById('edit-modal').classList.add('show');
+  }
 
-    document.getElementById('up-file').onchange = function(){
-    var f = this.files[0];
-    if (f && !document.getElementById('up-name').value) {
-      document.getElementById('up-name').value = f.name;
-    }
+  function closeEditModal(){ document.getElementById('edit-modal').classList.remove('show'); assetState.editingName = null; }
+  
+  document.getElementById('edit-confirm').onclick = async function(){
+    var name = assetState.editingName;
+    if (!name) return;
+    var urls = document.getElementById('edit-urls').value.split('\n').map(function(s){ return s.trim(); }).filter(Boolean);
+    try {
+      await api('/api/asset/update', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name: name, cdnUrls: urls }) });
+      showMsg('已保存');
+      closeEditModal();
+      loadAssets();
+    } catch(e){ showMsg('失败: ' + e.message); }
   };
+
+  function openAddModal(){ document.getElementById('add-name').value = ''; document.getElementById('add-urls').value = ''; document.getElementById('add-modal').classList.add('show'); }
+  function closeAddModal(){ document.getElementById('add-modal').classList.remove('show'); }
+  
+  document.getElementById('add-confirm').onclick = async function(){
+    var name = document.getElementById('add-name').value.trim();
+    var urls = document.getElementById('add-urls').value.split('\n').map(function(s){ return s.trim(); }).filter(Boolean);
+    if (!name) { showMsg('请输入文件名'); return; }
+    if (!/^[a-zA-Z0-9._-]+$/.test(name)) { showMsg('文件名只能包含字母、数字、._-'); return; }
+    if (urls.length === 0) { showMsg('请输入至少一个 CDN URL'); return; }
+    try {
+      await api('/api/asset/update', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name: name, cdnUrls: urls, sourceType: 'cdn' }) });
+      showMsg('已添加');
+      closeAddModal();
+      loadAssets();
+    } catch(e){ showMsg('失败: ' + e.message); }
+  };
+
+  function openUploadModal(){ document.getElementById('up-name').value = ''; document.getElementById('up-file').value = ''; document.getElementById('up-status').textContent = ''; document.getElementById('upload-modal').classList.add('show'); }
+  function closeUploadModal(){ document.getElementById('upload-modal').classList.remove('show'); }
+  
+  document.getElementById('up-file').onchange = function(){
+    var f = this.files[0];
+    if (f && !document.getElementById('up-name').value) { document.getElementById('up-name').value = f.name; }
+  };
+  
   document.getElementById('up-confirm').onclick = async function(){
     var name = document.getElementById('up-name').value.trim();
     var fileInput = document.getElementById('up-file');
@@ -3809,19 +3824,14 @@ function assetsPage(themeCss) {
       st.textContent = '上传成功';
       showMsg('已上传');
       setTimeout(function(){ closeUploadModal(); loadAssets(); }, 600);
-    } catch(e){
-      st.textContent = '失败: ' + e.message;
-      showMsg('上传失败: ' + e.message);
-    }
+    } catch(e){ st.textContent = '失败: ' + e.message; showMsg('上传失败: ' + e.message); }
   };
 
   document.getElementById('btn-refresh').onclick = loadAssets;
   loadAssets();
   </script>
   </body></html>`;
-  return new Response(html, {
-    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }
-  });
+  return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
 }
 
 function searchPage(themeCss) {
@@ -4577,15 +4587,14 @@ async function handleRequest(request, env, ctx = null) {
     const cdnUrls = Array.isArray(body.cdnUrls) ? body.cdnUrls.filter(Boolean) : [];
     const sourceType = body.sourceType || 'cdn';
     if (!name) return errorResponse('缺少 name');
+    
+    // ★ 拦截内置资产的修改
+    if (DEFAULT_ASSETS[name]) {
+      return errorResponse('内置资产不允许修改链接或删除', 403);
+    }
+    
     if (!/^[a-zA-Z0-9._-]+$/.test(name)) return errorResponse('文件名只能包含字母、数字、._-');
-
-    const existing = await d1Get(env, 'asset_' + name, null) || {
-      name: name,
-      size: 0,
-      uploaded: false,
-      sourceType: sourceType,
-      createdAt: Date.now()
-    };
+    const existing = await d1Get(env, 'asset_' + name, null) || { name: name, size: 0, uploaded: false, sourceType: sourceType, createdAt: Date.now() };
     existing.cdnUrls = cdnUrls;
     existing.contentType = body.contentType || existing.contentType || 'application/octet-stream';
     existing.sourceType = existing.sourceType || sourceType;
@@ -4593,7 +4602,6 @@ async function handleRequest(request, env, ctx = null) {
     return jsonResponse({ ok: true, asset: existing });
   }
 
-  // ==================== 删除资产 ====================
   if (path === '/api/asset/delete' && request.method === 'POST') {
     const forbid = requirePassword(request, env);
     if (forbid) return forbid;
@@ -4601,7 +4609,7 @@ async function handleRequest(request, env, ctx = null) {
     const name = String(body.name || '');
     if (!name) return errorResponse('缺少 name');
     
-    // 内置资产保护
+    // ★ 拦截内置资产的删除
     if (DEFAULT_ASSETS[name]) {
       return errorResponse('内置资产不允许删除', 403);
     }
