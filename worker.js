@@ -3526,6 +3526,138 @@ function shareManagePage(themeCss) {
     headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }
   });
 }
+function assetsPage(themeCss) {
+  const html = `<!DOCTYPE html><html><head>` + COMMON_HEAD + (themeCss || '') + `
+  <style>
+    .asset-card { background:#fff; border-radius:8px; padding:12px; margin-bottom:10px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
+    .asset-name { font-family:monospace; font-size:14px; font-weight:500; color:var(--primary); word-break:break-all; margin-bottom:6px; }
+    .asset-meta { font-size:12px; color:var(--text-sec); margin-bottom:6px; }
+    .asset-url { font-size:11px; font-family:monospace; color:var(--text-sec); word-break:break-all; background:#f5f5f5; padding:6px 8px; border-radius:4px; margin-bottom:8px; user-select:all; }
+    .asset-actions { display:flex; gap:6px; flex-wrap:wrap; }
+    .asset-actions button, .asset-actions a { padding:5px 12px; border:1px solid var(--divider); background:#fff; border-radius:6px; cursor:pointer; font-size:12px; text-decoration:none; color:var(--text); }
+    .asset-actions button:hover, .asset-actions a:hover { background:#f5f5f5; }
+    .stat-bar { display:flex; gap:16px; padding:12px; background:#fff; border-radius:8px; margin-bottom:12px; box-shadow:0 1px 3px rgba(0,0,0,.08); font-size:13px; }
+    .stat-bar .stat { flex:1; text-align:center; }
+    .stat-bar .stat b { display:block; font-size:20px; color:var(--primary); }
+    .stat-bar .stat span { color:var(--text-sec); font-size:12px; }
+  </style>
+  </head><body>
+  <div class="appbar">
+    <span class="material-icons" onclick="history.back()" style="cursor:pointer;padding:6px;">arrow_back</span>
+    <h1>资产库</h1>
+    <span class="material-icons" id="btn-refresh-assets" style="cursor:pointer;padding:6px;">refresh</span>
+  </div>
+  <div class="container">
+    <div class="stat-bar" id="stats">
+      <div class="stat"><b id="count-total">-</b><span>总资产</span></div>
+      <div class="stat"><b id="count-cached">-</b><span>已缓存</span></div>
+      <div class="stat"><b id="size-total">-</b><span>总大小</span></div>
+    </div>
+    <div id="asset-list"><div class="empty">加载中...</div></div>
+  </div>
+  <div class="snackbar" id="snackbar"></div>
+  <script>
+  function showMsg(msg){ var s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(function(){s.classList.remove('show');},2500); }
+  function escapeHtml(t){ return String(t).replace(/[&<>"']/g, function(m){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]; }); }
+  function formatSize(b){
+    if (!b) return '0 B';
+    var k = 1024, s = ['B', 'KB', 'MB', 'GB'];
+    var i = Math.floor(Math.log(b) / Math.log(k));
+    return (b / Math.pow(k, i)).toFixed(2) + ' ' + s[i];
+  }
+  function copyText(text){
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(text).then(function(){ showMsg('已复制'); }, function(){ prompt('复制：', text); });
+    } else {
+      prompt('复制：', text);
+    }
+  }
+
+  async function loadAssets(){
+    var box = document.getElementById('asset-list');
+    box.innerHTML = '<div class="empty">加载中...</div>';
+    try {
+      var r = await fetch('/api/asset/list');
+      if (r.status === 401) { location.href = '/login'; return; }
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      var assets = await r.json();
+      console.log('[assets]', assets);
+
+      // 统计
+      var totalSize = 0;
+      var cachedCount = 0;
+      for (var i = 0; i < assets.length; i++) {
+        if (assets[i].uploaded) cachedCount++;
+        totalSize += Number(assets[i].size || 0);
+      }
+      document.getElementById('count-total').textContent = assets.length;
+      document.getElementById('count-cached').textContent = cachedCount;
+      document.getElementById('size-total').textContent = formatSize(totalSize);
+
+      if (assets.length === 0) {
+        box.innerHTML = '<div class="empty"><span class="material-icons" style="font-size:48px;color:#bdbdbd;">inventory_2</span><p>还没有资产</p><p style="font-size:12px;">打开任意文件详情页会触发加载</p></div>';
+        return;
+      }
+
+      box.innerHTML = assets.map(function(a){
+        var url = location.origin + '/asset/' + a.name;
+        return '<div class="asset-card">'
+          + '<div class="asset-name">' + escapeHtml(a.name) + '</div>'
+          + '<div class="asset-meta">'
+          + (a.uploaded ? '✅ 已缓存' : '⏳ 未缓存')
+          + ' · ' + formatSize(a.size || 0)
+          + ' · ' + escapeHtml(a.contentType || 'unknown')
+          + (a.cachedAt ? ' · ' + new Date(a.cachedAt).toLocaleString() : '')
+          + '</div>'
+          + '<div class="asset-url">' + escapeHtml(url) + '</div>'
+          + '<div class="asset-actions">'
+          + '<button data-act="copy" data-url="' + escapeHtml(url) + '">复制链接</button>'
+          + '<a href="' + escapeHtml(url) + '" target="_blank">打开</a>'
+          + '<button data-act="recache" data-name="' + escapeHtml(a.name) + '">重新拉取</button>'
+          + '</div></div>';
+      }).join('');
+
+      box.querySelectorAll('button[data-act]').forEach(function(btn){
+        btn.onclick = function(){
+          var act = btn.getAttribute('data-act');
+          if (act === 'copy') copyText(btn.getAttribute('data-url'));
+          else if (act === 'recache') recacheAsset(btn.getAttribute('data-name'));
+        };
+      });
+    } catch(e) {
+      console.error('load assets failed:', e);
+      box.innerHTML = '<div class="empty">加载失败: ' + escapeHtml(e.message) + '</div>';
+    }
+  }
+
+  async function recacheAsset(name){
+    if (!confirm('重新从 CDN 拉取 "' + name + '" 并覆盖 GitHub 缓存？')) return;
+    try {
+      // 删除 D1 标记，然后请求 /asset/xxx 触发重新缓存
+      var r = await fetch('/asset/' + encodeURIComponent(name), { headers: { 'Cache-Control': 'no-cache' } });
+      if (r.ok) {
+        showMsg('已重新拉取');
+        setTimeout(loadAssets, 1000);
+      } else {
+        showMsg('拉取失败: HTTP ' + r.status);
+      }
+    } catch(e) {
+      showMsg('失败: ' + e.message);
+    }
+  }
+
+  document.getElementById('btn-refresh-assets').onclick = loadAssets;
+  loadAssets();
+  </script>
+  </body></html>`;
+  return new Response(html, {
+    headers: {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store'
+    }
+  });
+}
+
 function searchPage(themeCss) {
   const html = `<!DOCTYPE html><html><head>` + COMMON_HEAD + (themeCss || '') + `
   <style>
@@ -4762,6 +4894,11 @@ async function handleRequest(request, env, ctx = null) {
   }
   // 页面路由
   if (path === '/login') return await loginPage(request);
+  if (path === '/assets') {
+    if (!checkPassword(request, env)) return loginPage();
+    const settings = await getSettings(env);
+    return assetsPage(generateThemeCss(settings));
+  }
   if (path === '/search') {
     if (!checkPassword(request, env)) return loginPage();
     const settings = await getSettings(env);
