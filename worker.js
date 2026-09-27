@@ -3697,14 +3697,14 @@ function assetsPage(themeCss) {
           if (cdnList) {
             html += '<div class="asset-cdn">' + escapeHtml(cdnList).replace(/\\n/g, '<br>') + '</div>';
           }
-          html += '<button onclick="copyUrl(\x27' + escapeHtml(a.name) + '\x27)">复制链接</button>';
+          html += '<button onclick="copyUrl(&#39;' + escapeHtml(a.name) + '&#39;)">复制链接</button>';
           html += '<a href="' + escapeHtml(url) + '" target="_blank">打开</a>';
           if (!a.uploaded || a.sourceType === 'cdn') {
-            html += '<button class="warn" onclick="cacheAsset(\x27' + escapeHtml(a.name) + '\x27)">' + (a.uploaded ? '重新缓存' : '缓存') + '</button>';
+            html += '<button class="warn" onclick="cacheAsset(&#39;' + escapeHtml(a.name) + '&#39;)">' + (a.uploaded ? '重新缓存' : '缓存') + '</button>';
           }
-          html += '<button onclick="editAsset(\x27' + escapeHtml(a.name) + '\x27)">改链接</button>';
-          html += '<button class="danger" onclick="deleteAsset(\x27' + escapeHtml(a.name) + '\x27)">删除</button>';
-          html += '</div></div>';
+          html += '<button onclick="editAsset(&#39;' + escapeHtml(a.name) + '&#39;)">改链接</button>';
+          html += '<button class="danger" onclick="deleteAsset(&#39;' + escapeHtml(a.name) + '&#39;)">删除</button>';
+          html += '</div></div>';html += '</div></div>';
         }
         box.innerHTML = html;
       } catch(e) {
