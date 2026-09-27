@@ -2191,61 +2191,109 @@ function onGoTypeChange(){
   }
 }
 var mdEditorInstance = null;
-
-function fallbackToTextarea(){
-  var wrap = document.getElementById('md-editor-wrap');
-  if (wrap) wrap.style.display = 'none';
-  var contentArea = document.getElementById('go-content');
-  if (contentArea) {
-    contentArea.style.display = 'block';
-    contentArea.placeholder = 'wangEditor 加载失败，已切换到纯文本模式（内容为 Markdown 源）';
-  }
-  mdEditorInstance = null;
-}
+var mdEditorLoading = false;
+var mdEditorFullScreen = false;
 
 function createMdEditorContainer(){
+  if (document.getElementById('md-editor-wrap')) return;
+  if (mdEditorLoading) return;
+  mdEditorLoading = true;
+
   var wrap = document.createElement('div');
   wrap.id = 'md-editor-wrap';
-  wrap.style.cssText = 'border:1px solid var(--divider);border-radius:8px;overflow:hidden;margin-bottom:10px;';
-  wrap.innerHTML = '<div id="md-toolbar-container" style="border-bottom:1px solid var(--divider);"></div>'
+  wrap.style.cssText = 'border:1px solid var(--divider);border-radius:8px;overflow:hidden;margin-bottom:10px;background:#fff;position:relative;';
+
+  wrap.innerHTML =
+    '<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 10px;background:#f5f5f5;border-bottom:1px solid var(--divider);">'
+    + '<span style="font-size:13px;color:var(--text-sec);">Markdown 编辑器</span>'
+    + '<button type="button" id="md-fullscreen-btn" style="padding:4px 10px;border:1px solid var(--divider);background:#fff;border-radius:6px;cursor:pointer;font-size:12px;display:flex;align-items:center;gap:4px;">'
+    + '<span class="material-icons" style="font-size:16px;">fullscreen</span><span id="md-fullscreen-text">全屏</span></button>'
+    + '</div>'
+    + '<div id="md-toolbar-container" style="border-bottom:1px solid var(--divider);"></div>'
     + '<div id="md-editor-container" style="height:320px;overflow-y:auto;"></div>';
+
   var contentArea = document.getElementById('go-content');
+  if (!contentArea) { mdEditorLoading = false; return; }
   contentArea.parentNode.insertBefore(wrap, contentArea.nextSibling);
-  // 加载 wangEditor + Markdown 插件
-  var css = document.createElement('link');
-  css.rel = 'stylesheet';
-  css.href = 'https://cdn.bootcdn.net/ajax/libs/wangEditor/10.0.13/wangEditor.css';
-  document.head.appendChild(css);
+
+  // 绑定全屏按钮
+  document.getElementById('md-fullscreen-btn').onclick = toggleMdFullScreen;
+
+  // ============ 加载 CSS（jsdelivr 官方） ============
+  if (!document.getElementById('wang-editor-css')) {
+    var css = document.createElement('link');
+    css.id = 'wang-editor-css';
+    css.rel = 'stylesheet';
+    css.href = 'https://cdn.jsdelivr.net/npm/@wangeditor/editor@5.1.23/dist/css/style.css';
+    document.head.appendChild(css);
+  }
+
+  // ============ 加载 JS（jsdelivr 官方） ============
   var js = document.createElement('script');
-  js.src = 'https://cdn.bootcdn.net/ajax/libs/wangEditor/10.0.13/wangEditor.js';
+  js.src = 'https://cdn.jsdelivr.net/npm/@wangeditor/editor@5.1.23/dist/index.min.js';
   js.onload = function(){
+    mdEditorLoading = false;
     var E = window.wangEditor;
-    if (!E) {
-      console.warn('[go] wangEditor 未加载，使用 textarea 降级');
+    if (!E || !E.createEditor) {
+      console.warn('[go] wangEditor v5 未就绪，降级到 textarea');
       fallbackToTextarea();
       return;
     }
     try {
-      mdEditorInstance = new E('#md-editor-container');
-      if (mdEditorInstance.customConfig) {
-        mdEditorInstance.customConfig.menus = [
-          'head','bold','italic','underline','strikeThrough',
-          'foreColor','backColor','link','list','justify',
-          'quote','emoticon','image','table','code','undo','redo'
-        ];
-      }
-      mdEditorInstance.create();
+      mdEditorInstance = E.createEditor({
+        selector: '#md-editor-container',
+        html: '<p>开始输入 Markdown...</p>',
+        config: {
+          placeholder: '开始输入 Markdown...',
+          MENU_CONF: {}
+        }
+      });
+      E.createToolbar({
+        editor: mdEditorInstance,
+        selector: '#md-toolbar-container',
+        config: {}
+      });
+      console.log('[go] wangEditor v5 初始化成功');
     } catch(e) {
-      console.error('[go] wangEditor 初始化失败:', e);
+      console.error('[go] wangEditor v5 初始化失败:', e);
       fallbackToTextarea();
     }
   };
   js.onerror = function(){
-    console.warn('[go] wangEditor.js 加载失败，使用 textarea 降级');
+    mdEditorLoading = false;
+    console.warn('[go] wangEditor v5 加载失败，降级到 textarea');
     fallbackToTextarea();
   };
   document.head.appendChild(js);
 }
+
+// ==================== 全屏切换 ====================
+function toggleMdFullScreen(){
+  var wrap = document.getElementById('md-editor-wrap');
+  var btn = document.getElementById('md-fullscreen-btn');
+  var txt = document.getElementById('md-fullscreen-text');
+  if (!wrap) return;
+
+  if (!mdEditorFullScreen) {
+    // 进入全屏
+    wrap.dataset.origStyle = wrap.getAttribute('style') || '';
+    wrap.style.cssText = 'position:fixed;inset:0;z-index:9999;background:#fff;border:none;border-radius:0;overflow:hidden;display:flex;flex-direction:column;';
+    document.getElementById('md-editor-container').style.height = 'calc(100vh - 120px)';
+    if (txt) txt.textContent = '退出全屏';
+    if (btn) btn.querySelector('.material-icons').textContent = 'fullscreen_exit';
+    mdEditorFullScreen = true;
+    document.body.style.overflow = 'hidden';
+  } else {
+    // 退出全屏
+    wrap.style.cssText = wrap.dataset.origStyle || 'border:1px solid var(--divider);border-radius:8px;overflow:hidden;margin-bottom:10px;background:#fff;position:relative;';
+    document.getElementById('md-editor-container').style.height = '320px';
+    if (txt) txt.textContent = '全屏';
+    if (btn) btn.querySelector('.material-icons').textContent = 'fullscreen';
+    mdEditorFullScreen = false;
+    document.body.style.overflow = '';
+  }
+}
+
 async function openGoFilePicker(){
   try {
     var st = await api('/api/structure?path=');
