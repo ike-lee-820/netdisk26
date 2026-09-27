@@ -1064,7 +1064,7 @@ const HOME_BODY = `
     </div>
   </div>
 </div>
-<div class="drawer" id="go-drawer" style="z-index:100;">
+<div class="drawer" id="go-drawer" style="z-index:40;">
   <div class="drawer-head"><span>Go 页面</span><span class="material-icons" id="close-go" style="cursor:pointer;padding:6px;">close</span></div>
   <div class="drawer-body" id="go-list">
     <div class="empty">加载中...</div>
@@ -1073,7 +1073,7 @@ const HOME_BODY = `
     <button class="btn-primary" id="btn-new-go" style="width:100%;padding:10px;border:none;border-radius:8px;cursor:pointer;">+ 新建页面</button>
   </div>
 </div>
-<div class="modal-overlay" id="go-modal">
+<div class="modal-overlay" id="go-modal" style="z-index:200 !important;">
   <div class="modal" style="max-width:560px;max-height:88vh;overflow-y:auto;">
     <h3 id="go-modal-title" style="margin-top:0;">新建 Go 页面</h3>
     <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">名称（英文/数字/_-，不含空格）</label>
@@ -2000,7 +2000,7 @@ async function loadGoList() {
       box.innerHTML = '<div class="empty">还没有 Go 页面<br><span style="font-size:12px;">点下方"新建页面"创建一个</span></div>';
       return;
     }
-    var domain = (typeof DEFAULT_DOMAIN !== 'undefined' && DEFAULT_DOMAIN) || location.origin;
+    var domain = 'https://cloud.myocd.de5.net';  // 强制完整链接
     var html = '';
     for (var i = 0; i < items.length; i++) {
       var item = items[i];
@@ -2034,8 +2034,8 @@ async function loadGoList() {
         var name = btn.getAttribute('data-name');
         var act = btn.getAttribute('data-act');
         var d = (typeof DEFAULT_DOMAIN !== 'undefined' && DEFAULT_DOMAIN) || location.origin;
-        if (act === 'open') window.open(d + '/go/' + encodeURIComponent(name) + '.html', '_blank');
-        else if (act === 'copy') copyText(d + '/go/' + encodeURIComponent(name) + '.html').then(function(){ showMsg('链接已复制'); });
+        if (act === 'open') window.open('https://cloud.myocd.de5.net/go/' + encodeURIComponent(name) + '.html', '_blank');
+        else if (act === 'copy') copyText('https://cloud.myocd.de5.net/go/' + encodeURIComponent(name) + '.html').then(function(){ showMsg('已复制: https://cloud.myocd.de5.net/go/' + name + '.html'); });
         else if (act === 'edit') openGoEdit(name);
         else if (act === 'del') deleteGo(name);
       };
