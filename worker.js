@@ -1064,7 +1064,7 @@ const HOME_BODY = `
     </div>
   </div>
 </div>
-<div class="drawer" id="go-drawer">
+<div class="drawer" id="go-drawer" style="z-index:100;">
   <div class="drawer-head"><span>Go 页面</span><span class="material-icons" id="close-go" style="cursor:pointer;padding:6px;">close</span></div>
   <div class="drawer-body" id="go-list">
     <div class="empty">加载中...</div>
@@ -1990,44 +1990,59 @@ function closeGoDrawer() {
 }
 async function loadGoList() {
   var box = document.getElementById('go-list');
+  if (!box) return;
+  box.innerHTML = '<div class="empty">加载中...</div>';
   try {
-    var items = await api('/api/go/list') || [];
+    var raw = await api('/api/go/list') || [];
+    var items = Array.isArray(raw) ? raw.filter(function(it){ return it && typeof it.name === 'string' && it.name; }) : [];
     goState.list = items;
     if (items.length === 0) {
       box.innerHTML = '<div class="empty">还没有 Go 页面<br><span style="font-size:12px;">点下方"新建页面"创建一个</span></div>';
       return;
     }
-    var domain = DEFAULT_DOMAIN || location.origin;
-    box.innerHTML = items.map(function(item) {
-      var url = domain + '/go/' + item.name + '.html';
-      var sizeStr = item.size > 1024 ? (item.size / 1024).toFixed(1) + ' KB' : item.size + ' B';
-      return '<div class="go-item" data-name="' + escapeHtml(item.name) + '" style="padding:12px;border:1px solid var(--divider);border-radius:8px;margin-bottom:8px;background:#fff;">'
-        + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">'
-        + '<span class="material-icons" style="font-size:18px;color:var(--primary);">' + ({'html':'code','markdown-file':'article','markdown-link':'article','markdown-edit':'article','text':'description','link':'link','file':'folder_open'})[item.type] || 'description' + '</span>'
-        + '<span style="flex:1;font-weight:500;font-size:14px;word-break:break-all;">' + escapeHtml(item.name) + '</span>'
-        + '</div>'
-        + '<div style="font-size:12px;color:var(--text-sec);margin-bottom:8px;">' + item.type.toUpperCase() + ' · ' + sizeStr + '</div>'
-        + '<div style="font-size:11px;color:var(--text-sec);word-break:break-all;margin-bottom:8px;">' + escapeHtml(url) + '</div>'
-        + '<div style="display:flex;gap:6px;flex-wrap:wrap;">'
-        + '<button class="go-act" data-act="open" data-name="' + escapeHtml(item.name) + '" style="padding:4px 10px;border:1px solid var(--divider);background:#fff;border-radius:6px;cursor:pointer;font-size:12px;">打开</button>'
-        + '<button class="go-act" data-act="copy" data-name="' + escapeHtml(item.name) + '" style="padding:4px 10px;border:1px solid var(--divider);background:#fff;border-radius:6px;cursor:pointer;font-size:12px;">复制链接</button>'
-        + '<button class="go-act" data-act="edit" data-name="' + escapeHtml(item.name) + '" style="padding:4px 10px;border:1px solid var(--divider);background:#fff;border-radius:6px;cursor:pointer;font-size:12px;">编辑</button>'
-        + '<button class="go-act" data-act="del" data-name="' + escapeHtml(item.name) + '" style="padding:4px 10px;border:1px solid #ffcdd2;background:#fff;color:#c62828;border-radius:6px;cursor:pointer;font-size:12px;">删除</button>'
-        + '</div>'
-        + '</div>';
-    }).join('');
+    var domain = (typeof DEFAULT_DOMAIN !== 'undefined' && DEFAULT_DOMAIN) || location.origin;
+    var html = '';
+    for (var i = 0; i < items.length; i++) {
+      var item = items[i];
+      var name = String(item.name);
+      var type = String(item.type || 'text');
+      var size = Number(item.size || 0);
+      var url = domain + '/go/' + encodeURIComponent(name) + '.html';
+      var sizeStr = size > 1024 ? (size / 1024).toFixed(1) + ' KB' : size + ' B';
+      var iconMap = {'html':'code','markdown-file':'article','markdown-link':'article','markdown-edit':'article','text':'description','link':'link','file':'folder_open'};
+      var iconName = iconMap[type];
+      if (!iconName) iconName = 'description';
+
+      html += '<div class="go-item" data-name="' + escapeHtml(name) + '" style="padding:12px;border:1px solid var(--divider);border-radius:8px;margin-bottom:8px;background:#fff;">';
+      html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">';
+      html += '<span class="material-icons" style="font-size:18px;color:var(--primary);">' + iconName + '</span>';
+      html += '<span style="flex:1;font-weight:500;font-size:14px;word-break:break-all;">' + escapeHtml(name) + '</span>';
+      html += '</div>';
+      html += '<div style="font-size:12px;color:var(--text-sec);margin-bottom:8px;">' + type.toUpperCase() + ' &middot; ' + escapeHtml(sizeStr) + '</div>';
+      html += '<div style="font-size:11px;color:var(--text-sec);word-break:break-all;margin-bottom:8px;">' + escapeHtml(url) + '</div>';
+      html += '<div style="display:flex;gap:6px;flex-wrap:wrap;">';
+      html += '<button class="go-act" data-act="open" data-name="' + escapeHtml(name) + '" style="padding:4px 10px;border:1px solid var(--divider);background:#fff;border-radius:6px;cursor:pointer;font-size:12px;">打开</button>';
+      html += '<button class="go-act" data-act="copy" data-name="' + escapeHtml(name) + '" style="padding:4px 10px;border:1px solid var(--divider);background:#fff;border-radius:6px;cursor:pointer;font-size:12px;">复制</button>';
+      html += '<button class="go-act" data-act="edit" data-name="' + escapeHtml(name) + '" style="padding:4px 10px;border:1px solid var(--divider);background:#fff;border-radius:6px;cursor:pointer;font-size:12px;">编辑</button>';
+      html += '<button class="go-act" data-act="del" data-name="' + escapeHtml(name) + '" style="padding:4px 10px;border:1px solid #ffcdd2;background:#fff;color:#c62828;border-radius:6px;cursor:pointer;font-size:12px;">删除</button>';
+      html += '</div></div>';
+    }
+    box.innerHTML = html;
+
     box.querySelectorAll('.go-act').forEach(function(btn) {
       btn.onclick = function() {
         var name = btn.getAttribute('data-name');
         var act = btn.getAttribute('data-act');
-        if (act === 'open') window.open((DEFAULT_DOMAIN || location.origin) + '/go/' + name + '.html', '_blank');
-        else if (act === 'copy') copyText((DEFAULT_DOMAIN || location.origin) + '/go/' + name + '.html').then(function(){ showMsg('链接已复制'); });
+        var d = (typeof DEFAULT_DOMAIN !== 'undefined' && DEFAULT_DOMAIN) || location.origin;
+        if (act === 'open') window.open(d + '/go/' + encodeURIComponent(name) + '.html', '_blank');
+        else if (act === 'copy') copyText(d + '/go/' + encodeURIComponent(name) + '.html').then(function(){ showMsg('链接已复制'); });
         else if (act === 'edit') openGoEdit(name);
         else if (act === 'del') deleteGo(name);
       };
     });
   } catch (e) {
-    box.innerHTML = '<div class="empty">加载失败: ' + escapeHtml(e.message) + '</div>';
+    console.error('[go] 加载失败:', e);
+    box.innerHTML = '<div class="empty" style="color:var(--danger);">加载失败: ' + escapeHtml(e.message) + '</div>';
   }
 }
 function openGoModal(name, content, type) {
@@ -2046,18 +2061,19 @@ function openGoModal(name, content, type) {
   }
   onGoTypeChange();
   // 如果是 markdown-edit，将内容填入编辑器
-  if (type === 'markdown-edit' && mdEditorInstance) {
+  if (type === 'markdown-edit') {
     setTimeout(function(){
       if (mdEditorInstance && content) {
         try {
-          // wangEditor 10.x: editor.txt.html(html)
-          if (mdEditorInstance.txt && mdEditorInstance.txt.html) {
-            // 转义换行
-            var htmlContent = content.replace(/&/g, String.fromCharCode(38)+'amp;').replace(/</g, String.fromCharCode(38)+'lt;').replace(/>/g, String.fromCharCode(38)+'gt;').split(String.fromCharCode(10)).join('<br>');
-            mdEditorInstance.txt.html(htmlContent);
-          } else if (mdEditorInstance.setHtml) {
-            // v5 API 兜底
-            mdEditorInstance.setHtml(content);
+          // wangEditor v5: setHtml
+          if (typeof mdEditorInstance.setHtml === 'function') {
+            // 换行转 <br>
+            var esc = content
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;')
+              .split(String.fromCharCode(10)).join('<br>');
+            mdEditorInstance.setHtml(esc);
           }
         } catch(e) {
           console.warn('填充内容失败', e);
@@ -2081,35 +2097,49 @@ async function openGoEdit(name) {
   }
 }
 async function saveGo() {
-  var name = document.getElementById('go-name').value.trim();
-  var content = document.getElementById('go-content').value;
-  var type = document.getElementById('go-type').value;
-  // markdown-edit 优先从 wangEditor 取内容
+  var nameInput = document.getElementById('go-name');
+  var contentArea = document.getElementById('go-content');
+  var typeSelect = document.getElementById('go-type');
+  if (!nameInput || !typeSelect) { showMsg('表单元素缺失'); return; }
+  var name = nameInput.value.trim();
+  var type = typeSelect.value;
+  var content = contentArea ? contentArea.value : '';
+
+  // markdown-edit 从编辑器取内容
   if (type === 'markdown-edit' && mdEditorInstance) {
     try {
-      // wangEditor 10.x: editor.txt.text()
-      if (mdEditorInstance.txt && mdEditorInstance.txt.text) {
-        content = mdEditorInstance.txt.text();
-      } else if (mdEditorInstance.getText) {
-        // v5 API 兜底
+      // wangEditor v5: getText() / getHtml()
+      if (typeof mdEditorInstance.getText === 'function') {
         content = mdEditorInstance.getText();
       }
-    } catch(e) {
-      console.warn('获取编辑器内容失败', e);
-    }
+    } catch(e) { console.warn('取编辑器内容失败', e); }
   }
+
   if (!name) { showMsg('请输入名称'); return; }
   if (!/^[a-zA-Z0-9_-]+$/.test(name)) { showMsg('名称只能包含字母、数字、下划线、短横线'); return; }
+
+  console.log('[go] 保存:', { name: name, type: type, contentLength: content.length, originalName: goState.editingName });
+
   try {
-    await api('/api/go/save', {
+    var r = await fetch('/api/go/save', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: name, content: content, type: type, originalName: goState.editingName })
+      body: JSON.stringify({
+        name: name,
+        content: content,
+        type: type,
+        originalName: goState.editingName
+      })
     });
+    var j = await r.json().catch(function(){ return {}; });
+    if (!r.ok) {
+      throw new Error(j.error || ('HTTP ' + r.status));
+    }
     showMsg('已保存');
     closeGoModal();
     loadGoList();
   } catch (e) {
+    console.error('[go] 保存失败:', e);
     showMsg('保存失败: ' + e.message);
   }
 }
@@ -2159,6 +2189,18 @@ function onGoTypeChange(){
   }
 }
 var mdEditorInstance = null;
+
+function fallbackToTextarea(){
+  var wrap = document.getElementById('md-editor-wrap');
+  if (wrap) wrap.style.display = 'none';
+  var contentArea = document.getElementById('go-content');
+  if (contentArea) {
+    contentArea.style.display = 'block';
+    contentArea.placeholder = 'wangEditor 加载失败，已切换到纯文本模式（内容为 Markdown 源）';
+  }
+  mdEditorInstance = null;
+}
+
 function createMdEditorContainer(){
   var wrap = document.createElement('div');
   wrap.id = 'md-editor-wrap';
@@ -2175,6 +2217,30 @@ function createMdEditorContainer(){
   var js = document.createElement('script');
   js.src = 'https://cdn.bootcdn.net/ajax/libs/wangEditor/10.0.13/wangEditor.js';
   js.onload = function(){
+    var E = window.wangEditor;
+    if (!E) {
+      console.warn('[go] wangEditor 未加载，使用 textarea 降级');
+      fallbackToTextarea();
+      return;
+    }
+    try {
+      mdEditorInstance = new E('#md-editor-container');
+      if (mdEditorInstance.customConfig) {
+        mdEditorInstance.customConfig.menus = [
+          'head','bold','italic','underline','strikeThrough',
+          'foreColor','backColor','link','list','justify',
+          'quote','emoticon','image','table','code','undo','redo'
+        ];
+      }
+      mdEditorInstance.create();
+    } catch(e) {
+      console.error('[go] wangEditor 初始化失败:', e);
+      fallbackToTextarea();
+    }
+  };
+  js.onerror = function(){
+    console.warn('[go] wangEditor.js 加载失败，使用 textarea 降级');
+    fallbackToTextarea();
   };
   document.head.appendChild(js);
 }
