@@ -3756,33 +3756,31 @@ function assetsPage(themeCss) {
   }
 
   function openAddModal(){
-    document.getElementById('add-name').value = '';
-    document.getElementById('add-urls').value.split('\n').map(function(s){ return s.trim(); }).filter(Boolean);
-    if (!name) { showMsg('请输入文件名'); return; }
-    if (!/^[a-zA-Z0-9._-]+$/.test(name)) { showMsg('文件名只能包含字母、数字、._-'); return; }
-    if (urls.length === 0) { showMsg('请输入至少一个 CDN URL'); return; }
-    try {
-      await api('/api/asset/update', {
-        method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ name: name, cdnUrls: urls, sourceType: 'cdn' })
-      });
-      showMsg('已添加');
-      closeAddModal();
-      loadAssets();
-    } catch(e){ showMsg('失败: ' + e.message); }
-  };
+      document.getElementById('add-name').value = '';
+      document.getElementById('add-urls').value = '';
+      document.getElementById('add-modal').classList.add('show');
+    }
+    function closeAddModal(){
+      document.getElementById('add-modal').classList.remove('show');
+    }
+    document.getElementById('add-confirm').onclick = async function(){
+      var name = document.getElementById('add-name').value.trim();
+      var urls = document.getElementById('add-urls').value.split('\\n').map(function(s){ return s.trim(); }).filter(Boolean);
+      if (!name) { showMsg('请输入文件名'); return; }
+      if (!/^[a-zA-Z0-9._-]+$/.test(name)) { showMsg('文件名只能包含字母、数字、._-'); return; }
+      if (urls.length === 0) { showMsg('请输入至少一个 CDN URL'); return; }
+      try {
+        await api('/api/asset/update', {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ name: name, cdnUrls: urls, sourceType: 'cdn' })
+        });
+        showMsg('已添加');
+        closeAddModal();
+        loadAssets();
+      } catch(e){ showMsg('失败: ' + e.message); }
+    };
 
-  // ==================== 手动上传 ====================
-  function openUploadModal(){
-    document.getElementById('up-name').value = '';
-    document.getElementById('up-file').value = '';
-    document.getElementById('up-status').textContent = '';
-    document.getElementById('upload-modal').classList.add('show');
-  }
-  function closeUploadModal(){
-    document.getElementById('upload-modal').classList.remove('show');
-  }
-  document.getElementById('up-file').onchange = function(){
+    document.getElementById('up-file').onchange = function(){
     var f = this.files[0];
     if (f && !document.getElementById('up-name').value) {
       document.getElementById('up-name').value = f.name;
