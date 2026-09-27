@@ -3526,135 +3526,333 @@ function shareManagePage(themeCss) {
     headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }
   });
 }
+
 function assetsPage(themeCss) {
   const html = `<!DOCTYPE html><html><head>` + COMMON_HEAD + (themeCss || '') + `
   <style>
     .asset-card { background:#fff; border-radius:8px; padding:12px; margin-bottom:10px; box-shadow:0 1px 3px rgba(0,0,0,.08); }
     .asset-name { font-family:monospace; font-size:14px; font-weight:500; color:var(--primary); word-break:break-all; margin-bottom:6px; }
     .asset-meta { font-size:12px; color:var(--text-sec); margin-bottom:6px; }
-    .asset-url { font-size:11px; font-family:monospace; color:var(--text-sec); word-break:break-all; background:#f5f5f5; padding:6px 8px; border-radius:4px; margin-bottom:8px; user-select:all; }
+    .asset-url { font-size:11px; font-family:monospace; color:var(--text-sec); word-break:break-all; background:#f5f5f5; padding:6px 8px; border-radius:4px; margin-bottom:6px; user-select:all; }
+    .asset-cdn { font-size:11px; font-family:monospace; color:#1565c0; word-break:break-all; background:#e3f2fd; padding:6px 8px; border-radius:4px; margin-bottom:8px; }
     .asset-actions { display:flex; gap:6px; flex-wrap:wrap; }
     .asset-actions button, .asset-actions a { padding:5px 12px; border:1px solid var(--divider); background:#fff; border-radius:6px; cursor:pointer; font-size:12px; text-decoration:none; color:var(--text); }
     .asset-actions button:hover, .asset-actions a:hover { background:#f5f5f5; }
+    .asset-actions button.danger { border-color:#ffcdd2; color:#c62828; }
+    .asset-actions button.warn { border-color:#ffe0b2; color:#e65100; }
     .stat-bar { display:flex; gap:16px; padding:12px; background:#fff; border-radius:8px; margin-bottom:12px; box-shadow:0 1px 3px rgba(0,0,0,.08); font-size:13px; }
     .stat-bar .stat { flex:1; text-align:center; }
     .stat-bar .stat b { display:block; font-size:20px; color:var(--primary); }
     .stat-bar .stat span { color:var(--text-sec); font-size:12px; }
+    .top-btns { display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; }
+    .top-btns button { padding:8px 14px; border:none; border-radius:8px; cursor:pointer; font-size:13px; }
+    .top-btns .primary { background:var(--primary); color:#fff; }
+    .top-btns .secondary { background:#e0e0e0; color:var(--text); }
+    .badge { display:inline-block; padding:2px 6px; border-radius:4px; font-size:11px; font-weight:500; }
+    .badge.ok { background:#e8f5e9; color:#2e7d32; }
+    .badge.wait { background:#fff3e0; color:#e65100; }
+    .badge.manual { background:#e3f2fd; color:#1565c0; }
   </style>
   </head><body>
   <div class="appbar">
     <span class="material-icons" onclick="history.back()" style="cursor:pointer;padding:6px;">arrow_back</span>
     <h1>资产库</h1>
-    <span class="material-icons" id="btn-refresh-assets" style="cursor:pointer;padding:6px;">refresh</span>
+    <span class="material-icons" id="btn-refresh" style="cursor:pointer;padding:6px;">refresh</span>
   </div>
   <div class="container">
-    <div class="stat-bar" id="stats">
-      <div class="stat"><b id="count-total">-</b><span>总资产</span></div>
-      <div class="stat"><b id="count-cached">-</b><span>已缓存</span></div>
-      <div class="stat"><b id="size-total">-</b><span>总大小</span></div>
+    <div class="stat-bar">
+      <div class="stat"><b id="stat-total">-</b><span>总数</span></div>
+      <div class="stat"><b id="stat-cached">-</b><span>已缓存</span></div>
+      <div class="stat"><b id="stat-manual">-</b><span>手动</span></div>
+      <div class="stat"><b id="stat-size">-</b><span>总大小</span></div>
     </div>
+
+    <div class="top-btns">
+      <button class="primary" onclick="openUploadModal()">
+        <span class="material-icons" style="font-size:16px;vertical-align:middle;">upload_file</span> 手动上传
+      </button>
+      <button class="secondary" onclick="openAddModal()">
+        <span class="material-icons" style="font-size:16px;vertical-align:middle;">add_link</span> 添加 CDN 链接
+      </button>
+      <button class="secondary" onclick="cacheAll()">
+        <span class="material-icons" style="font-size:16px;vertical-align:middle;">cloud_download</span> 全部缓存
+      </button>
+    </div>
+
     <div id="asset-list"><div class="empty">加载中...</div></div>
   </div>
+
+  <!-- 上传弹窗 -->
+  <div class="modal-overlay" id="upload-modal">
+    <div class="modal" style="max-width:480px;">
+      <h3 style="margin-top:0;">手动上传资源</h3>
+      <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">文件名（英文/数字/._-）</label>
+      <input type="text" id="up-name" placeholder="例如 my-lib.js" style="margin-bottom:10px;">
+      <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">文件内容</label>
+      <input type="file" id="up-file" style="margin-bottom:10px;">
+      <div class="modal-actions" style="display:flex;justify-content:flex-end;gap:8px;">
+        <button class="btn-secondary" onclick="closeUploadModal()" style="padding:8px 16px;border:none;border-radius:8px;cursor:pointer;">取消</button>
+        <button class="btn-primary" id="up-confirm" style="padding:8px 16px;border:none;border-radius:8px;cursor:pointer;background:var(--primary);color:#fff;">上传</button>
+      </div>
+      <p id="up-status" style="font-size:12px;color:var(--text-sec);margin-top:8px;"></p>
+    </div>
+  </div>
+
+  <!-- 添加 CDN 弹窗 -->
+  <div class="modal-overlay" id="add-modal">
+    <div class="modal" style="max-width:520px;">
+      <h3 style="margin-top:0;">添加 CDN 链接</h3>
+      <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">文件名（作为 /asset/ 路径）</label>
+      <input type="text" id="add-name" placeholder="例如 tailwind.css" style="margin-bottom:10px;">
+      <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">CDN URL（多个用换行分隔，会依次尝试）</label>
+      <textarea id="add-urls" placeholder="https://cdn.example.com/lib.js" style="width:100%;min-height:120px;font-family:monospace;font-size:12px;padding:8px;border:1px solid var(--divider);border-radius:6px;box-sizing:border-box;margin-bottom:10px;"></textarea>
+      <div class="modal-actions" style="display:flex;justify-content:flex-end;gap:8px;">
+        <button class="btn-secondary" onclick="closeAddModal()" style="padding:8px 16px;border:none;border-radius:8px;cursor:pointer;">取消</button>
+        <button class="btn-primary" id="add-confirm" style="padding:8px 16px;border:none;border-radius:8px;cursor:pointer;background:var(--primary);color:#fff;">添加</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 编辑链接弹窗 -->
+  <div class="modal-overlay" id="edit-modal">
+    <div class="modal" style="max-width:520px;">
+      <h3 style="margin-top:0;">编辑 CDN 链接</h3>
+      <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">文件名</label>
+      <input type="text" id="edit-name" disabled style="margin-bottom:10px;background:#f5f5f5;">
+      <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">CDN URL（每行一个，按顺序尝试）</label>
+      <textarea id="edit-urls" style="width:100%;min-height:120px;font-family:monospace;font-size:12px;padding:8px;border:1px solid var(--divider);border-radius:6px;box-sizing:border-box;margin-bottom:10px;"></textarea>
+      <div class="modal-actions" style="display:flex;justify-content:flex-end;gap:8px;">
+        <button class="btn-secondary" onclick="closeEditModal()" style="padding:8px 16px;border:none;border-radius:8px;cursor:pointer;">取消</button>
+        <button class="btn-primary" id="edit-confirm" style="padding:8px 16px;border:none;border-radius:8px;cursor:pointer;background:var(--primary);color:#fff;">保存</button>
+      </div>
+    </div>
+  </div>
+
   <div class="snackbar" id="snackbar"></div>
+
   <script>
+  var assetState = { list: [], editingName: null };
+
   function showMsg(msg){ var s=document.getElementById('snackbar'); s.textContent=msg; s.classList.add('show'); setTimeout(function(){s.classList.remove('show');},2500); }
   function escapeHtml(t){ return String(t).replace(/[&<>"']/g, function(m){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]; }); }
-  function formatSize(b){
-    if (!b) return '0 B';
-    var k = 1024, s = ['B', 'KB', 'MB', 'GB'];
-    var i = Math.floor(Math.log(b) / Math.log(k));
-    return (b / Math.pow(k, i)).toFixed(2) + ' ' + s[i];
-  }
+  function formatSize(b){ if(!b) return '0 B'; var k=1024,s=['B','KB','MB','GB']; var i=Math.floor(Math.log(b)/Math.log(k)); return (b/Math.pow(k,i)).toFixed(2)+' '+s[i]; }
   function copyText(text){
     if (navigator.clipboard && window.isSecureContext) {
       return navigator.clipboard.writeText(text).then(function(){ showMsg('已复制'); }, function(){ prompt('复制：', text); });
-    } else {
-      prompt('复制：', text);
     }
+    prompt('复制：', text);
+  }
+  async function api(url, opts){
+    opts = opts || {};
+    var r = await fetch(url, opts);
+    if (r.status === 401) { location.href = '/login'; return null; }
+    var j = await r.json().catch(function(){ return {}; });
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    return j;
   }
 
   async function loadAssets(){
     var box = document.getElementById('asset-list');
     box.innerHTML = '<div class="empty">加载中...</div>';
     try {
-      var r = await fetch('/api/asset/list');
-      if (r.status === 401) { location.href = '/login'; return; }
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      var assets = await r.json();
-      console.log('[assets]', assets);
-
-      // 统计
+      var assets = await api('/api/asset/list') || [];
+      assetState.list = assets;
+      var total = assets.length;
+      var cached = 0;
+      var manual = 0;
       var totalSize = 0;
-      var cachedCount = 0;
       for (var i = 0; i < assets.length; i++) {
-        if (assets[i].uploaded) cachedCount++;
+        if (assets[i].uploaded) cached++;
+        if (assets[i].sourceType === 'manual') manual++;
         totalSize += Number(assets[i].size || 0);
       }
-      document.getElementById('count-total').textContent = assets.length;
-      document.getElementById('count-cached').textContent = cachedCount;
-      document.getElementById('size-total').textContent = formatSize(totalSize);
+      document.getElementById('stat-total').textContent = total;
+      document.getElementById('stat-cached').textContent = cached;
+      document.getElementById('stat-manual').textContent = manual;
+      document.getElementById('stat-size').textContent = formatSize(totalSize);
 
       if (assets.length === 0) {
-        box.innerHTML = '<div class="empty"><span class="material-icons" style="font-size:48px;color:#bdbdbd;">inventory_2</span><p>还没有资产</p><p style="font-size:12px;">打开任意文件详情页会触发加载</p></div>';
+        box.innerHTML = '<div class="empty">还没有资产<br><span style="font-size:12px;">点上方"手动上传"或"添加 CDN 链接"</span></div>';
         return;
       }
 
-      box.innerHTML = assets.map(function(a){
+      var html = '';
+      for (var j = 0; j < assets.length; j++) {
+        var a = assets[j];
         var url = location.origin + '/asset/' + a.name;
-        return '<div class="asset-card">'
-          + '<div class="asset-name">' + escapeHtml(a.name) + '</div>'
-          + '<div class="asset-meta">'
-          + (a.uploaded ? '✅ 已缓存' : '⏳ 未缓存')
-          + ' · ' + formatSize(a.size || 0)
-          + ' · ' + escapeHtml(a.contentType || 'unknown')
-          + (a.cachedAt ? ' · ' + new Date(a.cachedAt).toLocaleString() : '')
-          + '</div>'
-          + '<div class="asset-url">' + escapeHtml(url) + '</div>'
-          + '<div class="asset-actions">'
-          + '<button data-act="copy" data-url="' + escapeHtml(url) + '">复制链接</button>'
-          + '<a href="' + escapeHtml(url) + '" target="_blank">打开</a>'
-          + '<button data-act="recache" data-name="' + escapeHtml(a.name) + '">重新拉取</button>'
-          + '</div></div>';
-      }).join('');
-
-      box.querySelectorAll('button[data-act]').forEach(function(btn){
-        btn.onclick = function(){
-          var act = btn.getAttribute('data-act');
-          if (act === 'copy') copyText(btn.getAttribute('data-url'));
-          else if (act === 'recache') recacheAsset(btn.getAttribute('data-name'));
-        };
-      });
+        var statusBadge = a.uploaded ? '<span class="badge ok">✓ 已缓存</span>' : '<span class="badge wait">⏳ 未缓存</span>';
+        var typeBadge = a.sourceType === 'manual' ? ' <span class="badge manual">手动</span>' : '';
+        var cdnList = (a.cdnUrls || []).join('\n');
+        html += '<div class="asset-card">';
+        html += '<div class="asset-name">' + escapeHtml(a.name) + ' ' + statusBadge + typeBadge + '</div>';
+        html += '<div class="asset-meta">' + formatSize(a.size || 0) + ' · ' + escapeHtml(a.contentType || 'unknown') + (a.cachedAt ? ' · ' + new Date(a.cachedAt).toLocaleString() : '') + '</div>';
+        html += '<div class="asset-url">' + escapeHtml(url) + '</div>';
+        if (cdnList) {
+          html += '<div class="asset-cdn">' + escapeHtml(cdnList).replace(/\n/g, '<br>') + '</div>';
+        }
+        html += '<div class="asset-actions">';
+        html += '<button onclick="copyUrl(\'' + escapeHtml(a.name) + '\')">复制链接</button>';
+        html += '<a href="' + escapeHtml(url) + '" target="_blank">打开</a>';
+        if (!a.uploaded || a.sourceType === 'cdn') {
+          html += '<button class="warn" onclick="cacheAsset(\'' + escapeHtml(a.name) + '\')">' + (a.uploaded ? '重新缓存' : '缓存') + '</button>';
+        }
+        html += '<button onclick="editAsset(\'' + escapeHtml(a.name) + '\')">改链接</button>';
+        html += '<button class="danger" onclick="deleteAsset(\'' + escapeHtml(a.name) + '\')">删除</button>';
+        html += '</div></div>';
+      }
+      box.innerHTML = html;
     } catch(e) {
-      console.error('load assets failed:', e);
       box.innerHTML = '<div class="empty">加载失败: ' + escapeHtml(e.message) + '</div>';
     }
   }
 
-  async function recacheAsset(name){
-    if (!confirm('重新从 CDN 拉取 "' + name + '" 并覆盖 GitHub 缓存？')) return;
+  function copyUrl(name){ copyText(location.origin + '/asset/' + name); }
+
+  async function cacheAsset(name){
+    if (!confirm('从 CDN 拉取 "' + name + '" 并缓存到 GitHub？')) return;
+    showMsg('缓存中...');
     try {
-      // 删除 D1 标记，然后请求 /asset/xxx 触发重新缓存
-      var r = await fetch('/asset/' + encodeURIComponent(name), { headers: { 'Cache-Control': 'no-cache' } });
-      if (r.ok) {
-        showMsg('已重新拉取');
-        setTimeout(loadAssets, 1000);
-      } else {
-        showMsg('拉取失败: HTTP ' + r.status);
-      }
-    } catch(e) {
-      showMsg('失败: ' + e.message);
-    }
+      await api('/api/asset/cache', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ name: name })
+      });
+      showMsg('缓存成功');
+      loadAssets();
+    } catch(e){ showMsg('失败: ' + e.message); }
   }
 
-  document.getElementById('btn-refresh-assets').onclick = loadAssets;
+  async function cacheAll(){
+    var pending = assetState.list.filter(function(a){ return !a.uploaded; });
+    if (pending.length === 0) { showMsg('所有资产已缓存'); return; }
+    if (!confirm('缓存 ' + pending.length + ' 个未缓存资产？')) return;
+    for (var i = 0; i < pending.length; i++) {
+      showMsg('缓存 ' + (i+1) + '/' + pending.length + ': ' + pending[i].name);
+      try {
+        await api('/api/asset/cache', {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ name: pending[i].name })
+        });
+      } catch(e) { console.warn('缓存失败: ' + pending[i].name, e); }
+    }
+    showMsg('全部完成');
+    loadAssets();
+  }
+
+  async function deleteAsset(name){
+    if (!confirm('确定删除 "' + name + '"？\n\n这会同时从 GitHub 和 D1 中删除。')) return;
+    try {
+      await api('/api/asset/delete', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ name: name })
+      });
+      showMsg('已删除');
+      loadAssets();
+    } catch(e){ showMsg('失败: ' + e.message); }
+  }
+
+  // ==================== 编辑链接 ====================
+  function editAsset(name){
+    var a = assetState.list.find(function(x){ return x.name === name; });
+    if (!a) return;
+    assetState.editingName = name;
+    document.getElementById('edit-name').value = name;
+    document.getElementById('edit-urls').value = (a.cdnUrls || []).join('\n');
+    document.getElementById('edit-modal').classList.add('show');
+  }
+  function closeEditModal(){
+    document.getElementById('edit-modal').classList.remove('show');
+    assetState.editingName = null;
+  }
+  document.getElementById('edit-confirm').onclick = async function(){
+    var name = assetState.editingName;
+    if (!name) return;
+    var urls = document.getElementById('edit-urls').value
+      .split('\n').map(function(s){ return s.trim(); }).filter(Boolean);
+    try {
+      await api('/api/asset/update', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ name: name, cdnUrls: urls })
+      });
+      showMsg('已保存');
+      closeEditModal();
+      loadAssets();
+    } catch(e){ showMsg('失败: ' + e.message); }
+  };
+
+  // ==================== 添加 CDN ====================
+  function openAddModal(){
+    document.getElementById('add-name').value = '';
+    document.getElementById('add-urls').value = '';
+    document.getElementById('add-modal').classList.add('show');
+  }
+  function closeAddModal(){
+    document.getElementById('add-modal').classList.remove('show');
+  }
+  document.getElementById('add-confirm').onclick = async function(){
+    var name = document.getElementById('add-name').value.trim();
+    var urls = document.getElementById('add-urls').value
+      .split('\n').map(function(s){ return s.trim(); }).filter(Boolean);
+    if (!name) { showMsg('请输入文件名'); return; }
+    if (!/^[a-zA-Z0-9._-]+$/.test(name)) { showMsg('文件名只能包含字母、数字、._-'); return; }
+    if (urls.length === 0) { showMsg('请输入至少一个 CDN URL'); return; }
+    try {
+      await api('/api/asset/update', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ name: name, cdnUrls: urls, sourceType: 'cdn' })
+      });
+      showMsg('已添加');
+      closeAddModal();
+      loadAssets();
+    } catch(e){ showMsg('失败: ' + e.message); }
+  };
+
+  // ==================== 手动上传 ====================
+  function openUploadModal(){
+    document.getElementById('up-name').value = '';
+    document.getElementById('up-file').value = '';
+    document.getElementById('up-status').textContent = '';
+    document.getElementById('upload-modal').classList.add('show');
+  }
+  function closeUploadModal(){
+    document.getElementById('upload-modal').classList.remove('show');
+  }
+  document.getElementById('up-file').onchange = function(){
+    var f = this.files[0];
+    if (f && !document.getElementById('up-name').value) {
+      document.getElementById('up-name').value = f.name;
+    }
+  };
+  document.getElementById('up-confirm').onclick = async function(){
+    var name = document.getElementById('up-name').value.trim();
+    var fileInput = document.getElementById('up-file');
+    var file = fileInput.files[0];
+    if (!name) { showMsg('请输入文件名'); return; }
+    if (!/^[a-zA-Z0-9._-]+$/.test(name)) { showMsg('文件名只能包含字母、数字、._-'); return; }
+    if (!file) { showMsg('请选择文件'); return; }
+    var st = document.getElementById('up-status');
+    st.textContent = '上传中...';
+    try {
+      var form = new FormData();
+      form.append('name', name);
+      form.append('file', file);
+      var r = await fetch('/api/asset/upload', { method: 'POST', body: form });
+      var j = await r.json().catch(function(){ return {}; });
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      st.textContent = '上传成功';
+      showMsg('已上传');
+      setTimeout(function(){ closeUploadModal(); loadAssets(); }, 600);
+    } catch(e){
+      st.textContent = '失败: ' + e.message;
+      showMsg('上传失败: ' + e.message);
+    }
+  };
+
+  document.getElementById('btn-refresh').onclick = loadAssets;
   loadAssets();
   </script>
   </body></html>`;
   return new Response(html, {
-    headers: {
-      'Content-Type': 'text/html; charset=utf-8',
-      'Cache-Control': 'no-store'
-    }
+    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }
   });
 }
 
@@ -4216,40 +4414,233 @@ async function handleRequest(request, env, ctx = null) {
     });
     return jsonResponse({ results, count: results.length, keywords });
   }
-  // ==================== 资产库（JS/CSS 代理 + 缓存） ====================
+
+
+  // ==================== 资产库：默认数据 ====================
+  const DEFAULT_ASSETS = {
+    'plyr.css': { cdnUrls: ['https://cdn.bootcdn.net/ajax/libs/plyr/3.8.4/plyr.css', 'https://cdn.jsdelivr.net/npm/plyr@3.8.4/dist/plyr.css'], contentType: 'text/css' },
+    'plyr.js': { cdnUrls: ['https://cdn.bootcdn.net/ajax/libs/plyr/3.8.4/plyr.js', 'https://cdn.jsdelivr.net/npm/plyr@3.8.4/dist/plyr.min.js'], contentType: 'application/javascript' },
+    'viewer.css': { cdnUrls: ['https://cdn.bootcdn.net/ajax/libs/viewerjs/1.11.8/viewer.css', 'https://cdn.jsdelivr.net/npm/viewerjs@1.11.8/dist/viewer.min.css'], contentType: 'text/css' },
+    'viewer.js': { cdnUrls: ['https://cdn.bootcdn.net/ajax/libs/viewerjs/1.11.8/viewer.js', 'https://cdn.jsdelivr.net/npm/viewerjs@1.11.8/dist/viewer.min.js'], contentType: 'application/javascript' },
+    'pdf.min.mjs': { cdnUrls: ['https://cdnjs.cloudflare.com/ajax/libs/pdf.js/6.3.289/pdf.min.mjs', 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/build/pdf.min.mjs'], contentType: 'application/javascript' },
+    'pdf.worker.min.mjs': { cdnUrls: ['https://cdnjs.cloudflare.com/ajax/libs/pdf.js/6.3.289/pdf.worker.min.mjs', 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/build/pdf.worker.min.mjs'], contentType: 'application/javascript' },
+    'wangeditor.css': { cdnUrls: ['https://cdn.jsdelivr.net/npm/@wangeditor/editor@5.1.23/dist/css/style.css', 'https://unpkg.com/@wangeditor/editor@5.1.23/dist/css/style.css'], contentType: 'text/css' },
+    'wangeditor.js': { cdnUrls: ['https://cdn.jsdelivr.net/npm/@wangeditor/editor@5.1.23/dist/index.min.js', 'https://unpkg.com/@wangeditor/editor@5.1.23/dist/index.min.js'], contentType: 'application/javascript' },
+    'github-markdown.css': { cdnUrls: ['https://cdn.bootcdn.net/ajax/libs/github-markdown-css/5.9.0/github-markdown.css', 'https://cdn.jsdelivr.net/npm/github-markdown-css@5.9.0/github-markdown.css'], contentType: 'text/css' },
+    'marked.min.js': { cdnUrls: ['https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js', 'https://unpkg.com/marked@12.0.2/marked.min.js'], contentType: 'application/javascript' },
+    'vue.global.prod.js': { cdnUrls: ['https://cdn.jsdelivr.net/npm/vue@3.4.21/dist/vue.global.prod.js', 'https://unpkg.com/vue@3.4.21/dist/vue.global.prod.js'], contentType: 'application/javascript' },
+    'jszip.min.js': { cdnUrls: ['https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js', 'https://unpkg.com/jszip@3.10.1/dist/jszip.min.js'], contentType: 'application/javascript' },
+    'file-saver.min.js': { cdnUrls: ['https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js', 'https://unpkg.com/file-saver@2.0.5/dist/FileSaver.min.js'], contentType: 'application/javascript' }
+  };
+
+  // 初始化默认资产（仅首次）
+  if (path === '/api/asset/init' && request.method === 'POST') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    await ensureD1(env);
+    let count = 0;
+    for (const [name, def] of Object.entries(DEFAULT_ASSETS)) {
+      const existing = await d1Get(env, 'asset_' + name, null);
+      if (!existing) {
+        await d1Set(env, 'asset_' + name, {
+          name: name,
+          cdnUrls: def.cdnUrls,
+          contentType: def.contentType,
+          size: 0,
+          uploaded: false,
+          sourceType: 'cdn',
+          createdAt: Date.now()
+        });
+        count++;
+      }
+    }
+    return jsonResponse({ ok: true, initialized: count });
+  }
+
+  // ==================== 资产列表 ====================
+  if (path === '/api/asset/list' && request.method === 'GET') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    await ensureD1(env);
+    const rows = await getD1(env).prepare("SELECT value FROM kv_store WHERE key LIKE 'asset_%'").all();
+    const list = [];
+    for (const r of (rows.results || [])) {
+      try { list.push(JSON.parse(r.value)); } catch(e) {}
+    }
+    list.sort(function(a, b){ return (a.name || '').localeCompare(b.name || ''); });
+    return jsonResponse(list);
+  }
+
+  // ==================== 手动上传 ====================
+  if (path === '/api/asset/upload' && request.method === 'POST') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    try {
+      const form = await request.formData();
+      const name = String(form.get('name') || '').trim();
+      const file = form.get('file');
+      if (!name || !file) return errorResponse('缺少 name 或 file');
+      if (!/^[a-zA-Z0-9._-]+$/.test(name)) return errorResponse('文件名只能包含字母、数字、._-');
+      const buffer = await file.arrayBuffer();
+      const contentType = file.type || 'application/octet-stream';
+
+      await githubCreateRepo(ASSETS_REPO, env);
+      const base64 = arrayBufferToBase64(buffer);
+      const putResp = await fetchWithTimeout(
+        `${GITHUB_API}/repos/${GITHUB_USER}/${ASSETS_REPO}/contents/${encodeURIComponent(name)}`,
+        {
+          method: 'PUT',
+          headers: {
+            'Authorization': `token ${env.GITHUB_TOKEN}`,
+            'Accept': 'application/vnd.github+json',
+            'Content-Type': 'application/json',
+            'User-Agent': 'netdisk-worker'
+          },
+          body: JSON.stringify({ message: 'asset manual: ' + name, content: base64 })
+        },
+        120000
+      );
+      if (!putResp.ok) {
+        const txt = await putResp.text();
+        throw new Error(`GitHub 上传失败: ${putResp.status} ${txt.slice(0, 200)}`);
+      }
+
+      const existing = await d1Get(env, 'asset_' + name, null);
+      await d1Set(env, 'asset_' + name, {
+        name: name,
+        cdnUrls: (existing && existing.cdnUrls) || [],
+        contentType: contentType,
+        size: buffer.byteLength,
+        uploaded: true,
+        sourceType: 'manual',
+        cachedAt: Date.now(),
+        createdAt: (existing && existing.createdAt) || Date.now()
+      });
+      return jsonResponse({ ok: true, name, size: buffer.byteLength });
+    } catch(e) {
+      return errorResponse('上传失败: ' + e.message, 500);
+    }
+  }
+
+  // ==================== 从 CDN 缓存到 GitHub ====================
+  if (path === '/api/asset/cache' && request.method === 'POST') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    const body = await request.json();
+    const name = String(body.name || '');
+    if (!name) return errorResponse('缺少 name');
+    const asset = await d1Get(env, 'asset_' + name, null);
+    if (!asset) return errorResponse('资产不存在', 404);
+    if (!asset.cdnUrls || asset.cdnUrls.length === 0) return errorResponse('没有 CDN 链接');
+
+    let buf = null;
+    let contentType = asset.contentType || 'application/octet-stream';
+    let usedUrl = '';
+    let lastErr = '';
+    for (const url of asset.cdnUrls) {
+      try {
+        const r = await fetchWithTimeout(url, { headers: { 'User-Agent': 'netdisk-worker' } }, 60000);
+        if (r.ok) {
+          buf = await r.arrayBuffer();
+          contentType = r.headers.get('content-type') || contentType;
+          usedUrl = url;
+          break;
+        }
+        lastErr = `HTTP ${r.status}`;
+      } catch(e) { lastErr = e.message; }
+    }
+    if (!buf) return errorResponse('所有 CDN 都失败: ' + lastErr, 502);
+
+    await githubCreateRepo(ASSETS_REPO, env);
+    const base64 = arrayBufferToBase64(buf);
+    const putResp = await fetchWithTimeout(
+      `${GITHUB_API}/repos/${GITHUB_USER}/${ASSETS_REPO}/contents/${encodeURIComponent(name)}`,
+      {
+        method: 'PUT',
+        headers: {
+          'Authorization': `token ${env.GITHUB_TOKEN}`,
+          'Accept': 'application/vnd.github+json',
+          'Content-Type': 'application/json',
+          'User-Agent': 'netdisk-worker'
+        },
+        body: JSON.stringify({ message: 'asset cache: ' + name, content: base64 })
+      },
+      120000
+    );
+    if (!putResp.ok) {
+      const txt = await putResp.text();
+      return errorResponse(`GitHub 上传失败: ${putResp.status} ${txt.slice(0,200)}`, 500);
+    }
+
+    asset.uploaded = true;
+    asset.size = buf.byteLength;
+    asset.contentType = contentType;
+    asset.cachedAt = Date.now();
+    asset.sourceCdn = usedUrl;
+    await d1Set(env, 'asset_' + name, asset);
+    return jsonResponse({ ok: true, name, size: buf.byteLength, sourceCdn: usedUrl });
+  }
+
+  // ==================== 更新 CDN 链接 / 添加新资产 ====================
+  if (path === '/api/asset/update' && request.method === 'POST') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    const body = await request.json();
+    const name = String(body.name || '').trim();
+    const cdnUrls = Array.isArray(body.cdnUrls) ? body.cdnUrls.filter(Boolean) : [];
+    const sourceType = body.sourceType || 'cdn';
+    if (!name) return errorResponse('缺少 name');
+    if (!/^[a-zA-Z0-9._-]+$/.test(name)) return errorResponse('文件名只能包含字母、数字、._-');
+
+    const existing = await d1Get(env, 'asset_' + name, null) || {
+      name: name,
+      size: 0,
+      uploaded: false,
+      sourceType: sourceType,
+      createdAt: Date.now()
+    };
+    existing.cdnUrls = cdnUrls;
+    existing.contentType = body.contentType || existing.contentType || 'application/octet-stream';
+    existing.sourceType = existing.sourceType || sourceType;
+    await d1Set(env, 'asset_' + name, existing);
+    return jsonResponse({ ok: true, asset: existing });
+  }
+
+  // ==================== 删除资产 ====================
+  if (path === '/api/asset/delete' && request.method === 'POST') {
+    const forbid = requirePassword(request, env);
+    if (forbid) return forbid;
+    const body = await request.json();
+    const name = String(body.name || '');
+    if (!name) return errorResponse('缺少 name');
+
+    // 删除 GitHub 文件
+    try { await githubDeleteFile(ASSETS_REPO, name, env); } catch(e) { console.warn('gh delete fail', e); }
+    // 删除 D1 记录
+    await d1Delete(env, 'asset_' + name);
+    return jsonResponse({ ok: true });
+  }
+
+  // ==================== 资产代理 ====================
   if (path.startsWith('/asset/')) {
     const filename = path.slice('/asset/'.length);
     if (!filename || !/^[a-zA-Z0-9._-]+$/.test(filename)) {
       return new Response('Invalid asset name', { status: 400 });
     }
 
-    // ★ 白名单：文件名 → CDN 列表（第一个成功即用）
-    const ASSET_CDN_MAP = {
-      'plyr.css': ['/asset/plyr.css', 'https://cdn.jsdelivr.net/npm/plyr@3.8.4/dist/plyr.css'],
-      'plyr.js': ['/asset/plyr.js', 'https://cdn.jsdelivr.net/npm/plyr@3.8.4/dist/plyr.min.js'],
-      'viewer.css': ['/asset/viewer.css', 'https://cdn.jsdelivr.net/npm/viewerjs@1.11.8/dist/viewer.min.css'],
-      'viewer.js': ['/asset/viewer.js', 'https://cdn.jsdelivr.net/npm/viewerjs@1.11.8/dist/viewer.min.js'],
-      'pdf.min.mjs': ['/asset/pdf.min.mjs', 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/build/pdf.min.mjs'],
-      'pdf.worker.min.mjs': ['/asset/pdf.worker.min.mjs', 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.3.289/build/pdf.worker.min.mjs'],
-      'wangeditor.css': ['/asset/wangeditor.css', 'https://unpkg.com/@wangeditor/editor@5.1.23/dist/css/style.css'],
-      'wangeditor.js': ['/asset/wangeditor.js', 'https://unpkg.com/@wangeditor/editor@5.1.23/dist/index.min.js'],
-      'github-markdown.css': ['/asset/github-markdown.css', 'https://cdn.jsdelivr.net/npm/github-markdown-css@5.9.0/github-markdown.css'],
-      'marked.min.js': ['/asset/marked.min.js', 'https://unpkg.com/marked@12.0.2/marked.min.js'],
-      'vue.global.prod.js': ['/asset/vue.global.prod.js', 'https://unpkg.com/vue@3.4.21/dist/vue.global.prod.js'],
-      'jszip.min.js': ['/asset/jszip.min.js', 'https://unpkg.com/jszip@3.10.1/dist/jszip.min.js'],
-      'file-saver.min.js': ['/asset/file-saver.min.js', 'https://unpkg.com/file-saver@2.0.5/dist/FileSaver.min.js'],
-    };
+    const asset = await d1Get(env, 'asset_' + filename, null);
+    if (!asset) {
+      return new Response('Asset not found: ' + filename, { status: 404 });
+    }
 
-    const cdnUrls = ASSET_CDN_MAP[filename];
-    if (!cdnUrls) return new Response('Asset not in whitelist: ' + filename, { status: 404 });
+    const headers = new Headers();
+    headers.set('Content-Type', asset.contentType || 'application/octet-stream');
+    headers.set('Cache-Control', 'public, max-age=604800, immutable');
+    headers.set('Access-Control-Allow-Origin', '*');
 
-    // ★ 优先从 GitHub 缓存读
-    const assetKey = 'asset_' + filename;
-    const cached = await d1Get(env, assetKey, null);
-
-    if (cached && cached.uploaded) {
+    // 优先从 GitHub 读
+    if (asset.uploaded) {
       try {
-        // Accept: application/vnd.github.raw 直接返回原始内容
         const ghResp = await fetchWithTimeout(
           `${GITHUB_API}/repos/${GITHUB_USER}/${ASSETS_REPO}/contents/${encodeURIComponent(filename)}`,
           {
@@ -4262,93 +4653,26 @@ async function handleRequest(request, env, ctx = null) {
           30000
         );
         if (ghResp.ok) {
-          const headers = new Headers();
-          headers.set('Content-Type', cached.contentType || 'application/octet-stream');
-          headers.set('Cache-Control', 'public, max-age=604800, immutable');
-          headers.set('Access-Control-Allow-Origin', '*');
-          headers.set('X-Asset-Source', 'github-cache');
+          headers.set('X-Asset-Source', 'github');
           return new Response(ghResp.body, { headers });
         }
-      } catch(e) {
-        console.warn('asset github read failed: ' + filename, e);
-      }
+      } catch(e) { console.warn('gh read fail', filename, e); }
     }
 
-    // ★ 从 CDN 拉取（多 CDN 容灾）
-    let cdnResp = null;
-    let usedCdn = '';
-    for (const u of cdnUrls) {
+    // 回退到 CDN
+    if (!asset.cdnUrls || asset.cdnUrls.length === 0) {
+      return new Response('No CDN URLs and not uploaded: ' + filename, { status: 404 });
+    }
+    for (const url of asset.cdnUrls) {
       try {
-        const r = await fetchWithTimeout(u, { headers: { 'User-Agent': 'netdisk-worker' } }, 60000);
-        if (r.ok) { cdnResp = r; usedCdn = u; break; }
-      } catch(e) {
-        console.warn('asset cdn fail: ' + u, e.message);
-      }
-    }
-
-    if (!cdnResp) {
-      return new Response('All CDNs failed for: ' + filename, { status: 502 });
-    }
-
-    const buffer = await cdnResp.arrayBuffer();
-    const contentType = cdnResp.headers.get('content-type') || 'application/octet-stream';
-
-    // ★ 后台异步上传到 GitHub（不阻塞本次响应）
-    (async () => {
-      try {
-        await githubCreateRepo(ASSETS_REPO, env);
-        const base64 = arrayBufferToBase64(buffer);
-        const putResp = await fetchWithTimeout(
-          `${GITHUB_API}/repos/${GITHUB_USER}/${ASSETS_REPO}/contents/${encodeURIComponent(filename)}`,
-          {
-            method: 'PUT',
-            headers: {
-              'Authorization': `token ${env.GITHUB_TOKEN}`,
-              'Accept': 'application/vnd.github+json',
-              'Content-Type': 'application/json',
-              'User-Agent': 'netdisk-worker'
-            },
-            body: JSON.stringify({ message: 'asset: ' + filename, content: base64 })
-          },
-          120000
-        );
-        if (putResp.ok) {
-          await d1Set(env, assetKey, {
-            name: filename,
-            uploaded: true,
-            contentType: contentType,
-            size: buffer.byteLength,
-            sourceCdn: usedCdn,
-            cachedAt: Date.now()
-          });
-          console.log('asset cached: ' + filename + ' (' + buffer.byteLength + ' B)');
-        } else {
-          console.warn('asset upload failed: ' + putResp.status);
+        const r = await fetchWithTimeout(url, { headers: { 'User-Agent': 'netdisk-worker' } }, 60000);
+        if (r.ok) {
+          headers.set('X-Asset-Source', 'cdn-fresh');
+          return new Response(r.body, { headers });
         }
-      } catch(e) {
-        console.error('asset upload error:', e);
-      }
-    })();
-
-    const headers = new Headers();
-    headers.set('Content-Type', contentType);
-    headers.set('Cache-Control', 'public, max-age=604800, immutable');
-    headers.set('Access-Control-Allow-Origin', '*');
-    headers.set('X-Asset-Source', 'cdn-fresh');
-    return new Response(buffer, { headers });
-  }
-
-  // ==================== 资产库列表（仅用于调试） ====================
-  if (path === '/api/asset/list' && request.method === 'GET') {
-    const forbid = requirePassword(request, env);
-    if (forbid) return forbid;
-    const rows = await getD1(env).prepare("SELECT value FROM kv_store WHERE key LIKE 'asset_%'").all();
-    const list = [];
-    for (const r of (rows.results || [])) {
-      try { list.push(JSON.parse(r.value)); } catch(e) {}
+      } catch(e) {}
     }
-    list.sort((a, b) => a.name.localeCompare(b.name));
-    return jsonResponse(list);
+    return new Response('All sources failed: ' + filename, { status: 502 });
   }
 
   if (path === '/api/structure') {
