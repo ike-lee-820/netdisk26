@@ -3757,16 +3757,7 @@ function assetsPage(themeCss) {
 
   function openAddModal(){
     document.getElementById('add-name').value = '';
-    document.getElementById('add-urls').value = '';
-    document.getElementById('add-modal').classList.add('show');
-  }
-  function closeAddModal(){
-    document.getElementById('add-modal').classList.remove('show');
-  }
-  document.getElementById('add-confirm').onclick = async function(){
-    var name = document.getElementById('add-name').value.trim();
-    var urls = document.getElementById('add-urls').value
-      .split('\n').map(function(s){ return s.trim(); }).filter(Boolean);
+    document.getElementById('add-urls').value.split('\n').map(function(s){ return s.trim(); }).filter(Boolean);
     if (!name) { showMsg('请输入文件名'); return; }
     if (!/^[a-zA-Z0-9._-]+$/.test(name)) { showMsg('文件名只能包含字母、数字、._-'); return; }
     if (urls.length === 0) { showMsg('请输入至少一个 CDN URL'); return; }
