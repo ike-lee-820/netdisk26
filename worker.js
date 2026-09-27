@@ -1032,7 +1032,7 @@ async function page(title, body, scripts = '', themeCss = '', request = null) {
 
 const HOME_BODY = `
 <div class="appbar">
-  <h1 id="page-title">我的网盘</h1>
+  <h1 id="page-title">__SITE_TITLE__</h1>
   <div style="flex:1;"></div>
   <div style="display:flex;align-items:center;gap:4px;">
     <span class="material-icons" id="btn-search" title="搜索" style="cursor:pointer;padding:8px;">search</span>
@@ -1183,10 +1183,22 @@ const HOME_BODY = `
     <input type="text" id="go-name" placeholder="例如 hello" maxlength="64" style="margin-bottom:10px;">
 
     <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">类型</label>
-    <select id="go-type" style="width:100%;padding:10px;border:1px solid var(--divider);border-radius:8px;font-size:14px;margin-bottom:10px;background:#fff;">
+    <select id="go-type" onchange="onGoTypeChange()" style="width:100%;padding:10px;border:1px solid var(--divider);border-radius:8px;font-size:14px;margin-bottom:10px;background:#fff;">
       <option value="html">HTML（完整网页）</option>
       <option value="text">纯文本</option>
+      <option value="markdown-file">Markdown - 网盘文件</option>
+      <option value="markdown-link">Markdown - 外部链接</option>
+      <option value="markdown-edit">Markdown - 在线编辑</option>
+      <option value="link">链接（跳转）</option>
+      <option value="file">网盘文件（跳转）</option>
     </select>
+    <div id="go-file-picker" style="display:none;margin-bottom:10px;">
+      <button type="button" onclick="openGoFilePicker()" class="btn-secondary" style="padding:8px 12px;border:none;border-radius:6px;cursor:pointer;font-size:13px;">📁 选择网盘文件</button>
+      <span id="go-file-path" style="font-size:12px;color:var(--text-sec);margin-left:8px;"></span>
+    </div>
+    <div id="go-link-hint" style="display:none;margin-bottom:10px;font-size:12px;color:var(--text-sec);">
+      在下方输入完整 URL（如 https://example.com）
+    </div>
 
     <label style="display:block;margin-bottom:4px;font-size:13px;color:var(--text-sec);">内容</label>
     <textarea id="go-content" placeholder="输入 HTML 或文本..." style="width:100%;min-height:280px;font-family:Consolas,Monaco,monospace;font-size:13px;padding:10px;border:1px solid var(--divider);border-radius:8px;box-sizing:border-box;resize:vertical;"></textarea>
@@ -1194,6 +1206,19 @@ const HOME_BODY = `
     <div class="modal-actions" style="margin-top:16px;">
       <button class="btn-secondary" onclick="closeGoModal()">取消</button>
       <button class="btn-primary" id="go-save-btn">保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="go-file-modal">
+  <div class="modal" style="max-width:440px;">
+    <div class="target-tree-header">
+      <span style="font-weight:500; font-size:16px;">选择网盘文件</span>
+      <button id="go-file-refresh">刷新</button>
+    </div>
+    <div id="go-file-tree" class="target-tree-wrap" style="max-height:320px;overflow:auto;border:1px solid var(--divider);border-radius:8px;padding:8px;margin-bottom:12px;"></div>
+    <div class="modal-actions" style="display:flex;justify-content:flex-end;gap:8px;">
+      <button class="btn-secondary" id="go-file-cancel" style="padding:8px 16px;border:none;border-radius:8px;cursor:pointer;">取消</button>
     </div>
   </div>
 </div>
@@ -2148,7 +2173,7 @@ async function loadGoList() {
       var sizeStr = item.size > 1024 ? (item.size / 1024).toFixed(1) + ' KB' : item.size + ' B';
       return '<div class="go-item" data-name="' + escapeHtml(item.name) + '" style="padding:12px;border:1px solid var(--divider);border-radius:8px;margin-bottom:8px;background:#fff;">'
         + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">'
-        + '<span class="material-icons" style="font-size:18px;color:var(--primary);">' + (item.type === 'html' ? 'code' : 'description') + '</span>'
+        + '<span class="material-icons" style="font-size:18px;color:var(--primary);">' + ({'html':'code','markdown-file':'article','markdown-link':'article','markdown-edit':'article','text':'description','link':'link','file':'folder_open'})[item.type] || 'description' + '</span>'
         + '<span style="flex:1;font-weight:500;font-size:14px;word-break:break-all;">' + escapeHtml(item.name) + '</span>'
         + '</div>'
         + '<div style="font-size:12px;color:var(--text-sec);margin-bottom:8px;">' + item.type.toUpperCase() + ' · ' + sizeStr + '</div>'
@@ -2186,6 +2211,32 @@ function openGoModal(name, content, type) {
   goState.editingName = name || null;
   document.getElementById('go-modal').classList.add('show');
   document.getElementById('go-save-btn').onclick = saveGo;
+  if (type === 'file' || type === 'markdown-file') {
+    document.getElementById('go-file-path').textContent = content ? ('已选: ' + content) : '';
+  } else {
+    document.getElementById('go-file-path').textContent = '';
+  }
+  onGoTypeChange();
+  // 如果是 markdown-edit，将内容填入编辑器
+  if (type === 'markdown-edit' && mdEditorInstance) {
+    setTimeout(function(){
+      if (mdEditorInstance && content) {
+        try {
+          // wangEditor 10.x: editor.txt.html(html)
+          if (mdEditorInstance.txt && mdEditorInstance.txt.html) {
+            // 转义换行
+            var htmlContent = content.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+            mdEditorInstance.txt.html(htmlContent);
+          } else if (mdEditorInstance.setHtml) {
+            // v5 API 兜底
+            mdEditorInstance.setHtml(content);
+          }
+        } catch(e) {
+          console.warn('填充内容失败', e);
+        }
+      }
+    }, 800);
+  }
 }
 
 function closeGoModal() {
@@ -2208,6 +2259,21 @@ async function saveGo() {
   var name = document.getElementById('go-name').value.trim();
   var content = document.getElementById('go-content').value;
   var type = document.getElementById('go-type').value;
+
+  // markdown-edit 优先从 wangEditor 取内容
+  if (type === 'markdown-edit' && mdEditorInstance) {
+    try {
+      // wangEditor 10.x: editor.txt.text()
+      if (mdEditorInstance.txt && mdEditorInstance.txt.text) {
+        content = mdEditorInstance.txt.text();
+      } else if (mdEditorInstance.getText) {
+        // v5 API 兜底
+        content = mdEditorInstance.getText();
+      }
+    } catch(e) {
+      console.warn('获取编辑器内容失败', e);
+    }
+  }
   if (!name) { showMsg('请输入名称'); return; }
   if (!/^[a-zA-Z0-9_-]+$/.test(name)) { showMsg('名称只能包含字母、数字、下划线、短横线'); return; }
   try {
@@ -2247,6 +2313,146 @@ document.getElementById('btn-new-go').onclick = function() { openGoModal(null, '
 
 
 
+
+
+// ==================== Go 类型切换 & 文件选择 ====================
+var goFileTreeState = { structure: null, expanded: { '': true }, selectedPath: '' };
+
+function onGoTypeChange(){
+  var t = document.getElementById('go-type').value;
+  // 隐藏所有
+  document.getElementById('go-file-picker').style.display = 'none';
+  document.getElementById('go-link-hint').style.display = 'none';
+  var mdEditorWrap = document.getElementById('md-editor-wrap');
+  if (mdEditorWrap) mdEditorWrap.style.display = 'none';
+  var contentArea = document.getElementById('go-content');
+  if (contentArea) contentArea.style.display = 'block';
+
+  if (t === 'file' || t === 'markdown-file') {
+    document.getElementById('go-file-picker').style.display = 'block';
+    if (contentArea) contentArea.style.display = 'none';
+  } else if (t === 'link' || t === 'markdown-link') {
+    document.getElementById('go-link-hint').style.display = 'block';
+  } else if (t === 'markdown-edit') {
+    if (contentArea) contentArea.style.display = 'none';
+    if (mdEditorWrap) {
+      mdEditorWrap.style.display = 'block';
+    } else {
+      // 首次：创建编辑器容器并加载 wangEditor
+      createMdEditorContainer();
+    }
+  }
+}
+
+var mdEditorInstance = null;
+function createMdEditorContainer(){
+  var wrap = document.createElement('div');
+  wrap.id = 'md-editor-wrap';
+  wrap.style.cssText = 'border:1px solid var(--divider);border-radius:8px;overflow:hidden;margin-bottom:10px;';
+  wrap.innerHTML = '<div id="md-toolbar-container" style="border-bottom:1px solid var(--divider);"></div>'
+    + '<div id="md-editor-container" style="height:320px;overflow-y:auto;"></div>';
+  var contentArea = document.getElementById('go-content');
+  contentArea.parentNode.insertBefore(wrap, contentArea.nextSibling);
+
+  // 加载 wangEditor + Markdown 插件
+  var css = document.createElement('link');
+  css.rel = 'stylesheet';
+  css.href = 'https://cdn.bootcdn.net/ajax/libs/wangEditor/10.0.13/wangEditor.css';
+  document.head.appendChild(css);
+
+  var js = document.createElement('script');
+  js.src = 'https://cdn.bootcdn.net/ajax/libs/wangEditor/10.0.13/wangEditor.js';
+  js.onload = function(){
+  };
+  document.head.appendChild(js);
+}
+
+async function openGoFilePicker(){
+  try {
+    var st = await api('/api/structure?path=');
+    goFileTreeState.structure = st;
+    goFileTreeState.expanded = { '': true };
+    goFileTreeState.selectedPath = '';
+    renderGoFileTree();
+    document.getElementById('go-file-modal').classList.add('show');
+  } catch(e) {
+    showMsg('加载失败: ' + e.message);
+  }
+}
+
+function renderGoFileTree(){
+  var el = document.getElementById('go-file-tree');
+  if (!el || !goFileTreeState.structure) return;
+  el.innerHTML = buildGoTreeRow(goFileTreeState.structure, '', 0);
+  el.onclick = function(e){
+    var toggle = e.target.closest('.target-tree-toggle');
+    if (toggle) {
+      var p = toggle.getAttribute('data-path');
+      if (goFileTreeState.expanded[p]) delete goFileTreeState.expanded[p];
+      else goFileTreeState.expanded[p] = true;
+      renderGoFileTree();
+      e.stopPropagation();
+      return;
+    }
+    var row = e.target.closest('.target-tree-row');
+    if (!row) return;
+    var path = row.getAttribute('data-path');
+    var isFile = row.getAttribute('data-is-file') === '1';
+    if (isFile) {
+      document.getElementById('go-content').value = path;
+      document.getElementById('go-file-path').textContent = '已选: ' + path;
+      document.getElementById('go-file-modal').classList.remove('show');
+    } else {
+      // 展开/折叠
+      if (goFileTreeState.expanded[path]) delete goFileTreeState.expanded[path];
+      else goFileTreeState.expanded[path] = true;
+      renderGoFileTree();
+    }
+  };
+}
+
+function buildGoTreeRow(node, basePath, level){
+  var path = basePath;
+  var isRoot = (path === '');
+  var entries = Object.entries(node.children || {}).sort(function(a, b){
+    // 文件夹优先
+    if (a[1].type !== b[1].type) return a[1].type === 'folder' ? -1 : 1;
+    return a[0].localeCompare(b[0], 'zh-CN');
+  });
+  var html = '';
+  if (isRoot) {
+    html += '<div class="target-tree-row" data-path="" data-is-file="0" style="padding-left:8px;">'
+      + '<span class="target-tree-toggle">' + (goFileTreeState.expanded[''] ? '▼' : '▶') + '</span>'
+      + '<span class="material-icons" style="font-size:18px;color:var(--primary);margin-right:4px;">folder</span>'
+      + '<span style="flex:1;">root</span></div>';
+    if (!goFileTreeState.expanded['']) return html;
+  }
+  for (var i = 0; i < entries.length; i++) {
+    var name = entries[i][0];
+    var child = entries[i][1];
+    var p = path ? path + '/' + name : name;
+    var isFolder = child.type === 'folder';
+    var expanded = goFileTreeState.expanded[p] === true;
+    html += '<div class="target-tree-row" data-path="' + escapeHtml(p) + '" data-is-file="' + (isFolder ? '0' : '1') + '" style="padding-left:' + (level * 16 + 8) + 'px;">';
+    if (isFolder) {
+      html += '<span class="target-tree-toggle">' + (expanded ? '▼' : '▶') + '</span>';
+      html += '<span class="material-icons" style="font-size:18px;color:var(--primary);margin-right:4px;">folder</span>';
+    } else {
+      html += '<span class="target-tree-toggle" style="visibility:hidden;">▶</span>';
+      html += '<span class="material-icons" style="font-size:18px;color:var(--text-sec);margin-right:4px;">insert_drive_file</span>';
+    }
+    html += '<span style="flex:1;">' + escapeHtml(name) + '</span></div>';
+    if (isFolder && expanded) {
+      html += buildGoTreeRow(child, p, level + 1);
+    }
+  }
+  return html;
+}
+
+document.getElementById('go-file-cancel').onclick = function(){
+  document.getElementById('go-file-modal').classList.remove('show');
+};
+document.getElementById('go-file-refresh').onclick = function(){ openGoFilePicker(); };
 
 loadList();
 
@@ -2850,11 +3056,9 @@ async function settingsPage(settings = {}, request = null) {
   const fontCssFamily = settings.fontCssFamily || '';
   const SOURCE_HAN_SERIF = 'SourceHanSerifSC, serif';
   const useCustomFontFile = fontFamily && (fontFamily.startsWith('http') || fontFamily.startsWith('/'));
-  const useSourceHan = fontFamily === SOURCE_HAN_SERIF;
   const useCustomCss = Boolean(fontCss && fontCssFamily);
   let fontMode = 'system';
   if (useCustomFontFile) fontMode = 'customfile';
-  else if (useSourceHan) fontMode = 'sourcehan';
   else if (useCustomCss) fontMode = 'customcss';
   const presetColors = ['#1976d2', '#d32f2f', '#388e3c', '#f9a825', '#7b1fa2', '#00796b', '#e64a19', '#5d4037', '#303f9f', '#c2185b'];
   const colorSwatches = presetColors.map(c => `<span class="color-swatch" data-color="${c}" style="width:24px;height:24px;border-radius:50%;background:${c};cursor:pointer;border:2px solid ${c===primary?'#fff':'transparent'};box-shadow:0 0 0 1px ${c===primary?c:'var(--divider)'};"></span>`).join('');
@@ -2863,6 +3067,8 @@ async function settingsPage(settings = {}, request = null) {
 <div class="container">
   <div class="card">
     <h3 style="margin-top:0;">外观</h3>
+    <label style="display:block;margin-bottom:8px;font-size:14px;color:var(--text-sec);">站点标题（左上角显示）</label>
+    <input type="text" id="site-title" value="${escapeHtml(settings.siteTitle || 'OCD')}" maxlength="32" placeholder="OCD" style="width:100%;padding:10px;border:1px solid var(--divider);border-radius:8px;font-size:14px;margin-bottom:16px;box-sizing:border-box;">
     <label style="display:block;margin-bottom:8px;font-size:14px;color:var(--text-sec);">主题颜色</label>
     <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px;">${colorSwatches}</div>
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:16px;">
@@ -2872,7 +3078,6 @@ async function settingsPage(settings = {}, request = null) {
     <label style="display:block;margin-bottom:8px;font-size:14px;color:var(--text-sec);">全局字体</label>
     <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px;">
       <label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;"><input type="radio" name="font-mode" value="system" ${fontMode === 'system' ? 'checked' : ''}> 手机默认字体</label>
-      <label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;"><input type="radio" name="font-mode" value="sourcehan" ${fontMode === 'sourcehan' ? 'checked' : ''}> 思源宋体</label>
       <label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;"><input type="radio" name="font-mode" value="customcss" ${fontMode === 'customcss' ? 'checked' : ''}> 自定义字体 CSS</label>
       <label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;"><input type="radio" name="font-mode" value="customfile" ${fontMode === 'customfile' ? 'checked' : ''}> 上传字体文件</label>
     </div>
@@ -2909,7 +3114,6 @@ async function settingsPage(settings = {}, request = null) {
 const SOURCE_HAN_SERIF = 'SourceHanSerifSC, serif';
 function getFontSettings(){
   const mode = document.querySelector('input[name="font-mode"]:checked').value;
-  if (mode === 'sourcehan') return { fontFamily: SOURCE_HAN_SERIF, fontCss: '', fontCssFamily: '' };
   if (mode === 'customfile') return { fontFamily: document.getElementById('font-value').value.trim(), fontCss: '', fontCssFamily: '' };
   if (mode === 'customcss') return { fontFamily: '', fontCss: document.getElementById('font-css-url').value.trim(), fontCssFamily: document.getElementById('font-css-family').value.trim() };
   return { fontFamily: '', fontCss: '', fontCssFamily: '' };
@@ -2966,6 +3170,7 @@ document.getElementById('font-file').onchange = async function(){
 async function saveSettings(){
   const font = getFontSettings();
   const settings = {
+    siteTitle: document.getElementById('site-title').value.trim() || 'OCD',
     primary: document.getElementById('primary-color').value,
     bg: document.getElementById('bg-value').value.trim(),
     cardOpacity: parseFloat(document.getElementById('card-opacity').value),
@@ -2994,15 +3199,12 @@ function generateThemeCss(settings = {}) {
   if (fontCssFamily && !/^[a-zA-Z0-9_-]+$/.test(fontCssFamily)) fontCssFamily = '"' + fontCssFamily + '"';
   const SOURCE_HAN_SERIF_CSS = 'https://v6.gh-proxy.com/github.com/ike-lee-820/font/raw/main/siyuansongti/Font_Source_Han_Serif.css';
   const isCustomFontFile = fontFamily && (fontFamily.startsWith('http') || fontFamily.startsWith('/'));
-  const isSourceHan = fontFamily === 'SourceHanSerifSC, serif';
   const isCustomCss = Boolean(fontCss && fontCssFamily);
   let link = '';
-  if (isSourceHan) link = '<link rel="stylesheet" href="' + SOURCE_HAN_SERIF_CSS + '">';
-  else if (isCustomCss) link = '<link rel="stylesheet" href="' + fontCss + '">';
+  if (isCustomCss) link = '<link rel="stylesheet" href="' + fontCss + '">';
   let css = '<style id="theme-style">';
   css += ':root { --primary:' + primary + '; }';
-  if (isSourceHan) css += 'body, input, select, button, textarea { font-family: "SourceHanSerifSC", system-ui, sans-serif !important; }';
-  else if (isCustomCss) css += 'body, input, select, button, textarea { font-family: ' + fontCssFamily + ', system-ui, sans-serif !important; }';
+  if (isCustomCss) css += 'body, input, select, button, textarea { font-family: ' + fontCssFamily + ', system-ui, sans-serif !important; }';
   else if (isCustomFontFile) {
     css += '@font-face { font-family: "CustomNetdiskFont"; src: url(' + fontFamily + '); }';
     css += 'body, input, select, button, textarea { font-family: "CustomNetdiskFont", system-ui, sans-serif !important; }';
@@ -3878,7 +4080,7 @@ async function handleRequest(request, env, ctx = null) {
     const body = await request.json();
     const name = String(body.name || '').trim();
     const content = String(body.content || '');
-    const type = body.type === 'html' ? 'html' : 'text';
+    const type = ['html', 'text', 'markdown-file', 'markdown-link', 'markdown-edit', 'link', 'file'].indexOf(body.type) >= 0 ? body.type : 'text';
     const originalName = body.originalName || null;
     if (!name) return errorResponse('名称不能为空');
     if (!/^[a-zA-Z0-9_-]+$/.test(name)) return errorResponse('名称只能包含字母、数字、下划线、短横线');
@@ -3923,19 +4125,74 @@ async function handleRequest(request, env, ctx = null) {
     const item = await d1Get(env, 'go_' + name, null);
     if (!item) return new Response('页面不存在', { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
 
+    // ============ HTML ============
     if (item.type === 'html') {
-      // HTML 直接返回
       return new Response(item.content, {
         headers: {
           'Content-Type': 'text/html; charset=utf-8',
           'Cache-Control': 'public, max-age=60'
         }
       });
-    } else {
-      // 文本包装为 HTML
+    }
+
+    // ============ Link（302 跳转）============
+    if (item.type === 'link') {
+      const target = (item.content || '').trim();
+      if (!target) return new Response('链接为空', { status: 500 });
+      return Response.redirect(target, 302);
+    }
+
+    // ============ File（网盘文件）============
+    if (item.type === 'file') {
+      const filePath = (item.content || '').trim();
+      if (!filePath) return new Response('文件路径为空', { status: 500 });
+      const structure = await getStructure(env);
+      const node = getNode(structure, filePath);
+      if (!node || node.type !== 'file') {
+        return new Response('文件不存在: ' + escapeHtml(filePath), { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
+      }
+      return Response.redirect('/direct/' + node.ssid + '/' + encodeURIComponent(node.name), 302);
+    }
+
+    // ============ Markdown（统一渲染器） ============
+    if (item.type === 'markdown-file' || item.type === 'markdown-link' || item.type === 'markdown-edit') {
+      let mdContent = '';
+
+      if (item.type === 'markdown-file') {
+        // 从网盘读取文件
+        const filePath = (item.content || '').trim();
+        if (!filePath) return new Response('文件路径为空', { status: 500 });
+        const structure = await getStructure(env);
+        const node = getNode(structure, filePath);
+        if (!node || node.type !== 'file') {
+          return new Response('文件不存在: ' + filePath, { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
+        }
+        // 拉取文件内容（通过内部函数或直接 fetch）
+        const fileResp = await buildDownloadResponse({ headers: new Headers() }, node, node.name, env, true);
+        mdContent = await fileResp.text();
+      } else if (item.type === 'markdown-link') {
+        // 从外部链接获取
+        const url = (item.content || '').trim();
+        if (!url) return new Response('链接为空', { status: 500 });
+        const resp = await fetch(url);
+        if (!resp.ok) return new Response('外部链接加载失败: ' + resp.status, { status: 502 });
+        mdContent = await resp.text();
+      } else {
+        // markdown-edit：直接使用存储的内容
+        mdContent = item.content || '';
+      }
+
       const html = '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + escapeHtml(item.name) + '</title>'
-        + '<style>body{font-family:system-ui,sans-serif;max-width:800px;margin:40px auto;padding:0 16px;line-height:1.7;color:#212121;}pre{background:#f5f5f5;padding:16px;border-radius:8px;overflow:auto;}</style>'
-        + '</head><body><pre>' + escapeHtml(item.content) + '</pre></body></html>';
+        + '<link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/github-markdown-css/5.9.0/github-markdown.css">'
+        + '<style>body{max-width:900px;margin:40px auto;padding:0 20px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;line-height:1.7;color:#24292f;}'
+        + '.markdown-body{box-sizing:border-box;min-width:200px;max-width:980px;margin:0 auto;padding:45px;}</style>'
+        + '<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>'
+        + '</head><body class="markdown-body"><div id="content">加载中...</div>'
+        + '<script>'
+        + 'var mdText = ' + JSON.stringify(mdContent) + ';'
+        + 'document.getElementById("content").innerHTML = marked.parse(mdText);'
+        + '</script>'
+        + '</body></html>';
       return new Response(html, {
         headers: {
           'Content-Type': 'text/html; charset=utf-8',
@@ -3943,6 +4200,17 @@ async function handleRequest(request, env, ctx = null) {
         }
       });
     }
+
+    // ============ Text（默认）============
+    const html = '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>' + escapeHtml(item.name) + '</title>'
+      + '<style>body{font-family:system-ui,sans-serif;max-width:800px;margin:40px auto;padding:0 16px;line-height:1.7;color:#212121;}pre{background:#f5f5f5;padding:16px;border-radius:8px;overflow:auto;white-space:pre-wrap;word-break:break-word;}</style>'
+      + '</head><body><pre>' + escapeHtml(item.content) + '</pre></body></html>';
+    return new Response(html, {
+      headers: {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'public, max-age=60'
+      }
+    });
   }
 
   // ==================== 文件搜索 ====================
@@ -4561,6 +4829,7 @@ async function handleRequest(request, env, ctx = null) {
     if (forbid) return forbid;
     const body = await request.json();
     const settings = {
+      siteTitle: (body.siteTitle || 'OCD').slice(0, 32),
       primary: body.primary || '#1976d2',
       bg: body.bg || '',
       cardOpacity: body.cardOpacity != null ? body.cardOpacity : 1,
@@ -4588,7 +4857,9 @@ async function handleRequest(request, env, ctx = null) {
   if (path === '/') {
     if (!checkPassword(request, env)) return loginPage();
     const settings = await getSettings(env);
-    return page('我的网盘', HOME_BODY, HOME_SCRIPT, generateThemeCss(settings), request);
+    const siteTitle = settings.siteTitle || 'OCD';
+    const homeBody = HOME_BODY.replace('__SITE_TITLE__', escapeHtml(siteTitle));
+    return page(siteTitle, homeBody, HOME_SCRIPT, generateThemeCss(settings), request);
   }
   if (path === '/file') {
     if (!checkPassword(request, env)) return loginPage();
